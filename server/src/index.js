@@ -9,6 +9,7 @@ import clockRoutes from './routes/clock.js';
 import taskRoutes from './routes/tasks.js';
 import adminRoutes from './routes/admin.js';
 import baoliaoRoutes from './routes/baoliao.js';
+import gptRoutes from './routes/gpt.js';
 import { startScheduler, isSchedulerRunning } from './scheduler.js';
 
 const app = express();
@@ -39,6 +40,7 @@ app.use('/api/clock', clockRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/baoliao', baoliaoRoutes);
+app.use('/api/gpt', gptRoutes);
 
 // 生产环境：托管前端构建产物（单进程对外）
 if (config.nodeEnv === 'production' && fs.existsSync(config.webDist)) {

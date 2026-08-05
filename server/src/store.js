@@ -11,10 +11,14 @@ function defaultData() {
     baoliao: [],
     tasks: [
       { id: 't_clock', type: 'clock', name: '每日签到', icon: '📅', enabled: true, cron: '0 9 * * *', lastRun: null, lastResult: null, status: 'idle' },
-      { id: 't_comment', type: 'comment', name: '自动评论', icon: '💬', enabled: false, cron: '0 10 * * *', lastRun: null, lastResult: null, status: 'idle' },
-      { id: 't_favorite', type: 'favorite', name: '自动收藏', icon: '⭐', enabled: false, cron: '0 11 * * *', lastRun: null, lastResult: null, status: 'idle' },
-      { id: 't_point', type: 'point', name: '自动点赞', icon: '👍', enabled: false, cron: '0 12 * * *', lastRun: null, lastResult: null, status: 'idle' }
+      { id: 't_comment', type: 'comment', name: '自动评论', icon: '💬', enabled: false, cron: '0 10 * * *', articleId: '', lastRun: null, lastResult: null, status: 'idle' },
+      { id: 't_favorite', type: 'favorite', name: '自动收藏', icon: '⭐', enabled: false, cron: '0 11 * * *', articleId: '', lastRun: null, lastResult: null, status: 'idle' },
+      { id: 't_point', type: 'point', name: '自动点赞', icon: '👍', enabled: false, cron: '0 12 * * *', articleId: '', lastRun: null, lastResult: null, status: 'idle' }
     ],
+    // GPT 自动回复配置（前端开关与提示词存这里，后端据此是否真正调用大模型）
+    settings: {
+      gpt: { enabled: false, target: 'comment', tone: 'friendly', prompt: '' }
+    },
     meta: { version: 1 }
   };
 }
@@ -65,6 +69,12 @@ export function load() {
   cache.clockRecords = cache.clockRecords || [];
   cache.baoliao = cache.baoliao || [];
   cache.tasks = cache.tasks && cache.tasks.length ? cache.tasks : d.tasks;
+  // settings.gpt 合并：保留已有配置，缺省补齐，避免旧库无 settings 字段时报错
+  cache.settings = cache.settings && typeof cache.settings === 'object' ? cache.settings : {};
+  cache.settings.gpt =
+    cache.settings.gpt && typeof cache.settings.gpt === 'object'
+      ? { ...d.settings.gpt, ...cache.settings.gpt }
+      : { ...d.settings.gpt };
   return cache;
 }
 

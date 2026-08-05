@@ -100,6 +100,19 @@ function md5Sign(str) {
   return crypto.createHash('md5').update(str).digest('hex').toUpperCase();
 }
 
+// 从文章 ID 或文章链接中提取纯数字 ID。
+// 支持：纯数字 "123456"、smzdm 文章链接 "https://www.smzdm.com/p/123456" 等。
+export function normalizeArticleId(input) {
+  if (!input) return '';
+  const s = String(input).trim();
+  if (/^\d+$/.test(s)) return s;
+  const m =
+    s.match(/\/p\/(\d+)/i) ||
+    s.match(/\/articles?\/(\d+)/i) ||
+    s.match(/(\d{4,})/);
+  return m ? m[1] : '';
+}
+
 // 先取 robot token（带签名），后续 checkin 需要
 async function getRobotToken(cookie) {
   const ts = Date.now();
@@ -151,41 +164,44 @@ export const realAdapter = {
   },
 
   async doComment(cookie, opts = {}) {
-    if (!opts.articleId) throw new Error('评论需要 articleId（real 模式暂未采集文章 ID）');
+    const articleId = normalizeArticleId(opts.articleId);
+    if (!articleId) throw new Error('评论需要 articleId（请在自动任务里填写目标文章ID或链接）');
     const count = Math.min(Math.max(1, Number(opts.count) || 1), 5); // F3：真正循环 count（上限 5），消息如实
     let last;
     for (let i = 0; i < count; i++) {
       last = await call(ENDPOINTS.comment, {
         method: 'POST',
         cookie,
-        body: { article_id: opts.articleId, content: opts.content || '好价，感谢分享！' },
+        body: { article_id: articleId, content: opts.content || '好价，感谢分享！' },
         base: BASE
       });
       assertOk(last, '评论');
     }
-    return { success: true, message: `评论成功 ×${count}`, count };
+    return { success: true, message: `评论成功 ×${count}（文章 ${articleId}）`, count, articleId };
   },
 
   async doFavorite(cookie, opts = {}) {
-    if (!opts.articleId) throw new Error('收藏需要 articleId（real 模式暂未采集文章 ID）');
+    const articleId = normalizeArticleId(opts.articleId);
+    if (!articleId) throw new Error('收藏需要 articleId（请在自动任务里填写目标文章ID或链接）');
     const count = Math.min(Math.max(1, Number(opts.count) || 1), 5);
     let last;
     for (let i = 0; i < count; i++) {
-      last = await call(ENDPOINTS.favorite, { method: 'POST', cookie, body: { article_id: opts.articleId }, base: BASE });
+      last = await call(ENDPOINTS.favorite, { method: 'POST', cookie, body: { article_id: articleId }, base: BASE });
       assertOk(last, '收藏');
     }
-    return { success: true, message: `收藏成功 ×${count}`, count };
+    return { success: true, message: `收藏成功 ×${count}（文章 ${articleId}）`, count, articleId };
   },
 
   async doPoint(cookie, opts = {}) {
-    if (!opts.articleId) throw new Error('点赞需要 articleId（real 模式暂未采集文章 ID）');
+    const articleId = normalizeArticleId(opts.articleId);
+    if (!articleId) throw new Error('点赞需要 articleId（请在自动任务里填写目标文章ID或链接）');
     const count = Math.min(Math.max(1, Number(opts.count) || 1), 5);
     let last;
     for (let i = 0; i < count; i++) {
-      last = await call(ENDPOINTS.point, { method: 'POST', cookie, body: { article_id: opts.articleId }, base: BASE });
+      last = await call(ENDPOINTS.point, { method: 'POST', cookie, body: { article_id: articleId }, base: BASE });
       assertOk(last, '点赞');
     }
-    return { success: true, message: `点赞成功 ×${count}`, count };
+    return { success: true, message: `点赞成功 ×${count}（文章 ${articleId}）`, count, articleId };
   },
 
   async submitBaoliao(cookie, payload = {}) {

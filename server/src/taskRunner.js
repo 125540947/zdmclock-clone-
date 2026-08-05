@@ -9,16 +9,18 @@ import { withWriteLock, persist } from './store.js';
 const COUNT_MAX = 5; // 防滥用：单次任务动作次数上限
 
 export async function runTask(task, db, opts = {}) {
-  const { userId, count } = opts;
+  const { userId, count, articleId } = opts;
   const safeCount = Math.min(COUNT_MAX, Math.max(1, Number(count) || 1));
+  // articleId 优先取本次运行传入（手动运行可临时覆盖），否则用任务配置里保存的值
+  const safeArticleId = (articleId && String(articleId).trim()) || (task.articleId && String(task.articleId).trim()) || '';
   const user = userId ? db.users.find((u) => u.id === userId) : db.users[0];
   if (!user) {
     return { ok: false, error: 'no_user', message: '请先添加 smzdm 账号' };
   }
   let result;
-  if (task.type === 'comment') result = await smzdm.doComment(user.cookie, { count: safeCount });
-  else if (task.type === 'favorite') result = await smzdm.doFavorite(user.cookie, { count: safeCount });
-  else if (task.type === 'point') result = await smzdm.doPoint(user.cookie, { count: safeCount });
+  if (task.type === 'comment') result = await smzdm.doComment(user.cookie, { count: safeCount, articleId: safeArticleId });
+  else if (task.type === 'favorite') result = await smzdm.doFavorite(user.cookie, { count: safeCount, articleId: safeArticleId });
+  else if (task.type === 'point') result = await smzdm.doPoint(user.cookie, { count: safeCount, articleId: safeArticleId });
   else {
     // 签到类型：真正落库（N1），与手动签到共用 applyClock
     result = await smzdm.doClockIn(user.cookie);

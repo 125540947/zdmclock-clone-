@@ -17,6 +17,15 @@
             <span v-if="t.lastRun" class="muted"> · 上次 {{ t.lastRun }}</span>
           </div>
           <div v-if="t.lastResult" class="res">{{ t.lastResult }}</div>
+          <div v-if="t.type !== 'clock'" class="art">
+            <input
+              class="input sm"
+              v-model="t.articleId"
+              placeholder="目标文章ID或链接，如 123456 / https://www.smzdm.com/p/123456"
+              @change="saveArticleId(t)"
+            />
+            <span class="hint-sm">评论/收藏/点赞需指定目标文章，否则运行会报错</span>
+          </div>
         </div>
         <div class="task-actions">
           <label class="switch">
@@ -57,6 +66,14 @@ async function toggle(t, e) {
   await api.put(`/tasks/${t.id}`, { enabled: e.target.checked });
   t.enabled = e.target.checked;
   showToast('已更新');
+}
+async function saveArticleId(t) {
+  try {
+    await api.put(`/tasks/${t.id}`, { articleId: t.articleId || '' });
+    showToast('已保存目标文章');
+  } catch (e) {
+    showToast(e.response?.data?.message || '保存失败', 'err');
+  }
 }
 async function run(t) {
   busy.value = t.id;
@@ -111,6 +128,32 @@ onMounted(load);
   font-size: 12px;
   color: var(--gold);
   margin-top: 3px;
+}
+.task-meta .art {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.task-meta .art .input {
+  width: 100%;
+  max-width: 360px;
+}
+.input.sm {
+  padding: 7px 10px;
+  font-size: 12px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  outline: none;
+}
+.input.sm:focus {
+  border-color: var(--primary);
+}
+.hint-sm {
+  font-size: 10px;
+  color: var(--text-faint);
 }
 .task-actions {
   display: flex;

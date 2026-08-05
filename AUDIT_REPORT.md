@@ -12,8 +12,8 @@
 |---|---|---|---|---|
 | F1 | 后端全部 15 个 .js 模块 | `node --check` 全量语法通过；import 解析完整，无未定义引用 | —（通过） | — |
 | F2 | `realAdapter.getUserInfo` | 调用 `https://www.smzdm.com/user/`（Web 端点，返回 HTML），JSON.parse 必失败→抛错；被 `users.js` 的 try/catch 吞掉，导致 real 模式录入账号拉不到真实昵称/积分，仅存默认值 | 中 | getUserInfo 改用 `user-api.smzdm.com` 对应端点；或显式标注为"未实现" |
-| F3 | `realAdapter.doComment/doFavorite/doPoint` + `taskRunner.runTask` | 这些动作需要 `articleId`，但调度链只传 `{count}`，`articleId` 恒为 `''`→real 模式必失败；且 `count` 参数被适配器完全忽略（永远只动作 1 次） | 中 | 评论/收藏/点赞任务在 real 模式实为死路径；要么补全 articleId 采集，要么文档明确"未验证/不可用" |
-| F4 | `GptReply.vue` | 仅存 localStorage，后端无对应 GPT 任务类型/适配器；"启用自动回复"开关对后端零效果 | 低 | UI 明确标注"前端演示，后端未实现"，避免误导 |
+| F3 | `realAdapter.doComment/doFavorite/doPoint` + `taskRunner.runTask` | 这些动作需要 `articleId`，但调度链只传 `{count}`，`articleId` 恒为 `''`→real 模式必失败；且 `count` 参数被适配器完全忽略（永远只动作 1 次） | 中 | **已实施（2026-08-05 第三轮）**：task 配置新增 `articleId`，经 `taskRunner` 传入适配器；前端「自动任务」页可填写目标文章ID/链接（纯数字或 smzdm 链接均可，适配器 `normalizeArticleId` 自动提取）。注：real 接口路径为社区经验值、best-effort，标记未验证 |
+| F4 | `GptReply.vue` | 仅存 localStorage，后端无对应 GPT 任务类型/适配器；"启用自动回复"开关对后端零效果 | 低 | **已实施（2026-08-05 第三轮）**：新增 `gptAdapter`（OpenAI 兼容 `/chat/completions`）+ `routes/gpt`（config 持久化 + reply 真实调用）；前端开关与提示词持久化到后端，「生成回复」调用真实大模型；未配置 `GPT_API_KEY` 时前端明确提示 |
 | F5 | `UserClock.vue:80` | `today` 用 `toISOString()`（UTC），与后端 `todayStr()`（本地）不一致；北京 00:00–08:00 期间前端"今天"标签与后端判定错位，造成"今日已签到"视觉矛盾 | 低 | 前端 `today` 改用本地日期（与 `localDateStr` 同基准） |
 | F6 | `server/package.json` | express `^4.19.2`（锁 4.x），`app.get('*')` 在 4 下有效，无 Express 5 崩溃风险 | —（通过） | — |
 | F7 | 依赖与构建 | server 仅 express/cors/dotenv；web 仅 vue/vue-router/axios；`npm run build` 此前已成功产出 dist | —（通过） | — |

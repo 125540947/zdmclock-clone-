@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { applyClock, localYesterdayStr } from '../src/clockCore.js';
 import { withWriteLock } from '../src/store.js';
 import { validateCron } from '../src/scheduler.js';
+import { normalizeArticleId } from '../src/smzdm/realAdapter.js';
 
 function makeDb() {
   return {
@@ -79,4 +80,13 @@ test('validateCron 非法表达式被拒绝（b3）', () => {
   assert.equal(validateCron('10-5 * * * *'), false); // 逆序区间
   assert.equal(validateCron('a 9 * * *'), false); // 非数字
   assert.equal(validateCron('* * * *'), false); // 缺失段
+});
+
+test('normalizeArticleId 提取文章 ID（评论/收藏/点赞需此参数）', () => {
+  assert.equal(normalizeArticleId('123456'), '123456');
+  assert.equal(normalizeArticleId('https://www.smzdm.com/p/123456'), '123456');
+  assert.equal(normalizeArticleId('https://www.smzdm.com/articles/987654'), '987654');
+  assert.equal(normalizeArticleId('  '), '');
+  assert.equal(normalizeArticleId(''), '');
+  assert.equal(normalizeArticleId('不是链接'), '');
 });

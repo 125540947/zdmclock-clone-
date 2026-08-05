@@ -29,6 +29,11 @@ export const config = {
   smzdmAdapter: process.env.SMZDM_ADAPTER || 'mock',
   // real 适配器对外请求超时（毫秒），避免 smzdm 挂起时 Promise 永久 pending
   smzdmRequestTimeout: Number(process.env.SMZDM_REQUEST_TIMEOUT || 10000),
+  // GPT 自动回复（OpenAI 兼容接口）。未设置 GPT_API_KEY 时视为未配置，/api/gpt/reply 拒绝调用
+  gptApiKey: process.env.GPT_API_KEY || '',
+  gptApiBase: (process.env.GPT_API_BASE || 'https://api.openai.com/v1').replace(/\/$/, ''),
+  gptModel: process.env.GPT_MODEL || 'gpt-4o-mini',
+  gptEnabled: !!process.env.GPT_API_KEY,
   dataDir: path.resolve(__dirname, '..', process.env.DATA_DIR || './data'),
   webDist: path.resolve(__dirname, '..', process.env.WEB_DIST || '../web/dist'),
 };

@@ -15,6 +15,9 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
+    // 关闭自动清空输出目录：避免构建时对 dist 调用 fs.rmSync（部分环境下被安全删除包装拦截导致构建失败）；
+    // 旧哈希产物会残留但不会被引用，不影响运行。如需彻底清理可手动删除 dist 后重建。
+    emptyOutDir: false,
     chunkSizeWarningLimit: 1200
   }
 });
