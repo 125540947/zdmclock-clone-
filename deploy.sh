@@ -17,6 +17,8 @@
 # 不用 set -e：交互输入、网络探测、自动安装都可能返回非 0，需手动判断，避免误退出
 set -uo pipefail
 
+DOCKER_SUDO=""   # 当前用户无 docker 守护进程权限时，用 sudo 前缀执行 docker 命令
+
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$APP_DIR" || { echo "无法进入脚本目录，退出。"; exit 1; }
 
@@ -190,7 +192,21 @@ ensure_docker(){
     err "docker compose 不可用（Docker 版本过旧）。请升级 Docker 后重跑。"
     exit 1
   fi
-  ok "Docker 环境就绪（compose $COMPOSE_VER）"
+  # 关键：docker compose version 不连接守护进程，会漏判权限问题；
+  # 必须用 docker info 确认当前用户真能连上守护进程（unix:///var/run/docker.sock）。
+  if docker info >/dev/null 2>&1; then
+    DOCKER_SUDO=""
+    ok "Docker 环境就绪（compose $COMPOSE_VER）"
+  elif [ -n "$SUDO" ] && $SUDO docker info >/dev/null 2>&1; then
+    DOCKER_SUDO="$SUDO"
+    warn "当前用户不在 docker 组，后续 Docker 命令将自动加 sudo 执行。"
+    info "（想永久免 sudo：执行 sudo usermod -aG docker \$USER 后【注销重登录】再跑本脚本）"
+  else
+    err "无法连接 Docker 守护进程（permission denied）。"
+    err "请执行：sudo usermod -aG docker \$USER，然后【注销并重新登录】终端，再重新运行 ./deploy.sh"
+    err "（或改用 root 运行；当前既非 root 也无 sudo 权限时无法继续）"
+    exit 1
+  fi
 }
 
 ensure_node(){
@@ -280,9 +296,9 @@ health_check(){
 deploy_docker(){
   ensure_docker
   setup_env
-  step "构建并启动容器（docker compose up -d --build）"
-  if ! docker compose up -d --build; then
-    err "启动失败，请运行 'docker compose logs' 查看详细错误。"
+  step "构建并启动容器（${DOCKER_SUDO}docker compose up -d --build）"
+  if ! $DOCKER_SUDO docker compose up -d --build; then
+    err "启动失败，请运行 '${DOCKER_SUDO}docker compose logs' 查看详细错误。"
     exit 1
   fi
   health_check "http://localhost:3000"
@@ -338,8 +354,8 @@ main(){
   echo "${C_BOLD}部署完成！${C_RESET}"
   echo "  访问地址 : http://localhost:3000"
   if [ "$MODE" = "docker" ]; then
-    echo "  查看日志 : docker compose logs -f"
-    echo "  停止服务 : docker compose down"
+    echo "  查看日志 : ${DOCKER_SUDO}docker compose logs -f"
+    echo "  停止服务 : ${DOCKER_SUDO}docker compose down"
   else
     echo "  查看日志 : tail -f zdmclock.log"
     echo "  停止服务 : kill \$(cat zdmclock.pid)"
