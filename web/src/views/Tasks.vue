@@ -17,14 +17,28 @@
             <span v-if="t.lastRun" class="muted"> · 上次 {{ t.lastRun }}</span>
           </div>
           <div v-if="t.lastResult" class="res">{{ t.lastResult }}</div>
-          <div v-if="t.type !== 'clock'" class="art">
+          <div v-if="['comment','favorite','point'].includes(t.type)" class="art">
+            <div class="src-toggle">
+              <button
+                type="button"
+                :class="['chip', (t.articleSource || 'manual') !== 'baoliao' && 'on']"
+                @click="setSource(t, 'manual')"
+              >手动指定ID</button>
+              <button
+                type="button"
+                :class="['chip', t.articleSource === 'baoliao' && 'on']"
+                @click="setSource(t, 'baoliao')"
+              >从好价列表取</button>
+            </div>
             <input
+              v-if="t.articleSource !== 'baoliao'"
               class="input sm"
               v-model="t.articleId"
               placeholder="目标文章ID或链接，如 123456 / https://www.smzdm.com/p/123456"
               @change="saveArticleId(t)"
             />
-            <span class="hint-sm">评论/收藏/点赞需指定目标文章，否则运行会报错</span>
+            <span class="hint-sm" v-if="t.articleSource === 'baoliao'">将对你好价列表中的文章自动取 ID 执行（无需手填）</span>
+            <span class="hint-sm" v-else>评论/收藏/点赞需指定目标文章，否则运行会报错</span>
           </div>
         </div>
         <div class="task-actions">
@@ -60,7 +74,8 @@ function showToast(m, t = 'ok') {
 
 async function load() {
   const { data } = await api.get('/tasks');
-  tasks.value = data.list || [];
+  // GPT 批量生成任务由 GPT 自动回复页统一管理，这里只展示互动类任务
+  tasks.value = (data.list || []).filter((t) => t.type !== 'gpt');
 }
 async function toggle(t, e) {
   await api.put(`/tasks/${t.id}`, { enabled: e.target.checked });
@@ -71,6 +86,15 @@ async function saveArticleId(t) {
   try {
     await api.put(`/tasks/${t.id}`, { articleId: t.articleId || '' });
     showToast('已保存目标文章');
+  } catch (e) {
+    showToast(e.response?.data?.message || '保存失败', 'err');
+  }
+}
+async function setSource(t, src) {
+  t.articleSource = src;
+  try {
+    await api.put(`/tasks/${t.id}`, { articleSource: src });
+    showToast('已切换文章来源');
   } catch (e) {
     showToast(e.response?.data?.message || '保存失败', 'err');
   }
@@ -154,6 +178,27 @@ onMounted(load);
 .hint-sm {
   font-size: 10px;
   color: var(--text-faint);
+}
+.src-toggle {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.src-toggle .chip {
+  flex: none;
+  padding: 5px 11px;
+  font-size: 11px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: 0.15s;
+}
+.src-toggle .chip.on {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+  color: var(--primary);
 }
 .task-actions {
   display: flex;

@@ -17,7 +17,7 @@ router.put('/:id', authRequired, (req, res) => {
   const db = load();
   const t = db.tasks.find((x) => x.id === req.params.id);
   if (!t) return res.status(404).json({ error: 'not_found' });
-  const { enabled, cron, name, articleId } = req.body || {};
+  const { enabled, cron, name, articleId, articleSource, source, autoPost, limit } = req.body || {};
   if (enabled !== undefined) t.enabled = enabled;
   if (cron !== undefined) {
     // b3：拒绝非法 cron，避免静默永不触发
@@ -36,6 +36,28 @@ router.put('/:id', authRequired, (req, res) => {
     }
     t.articleId = articleId.trim();
   }
+  // 文章来源：manual（手填）| baoliao（从好价列表取）
+  if (articleSource !== undefined) {
+    if (!['manual', 'baoliao'].includes(articleSource)) {
+      return res.status(400).json({ error: 'invalid_source', message: 'articleSource 仅支持 manual / baoliao' });
+    }
+    t.articleSource = articleSource;
+  }
+  // GPT 批量生成任务参数
+  if (source !== undefined) {
+    if (!['manual', 'baoliao'].includes(source)) {
+      return res.status(400).json({ error: 'invalid_source', message: 'source 仅支持 manual / baoliao' });
+    }
+    t.source = source;
+  }
+  if (autoPost !== undefined) t.autoPost = !!autoPost;
+  if (limit !== undefined) {
+    const lim = Number(limit);
+    if (!Number.isFinite(lim) || lim < 1 || lim > 10) {
+      return res.status(400).json({ error: 'invalid_limit', message: 'limit 需为 1~10 的整数' });
+    }
+    t.limit = Math.floor(lim);
+  }
   if (name !== undefined) t.name = name;
   persist();
   res.json(t);
@@ -46,9 +68,9 @@ router.post('/:id/run', authRequired, async (req, res) => {
   const db = load();
   const t = db.tasks.find((x) => x.id === req.params.id);
   if (!t) return res.status(404).json({ error: 'not_found' });
-  const { userId, count, articleId } = req.body || {};
+  const { userId, count, articleId, articleSource } = req.body || {};
   try {
-    const r = await runTask(t, db, { userId, count, articleId });
+    const r = await runTask(t, db, { userId, count, articleId, articleSource });
     if (!r.ok) return res.status(400).json({ error: r.error, message: r.message });
     t.lastRun = todayStr();
     t.lastResult = r.result.message;

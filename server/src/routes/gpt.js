@@ -44,6 +44,22 @@ router.put('/config', authRequired, (req, res) => {
   res.json({ config: gpt });
 });
 
+// GPT 批量生成产生的草稿列表（前端「AI 评论草稿」展示 / 复制 / 删除）
+router.get('/drafts', authRequired, (req, res) => {
+  const db = load();
+  const list = Array.isArray(db.gptDrafts) ? db.gptDrafts.slice(0, 100) : [];
+  res.json({ items: list, total: list.length });
+});
+
+router.delete('/drafts/:id', authRequired, (req, res) => {
+  const db = load();
+  const idx = (db.gptDrafts || []).findIndex((x) => x.id === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: 'not_found' });
+  db.gptDrafts.splice(idx, 1);
+  persist();
+  res.json({ ok: true });
+});
+
 // 生成一条回复（真实调用大模型）。需：①服务端已配置 GPT_API_KEY；②前端已启用自动回复
 router.post('/reply', authRequired, async (req, res) => {
   const db = load();

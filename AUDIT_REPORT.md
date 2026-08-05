@@ -125,5 +125,42 @@
 ### 残余项（主动留白，非遗漏）
 - **S1 强制鉴权**：`REQUIRE_AUTH` 默认仍 `false`（保持开箱即跑 + UI 无登录拦截），依靠启动告警 + README 安全须知要求公网部署时设 `true`。
 - **S3 明文 cookie**：已通过 `.gitignore`/`.dockerignore` 排除 + 部署指南收紧文件权限；静态加密（字段级加密）属可选增强，未在本轮实现。
-- **F4 `GptReply.vue`**：纯前端 localStorage 演示，后端无对应任务/适配器，UI 已应明确标注"演示"；本轮未改动。
+- **F4 `GptReply.vue`**：已于第三轮（`53d2a8a`）落地——新增 `gptAdapter`（OpenAI 兼容）+ `routes/gpt`（config 持久化 + reply 真实调用）；第四轮进一步新增「定时批量生成」任务（见第九节）。
 - **R5/R6**：日志分级、登录防爆破为低优增强，留待后续。
+
+---
+
+## 九、功能增强实施记录（第四轮，2026-08-06）
+
+> 用户确认「两个都做」：① 评论/收藏/点赞从好价列表取文章ID；② GPT 定时批量生成。
+
+### 增强一：评论/收藏/点赞 支持从「好价列表」取文章（Task #35）
+
+**动机**：此前需手动复制文章ID到任务的 `articleId` 字段；用户的好价爆料（`db.baoliao`）本就带 `smzdmUrl`/`url`，可自动提取文章ID批量执行。
+
+**实现**：
+- `store.js`：`t_comment`/`t_favorite`/`t_point` 任务默认新增 `articleSource: 'manual'`；`load()` 对旧库补齐 `articleSource`/`articleId`，并补全新默认任务（含 `t_gpt`）。
+- `taskRunner.js`：新增 `collectArticleIds()`——`baoliao` 来源遍历 `db.baoliao`，从 `smzdmUrl||url` 经 `normalizeArticleId` 提取并去重；`runEngagement()` 逐篇调用适配器（`baoliao` 来源每篇 1 次动作，`manual` 来源沿用 `count`）。任一篇失败不影响其他篇（聚合报告成功/失败数）。
+- `routes/tasks.js`：`PUT /:id` 接受并持久化 `articleSource`（校验 manual/baoliao）；`POST /:id/run` 透传 `articleSource`。
+- `smzdm/articleId.js`：抽出独立的 `normalizeArticleId`（原在 `realAdapter`，现 re-export 保持测试兼容），供 `taskRunner` 与 `realAdapter` 共用。
+- `web/src/views/Tasks.vue`：非签到任务新增「手动指定ID / 从好价列表取」切换；`baoliao` 模式隐藏输入框并提示；GPT 任务不在本页展示（由 GPT 页统一管理）。
+
+### 增强二：GPT 定时批量生成（Task #36）
+
+**动机**：F4 仅支持「单条测试生成」。新增可调度任务：定期从好价列表取内容 → 大模型生成评论草稿，可选自动发布为评论。
+
+**实现**：
+- `store.js`：新增默认任务 `t_gpt`（type:`gpt`，含 `source`/`autoPost`/`limit`）；新增 `db.gptDrafts: []`；`load()` 规范化 `t_gpt` 字段（source∈{manual,baoliao}、autoPost 布尔、limit 1–10）。
+- `taskRunner.js`：新增 `runGptBatch()`——取 `db.baoliao`（按 `limit` 截断）作为语料，逐条调用 `generateReply()`，生成草稿写入 `db.gptDrafts`（写锁内落盘）；若 `autoPost` 且文章ID有效，自动调 `doComment` 发布并标记 `posted`/`post_failed`；全部失败返回 `gpt_all_failed`。
+- `routes/gpt.js`：新增 `GET /drafts`（列表，上限100）、`DELETE /drafts/:id`（删除草稿）。
+- `web/src/views/GptReply.vue`：新增「定时批量生成」卡片——启用开关、cron、每次条数、自动发布开关、「立即生成」按钮、草稿列表（复制/删除）；页面挂载时拉取 `t_gpt` 与草稿。
+
+### 验证
+- `node --check` 全量通过；`server/test/clockCore.test.js` 8 用例全绿（含 `normalizeArticleId`）。
+- 临时冒烟测试（mock 适配器）确认：baoliao 来源正确提取 2 篇文章并执行；manual 空 ID 返回 `no_article`；gpt 未启用返回 `gpt_disabled`；favorite/baoliao 正常。
+- 前端重建 `web/dist`（新 `index-V5SzVkgb.js` / `index-C6aSo0ya.css`）。
+
+### 注意事项
+- `baoliao` 来源执行评论/收藏/点赞，是对**你自己发布的好价**操作；real 适配器接口路径仍为社区经验值（best-effort、未验证），需真实账号实测。
+- GPT 批量生成依赖服务端 `GPT_API_KEY`（及可选 `GPT_API_BASE`/`GPT_MODEL`）+ 前端「自动回复」启用，否则任务会失败（已在前端提示）。
+- `autoPost` 自动发布会真实对外发评论，请仅在自有账号、知悉风险下启用。

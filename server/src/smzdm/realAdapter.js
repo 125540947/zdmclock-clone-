@@ -11,6 +11,7 @@
 // 3. 返回值字段以社区经验为准，请按你账号的真实响应在解析处微调。
 
 import crypto from 'node:crypto';
+import { normalizeArticleId } from './articleId.js';
 
 const BASE = (process.env.SMZDM_BASE || 'https://www.smzdm.com').replace(/\/$/, '');
 const API_BASE = (process.env.SMZDM_API_BASE || 'https://user-api.smzdm.com').replace(/\/$/, '');
@@ -100,18 +101,8 @@ function md5Sign(str) {
   return crypto.createHash('md5').update(str).digest('hex').toUpperCase();
 }
 
-// 从文章 ID 或文章链接中提取纯数字 ID。
-// 支持：纯数字 "123456"、smzdm 文章链接 "https://www.smzdm.com/p/123456" 等。
-export function normalizeArticleId(input) {
-  if (!input) return '';
-  const s = String(input).trim();
-  if (/^\d+$/.test(s)) return s;
-  const m =
-    s.match(/\/p\/(\d+)/i) ||
-    s.match(/\/articles?\/(\d+)/i) ||
-    s.match(/(\d{4,})/);
-  return m ? m[1] : '';
-}
+// normalizeArticleId 已抽到 ./articleId.js 供 taskRunner 共用，这里 re-export 保持兼容
+export { normalizeArticleId };
 
 // 先取 robot token（带签名），后续 checkin 需要
 async function getRobotToken(cookie) {
