@@ -3,6 +3,8 @@ dist-ssr
 .npmcache
 .npmcache2
 *.local
+# 第三方/代理运行时目录（如 WorkBuddy 的 .hermes）：体积巨大，切勿提交
+.hermes
 .env
 .env.generated
 server/data/*.json
