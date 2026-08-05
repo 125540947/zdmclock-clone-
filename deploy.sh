@@ -278,14 +278,25 @@ setup_env(){
 
 # 公网自动加固：开启鉴权 + 写入随机强密码与 API Token（仅作用于新生成的 .env）
 harden_env(){
-  local pw apitok
-  pw="$(gen_secret)"; apitok="$(gen_secret)"
+  local pw apitok ts
+  pw="$(gen_secret)"; apitok="$(gen_secret)"; ts="$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo unknown)"
   $SEDI "s#^REQUIRE_AUTH=.*#REQUIRE_AUTH=true#" .env
   $SEDI "s#^ADMIN_PASSWORD=.*#ADMIN_PASSWORD=$pw#" .env
   $SEDI "s#^API_TOKEN=.*#API_TOKEN=$apitok#" .env
   ok "检测到公网环境，已自动加固 .env：REQUIRE_AUTH=true，ADMIN_PASSWORD 与 API_TOKEN 已设为随机强值。"
   warn "后台管理员密码已设为：$pw（请妥善保存；忘记可删 .env 后重跑本脚本重新生成）"
   warn "API_TOKEN=$apitok（仅前端/接口调用需要时使用，非登录密码）"
+  # 同时写入本地备份文件（chmod 600），防止终端输出滚过去看不见；含密钥，已被 .gitignore / .dockerignore 排除
+  {
+    echo "# 本文件由 deploy.sh 自动生成，保存了本次加固写入 .env 的随机强凭证。"
+    echo "# 请勿提交 / 分享本文件（含管理员密码与 API Token）。"
+    echo "# 忘记凭证时，可删掉 .env 与 .env.generated，重跑 ./deploy.sh 重新生成。"
+    echo "ADMIN_PASSWORD=$pw"
+    echo "API_TOKEN=$apitok"
+    echo "# 生成时间: $ts"
+  } > .env.generated
+  chmod 600 .env.generated 2>/dev/null
+  info "凭证备份已写入 .env.generated（权限 600，仅本机可读；请同样妥善保存）。"
 }
 
 # ---------- 6.5 源码确保（缺失时自动下载）----------

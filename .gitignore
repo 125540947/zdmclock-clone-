@@ -4,6 +4,7 @@ dist-ssr
 .npmcache2
 *.local
 .env
+.env.generated
 server/data/*.json
 server/data_demo/*.json
 server/data_test/*.json

@@ -1,5 +1,6 @@
 # 敏感 / 数据文件：切勿打进镜像
 .env
+.env.generated
 .env.example
 server/data
 server/data_demo
