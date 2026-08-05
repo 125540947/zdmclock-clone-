@@ -9,6 +9,8 @@
 #   4. 智能配置   —— 缺失 .env 时基于 .env.example 自动生成，并提示关键安全项
 #   5. 健康检查   —— 启动后探测 /api/health，确认服务真正可用
 #   6. 自动下载源码 —— 当前目录无源码时自动 git clone（私有仓库需 git 凭据；可用 ZDC_REPO_URL 覆盖地址）
+#   7. 公网探测   —— 尽力探测公网出口 IP；若可访问公网且为新生成 .env，自动加固（开鉴权+随机强密码/Token）
+#   8. 安全清单   —— 部署完成末尾打印公网安全加固 checklist（防火墙/反代HTTPS/系统更新等）
 #
 # 用法： chmod +x deploy.sh && ./deploy.sh
 #       也可单独下载本脚本后在空目录直接运行，它会自动拉取项目源码再部署
@@ -18,6 +20,19 @@
 set -uo pipefail
 
 DOCKER_SUDO=""   # 当前用户无 docker 守护进程权限时，用 sudo 前缀执行 docker 命令
+ENV_NEW=0         # setup_env 新建 .env 时置 1，供公网自动加固判断是否覆盖默认值
+IS_PUBLIC=0       # 探测到可访问公网时置 1
+PUBLIC_IP="未检测"
+SEDI="sed -i"     # 跨平台 sed -i：macOS/BSD 需 "sed -i ''"，在 main 中按 OS 修正
+
+# 生成一个随机强值（多级兜底，保证永不返回空串）
+gen_secret(){
+  if has openssl; then openssl rand -hex 24 && return 0; fi
+  if has base64; then head -c 18 /dev/urandom 2>/dev/null | base64 | tr -dc 'A-Za-z0-9' | head -c 36 && return 0; fi
+  if has od; then head -c 18 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n' | head -c 48 && return 0; fi
+  # 最后兜底：时间 + 随机数（仍保留足够熵，避免空值）
+  printf '%s%s' "$(date +%s%N 2>/dev/null || date +%s)" "$RANDOM" | tr -dc 'A-Za-z0-9' | head -c 36
+}
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$APP_DIR" || { echo "无法进入脚本目录，退出。"; exit 1; }
@@ -86,6 +101,20 @@ detect_pkg(){
   fi
 }
 
+# ---------- 2.5 探测公网出口 IP（尽力而为，失败不影响部署）----------
+detect_public(){
+  IS_PUBLIC=0; PUBLIC_IP="未检测"
+  local ip=""
+  if has curl; then
+    ip="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)"
+  elif has wget; then
+    ip="$(wget -q -O - --timeout=5 https://api.ipify.org 2>/dev/null || true)"
+  fi
+  if [ -n "$ip" ]; then
+    IS_PUBLIC=1; PUBLIC_IP="$ip"
+  fi
+}
+
 # ---------- 3. 打印检测报告 ----------
 print_report(){
   step "环境检测结果"
@@ -97,6 +126,11 @@ print_report(){
   echo "  git      : ${GIT_BIN:-未安装}"
   echo "  curl     : ${CURL_BIN:-未安装}"
   echo "  wget     : ${WGET_BIN:-未安装}"
+  if [ "$IS_PUBLIC" = "1" ]; then
+    echo "  公网 IP  : $PUBLIC_IP（可访问公网，若对外提供服务请做安全加固）"
+  else
+    echo "  公网 IP  : 未检测到（内网/离线环境，默认配置即可）"
+  fi
 }
 
 # ---------- 4. 交互选择部署方式 ----------
@@ -227,12 +261,31 @@ setup_env(){
   if [ ! -f .env ]; then
     if [ ! -f .env.example ]; then err "缺少 .env.example，无法生成配置，退出。"; exit 1; fi
     cp .env.example .env
+    ENV_NEW=1
     info "已根据 .env.example 生成 .env（默认演示模式 mock，本地零配置即可运行）。"
     info "  · 想真实签到：编辑 .env，把 SMZDM_ADAPTER=mock 改为 real，并在网页里录入 Cookie。"
-    info "  · 公网部署前：请把 REQUIRE_AUTH 改为 true，并设置强 ADMIN_PASSWORD / API_TOKEN。"
+    # 公网环境自动加固：避免默认弱口令（admin123）+ 关闭鉴权 暴露在公网被任意访问
+    if [ "$IS_PUBLIC" = "1" ]; then
+      harden_env
+    else
+      info "  · 公网部署前：请把 REQUIRE_AUTH 改为 true，并设置强 ADMIN_PASSWORD / API_TOKEN。"
+    fi
   else
+    ENV_NEW=0
     ok ".env 已存在，沿用现有配置"
   fi
+}
+
+# 公网自动加固：开启鉴权 + 写入随机强密码与 API Token（仅作用于新生成的 .env）
+harden_env(){
+  local pw apitok
+  pw="$(gen_secret)"; apitok="$(gen_secret)"
+  $SEDI "s#^REQUIRE_AUTH=.*#REQUIRE_AUTH=true#" .env
+  $SEDI "s#^ADMIN_PASSWORD=.*#ADMIN_PASSWORD=$pw#" .env
+  $SEDI "s#^API_TOKEN=.*#API_TOKEN=$apitok#" .env
+  ok "检测到公网环境，已自动加固 .env：REQUIRE_AUTH=true，ADMIN_PASSWORD 与 API_TOKEN 已设为随机强值。"
+  warn "后台管理员密码已设为：$pw（请妥善保存；忘记可删 .env 后重跑本脚本重新生成）"
+  warn "API_TOKEN=$apitok（仅前端/接口调用需要时使用，非登录密码）"
 }
 
 # ---------- 6.5 源码确保（缺失时自动下载）----------
@@ -322,16 +375,43 @@ deploy_node(){
   health_check "http://localhost:3000"
 }
 
+# ---------- 8.5 末尾安全加固清单 ----------
+print_security_checklist(){
+  echo ""
+  echo "${C_BOLD}安全加固清单${C_RESET}"
+  if [ "$IS_PUBLIC" = "1" ]; then
+    echo "  检测到本机可访问公网（出口 IP $PUBLIC_IP），若对外提供服务请务必："
+    if [ "$ENV_NEW" = "1" ]; then
+      echo "    ${C_GREEN}✓${C_RESET} 已自动开启鉴权，并生成强 ADMIN_PASSWORD / API_TOKEN（见上方提示）"
+    else
+      echo "    ${C_YELLOW}□${C_RESET} 确认 .env 中 REQUIRE_AUTH=true，且 ADMIN_PASSWORD / API_TOKEN 为强值"
+    fi
+    echo "    ${C_YELLOW}□${C_RESET} 防火墙只开必要端口："
+    echo "        sudo ufw allow 22/tcp && sudo ufw allow 3000/tcp && sudo ufw enable"
+    echo "    ${C_YELLOW}□${C_RESET} 建议用 nginx/Caddy + 免费 HTTPS 反代，隐藏裸端口 3000（明文 HTTP 易泄露凭证）"
+    echo "    ${C_YELLOW}□${C_RESET} 定期更新系统：sudo apt update && sudo apt -y upgrade"
+  else
+    echo "  当前为本地/内网环境，保持默认即可；一旦放到公网，请先做上述加固。"
+  fi
+  echo "    ${C_YELLOW}□${C_RESET} 切勿把 .env、server/data* 提交/备份/共享（含真实 smzdm Cookie 凭证）"
+}
+
 # ---------- 主流程 ----------
 main(){
   detect_os
   detect_tools
   detect_pkg
+  # macOS/BSD 的 sed -i 需要空参数，提前适配
+  case "$OS_TYPE" in
+    macOS|*BSD*) SEDI="sed -i ''" ;;
+    *) SEDI="sed -i" ;;
+  esac
   # 确定是否需要 sudo（root 或非 root 无 sudo 时留空）
   if [ "$(id -u 2>/dev/null || echo 1000)" -eq 0 ]; then SUDO="";
   elif has sudo; then SUDO="sudo";
   else SUDO=""; fi
 
+  detect_public
   print_report
   choose_mode
 
@@ -361,6 +441,7 @@ main(){
     echo "  停止服务 : kill \$(cat zdmclock.pid)"
   fi
   echo "  更新版本 : git pull && ./deploy.sh"
+  print_security_checklist
 }
 
 main "$@"
