@@ -8,8 +8,10 @@
 #   3. 自动补齐   —— 根据所选方式与检测结果，自动安装缺失依赖（支持的平台上），否则给出手动命令
 #   4. 智能配置   —— 缺失 .env 时基于 .env.example 自动生成，并提示关键安全项
 #   5. 健康检查   —— 启动后探测 /api/health，确认服务真正可用
+#   6. 自动下载源码 —— 当前目录无源码时自动 git clone（私有仓库需 git 凭据；可用 ZDC_REPO_URL 覆盖地址）
 #
 # 用法： chmod +x deploy.sh && ./deploy.sh
+#       也可单独下载本脚本后在空目录直接运行，它会自动拉取项目源码再部署
 # ----------------------------------------------------------------------------
 
 # 不用 set -e：交互输入、网络探测、自动安装都可能返回非 0，需手动判断，避免误退出
@@ -217,6 +219,50 @@ setup_env(){
   fi
 }
 
+# ---------- 6.5 源码确保（缺失时自动下载）----------
+REPO_URL="${ZDC_REPO_URL:-https://github.com/125540947/zdmclock-clone-.git}"
+
+source_present(){
+  # 关键标记文件齐全即认为源码已就位
+  [ -f docker-compose.yml ] && [ -f server/src/index.js ] && [ -d web/dist ]
+}
+
+download_source(){
+  step "未检测到项目源码，准备自动下载"
+  info "源码仓库：$REPO_URL"
+  if ! has git; then
+    err "未安装 git，无法自动下载源码。"
+    err "请先安装 git（https://git-scm.com/）后重试，或手动 clone 仓库再运行本脚本。"
+    return 1
+  fi
+  local target="zdmclock-clone"
+  if [ -e "$target" ]; then
+    err "当前目录已存在 '$target'，为避免覆盖已中止自动下载。"
+    err "请在一个空目录运行本脚本，或手动 clone 后直接进入该目录运行。"
+    return 1
+  fi
+  info "正在 git clone 源码到 ./$target ..."
+  if ! git clone --depth 1 "$REPO_URL" "$target"; then
+    err "源码下载失败。可能原因："
+    err "  ① 该仓库为私有仓库，git 未配置凭据（请先登录 GitHub 或配置 SSH 密钥）；"
+    err "  ② 网络不通或被墙；③ 仓库地址错误。"
+    err "可用环境变量覆盖地址后重试：ZDC_REPO_URL=你的地址 ./deploy.sh"
+    return 1
+  fi
+  if ! cd "$target"; then err "无法进入 $target 目录。"; return 1; fi
+  ok "源码已下载到 ./$target 并已进入该目录"
+  return 0
+}
+
+ensure_source(){
+  if source_present; then
+    ok "项目源码已就位（$(pwd)）"
+    return 0
+  fi
+  warn "当前目录未包含项目源码，将尝试自动下载。"
+  download_source || return 1
+}
+
 # ---------- 7. 健康检查 ----------
 health_check(){
   local url="$1"
@@ -272,6 +318,11 @@ main(){
 
   print_report
   choose_mode
+
+  # 源码就位检查：仅诊断模式在缺源码时可跳过；其余模式缺失则自动下载，下载失败即中止
+  if [ "$MODE" != "diagnose" ] && ! source_present; then
+    ensure_source || { err "缺少源码且无法自动下载，部署中止。"; exit 1; }
+  fi
 
   case "$MODE" in
     diagnose)
