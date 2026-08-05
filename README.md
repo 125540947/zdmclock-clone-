@@ -139,19 +139,36 @@ npm start
 
 ## 部署
 
-### 方式一：Docker（推荐）
+### 方式一：一键部署脚本 `deploy.sh`（推荐，交互式）
 
-**一键部署脚本**（推荐：自动生成 `.env` 并等待服务健康检查）：
+`deploy.sh` 是一个**交互式一键部署脚本**，会先自动检测你的环境，再让你选部署方式，并自动补齐缺失的依赖：
+
+- **自动检测**：操作系统类型/版本、CPU 架构（x86_64 / arm64）、是否已装 Docker / Node.js / npm / git / curl / wget，并打印检测报告。
+- **交互选择**（运行后输入数字即可）：
+  ```
+  1) Docker 部署（推荐）—— 环境隔离，自动处理全部依赖
+  2) 原生 Node.js 部署 —— 无需 Docker，直接在本机跑（需 Node>=20）
+  3) 仅生成环境检测报告，不部署
+  ```
+- **自动补齐**：所选方式缺依赖时，脚本会给出安装命令（Linux 上 Docker 走官方脚本、Node 走包管理器/NodeSource；Mac 走 brew），安装前会征求你同意。
+- 没有 `.env` 时自动从 `.env.example` 生成；启动后自动探测 `/api/health` 确认可用。
+
+**运行（Mac / Linux）**：
 ```bash
 chmod +x deploy.sh
 ./deploy.sh
+# 按菜单选 1（Docker）/ 2（原生 Node）/ 3（仅诊断）
 # 访问 http://<服务器IP>:3000
 ```
 
-或手动部署：
+**运行（Windows）**：需用 **Git Bash**（右键代码文件夹 → Git Bash Here）执行 `./deploy.sh`；PowerShell 不能直接跑 `.sh`。若 Git Bash 也不方便，可用下方「方式二」的手动命令。
+
+### 方式二：Docker Compose 手动（无需脚本）
+
 ```bash
 cp .env.example .env   # 按需修改：真实 cookie / SMZDM_ADAPTER=real / 强 API_TOKEN 等
 docker compose up -d --build
+# 访问 http://<服务器IP>:3000
 ```
 
 要点：
@@ -159,15 +176,19 @@ docker compose up -d --build
 - 数据持久化于**命名卷 `zdmclock-data`**（与宿主机代码隔离，容器重建不丢、不与本地开发数据混淆）。
 - 镜像已强制 `NODE_ENV=production`，后端自动托管 `web/dist` 前端。
 
-### 方式二：云服务器 / PaaS
+### 方式三：原生 Node.js / 云服务器 / PaaS
 
 1. 上传仓库（`web/dist` 已预构建入库，可跳过构建直接运行）
 2. 安装依赖：`npm install`
-3. 启动：`npm start`（已内置 `NODE_ENV=production`，单进程托管 API + 前端）
+3. 启动（`NODE_ENV=production` 由 `npm start` 自动写入，单进程托管 API + 前端）：
+   ```bash
+   npm start
+   ```
    - 如需重新构建前端：`npm run build` 后再 `npm start`
 4. 用 nginx / Caddy 反代 `:3000`，或直接暴露该端口
 
 > 多数 PaaS（如 Railway、Render、Fly.io）识别根 `package.json` 的 `build`/`start` 脚本即可自动部署。
+> 也可直接运行 `./deploy.sh` 选 **2) 原生 Node.js 部署**，由脚本自动检测并补齐 Node 环境，无需手动安装。
 
 ---
 
