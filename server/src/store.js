@@ -21,6 +21,19 @@ function defaultData() {
 
 let cache = null;
 
+// 写串行化：所有"改内存 + persist()"通过同一 Promise 链，避免并发请求
+// 在 await 边界互相穿插导致 lost-update（含真实双重签到竞态）。
+let writeChain = Promise.resolve();
+export function withWriteLock(fn) {
+  const run = writeChain.then(fn, fn);
+  // 无论成功失败都继续链条，避免单个写失败卡死后续写
+  writeChain = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
+
 function ensureDir() {
   fs.mkdirSync(config.dataDir, { recursive: true });
 }
@@ -36,6 +49,15 @@ export function load() {
   try {
     cache = JSON.parse(fs.readFileSync(DB_FILE, 'utf-8'));
   } catch {
+    // R3：解析失败时先备份损坏文件，再重置为空库，避免静默清空无法恢复
+    try {
+      const backup = DB_FILE + '.corrupt-' + Date.now();
+      fs.copyFileSync(DB_FILE, backup);
+      // eslint-disable-next-line no-console
+      console.error('[store] db.json 解析失败，已备份为', backup);
+    } catch {
+      /* 备份失败不影响重置 */
+    }
     cache = defaultData();
   }
   const d = defaultData();
@@ -47,6 +69,7 @@ export function load() {
 }
 
 export function persist() {
+  if (!cache) return; // 防御：load 之前调用不写空文件
   ensureDir();
   const tmp = DB_FILE + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(cache, null, 2));

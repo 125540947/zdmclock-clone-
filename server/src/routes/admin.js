@@ -1,11 +1,12 @@
 import { Router } from 'express';
 import { load, todayStr } from '../store.js';
 import { config } from '../config.js';
+import { authRequired } from '../auth.js';
 
 const router = Router();
 
 // 管理后台概览数据
-router.get('/stats', (req, res) => {
+router.get('/stats', authRequired, (req, res) => {
   const db = load();
   const today = todayStr();
   const todayClocks = db.clockRecords.filter((r) => r.date === today).length;

@@ -9,7 +9,7 @@ import clockRoutes from './routes/clock.js';
 import taskRoutes from './routes/tasks.js';
 import adminRoutes from './routes/admin.js';
 import baoliaoRoutes from './routes/baoliao.js';
-import { startScheduler } from './scheduler.js';
+import { startScheduler, isSchedulerRunning } from './scheduler.js';
 
 const app = express();
 // CORS：默认仅同源（生产由本服务托管前端、开发由 Vite 代理，正常情况下无需跨域）。
@@ -23,7 +23,13 @@ app.use(express.json());
 
 // 健康检查
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, env: config.nodeEnv, adapter: config.smzdmAdapter, scheduler: 'on', port: config.port });
+  res.json({
+    ok: true,
+    env: config.nodeEnv,
+    adapter: config.smzdmAdapter,
+    scheduler: isSchedulerRunning() ? 'on' : 'off', // b8：如实反映调度状态
+    port: config.port
+  });
 });
 
 // API 路由
@@ -44,15 +50,23 @@ if (config.nodeEnv === 'production' && fs.existsSync(config.webDist)) {
 app.use((err, req, res, next) => {
   // eslint-disable-next-line no-console
   console.error('[error]', err);
-  res.status(500).json({ error: 'server_error', message: err.message });
+  // S10：生产环境不向外暴露内部错误细节（可能含路径），返回泛化消息
+  const message = config.nodeEnv === 'production' ? '服务器内部错误' : err.message;
+  res.status(500).json({ error: 'server_error', message });
 });
 
 app.listen(config.port, () => {
-  startScheduler();
+  // R4：仅在 production 启动定时调度，避免开发态意外触发真实签到
+  if (config.nodeEnv === 'production') {
+    startScheduler();
+  } else {
+    // eslint-disable-next-line no-console
+    console.warn('[zdmclock] 非 production 环境，定时调度已禁用（开发态不会自动真实签到）。');
+  }
   // eslint-disable-next-line no-console
   console.log(
     `[zdmclock] server listening on http://localhost:${config.port} ` +
-      `(env=${config.nodeEnv}, adapter=${config.smzdmAdapter}, auth=${config.requireAuth}, scheduler=on)`
+      `(env=${config.nodeEnv}, adapter=${config.smzdmAdapter}, auth=${config.requireAuth}, scheduler=${isSchedulerRunning() ? 'on' : 'off'})`
   );
   // 安全告警：默认配置偏向「开箱即跑」，但公网暴露前必须收紧
   if (!config.requireAuth) {

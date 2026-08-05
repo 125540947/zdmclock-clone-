@@ -89,3 +89,41 @@
 | **R1 请求超时** | `realAdapter.call` 统一加 `signal: AbortSignal.timeout(SMZDM_REQUEST_TIMEOUT)`，并捕获 `TimeoutError/AbortError` 转译为「请求超时」友好错误；新增 `SMZDM_REQUEST_TIMEOUT` 环境变量（默认 10000ms） | `server/src/smzdm/realAdapter.js`、`.env.example`、`README.md` | 黑洞服务（接受连接不响应）在 **615ms**（设 600ms）被中止并抛「请求超时」，证明不再永久挂起 ✓ |
 
 > 注：S1 的"强制鉴权"（`REQUIRE_AUTH` 默认 `false`）本次**未强制改为 true**，以保持开箱即跑与现有 UI 无登录拦截；但已通过启动告警 + README 安全须知明确要求公网部署时必须设 `true`。其余 P1/P2 项按计划后续处理。
+
+---
+
+## 七、P1/P2 与复审缺陷修复记录（2026-08-05 第二轮「全部修复」）
+
+> 范围：审计报告中未修的 P1/P2 项 + 复审新发现的 N1 与 b1–b9 杂项。
+> 验证：`node --check` 全量通过；新增 `server/test/clockCore.test.js`（7 用例全绿）。
+
+| 编号 | 等级 | 修复内容 | 涉及文件 |
+|---|---|---|---|
+| **N1** | 高 | 定时自动签到不落库：新建 `clockCore.applyClock`（单一事实来源，幂等+写记录+更新金币/连续天数），`routes/clock.js` 与 `taskRunner.js` 共用，自动每日签到现在会真正生成签到记录并更新统计 | `server/src/clockCore.js`（新）、`routes/clock.js`、`taskRunner.js` |
+| **R2** | 中 | 并发写串行化：新增 `store.withWriteLock`（Promise 链），所有"改内存 + persist"经同一链条，消除 lost-update 与真实双重签到竞态 | `store.js`、`routes/clock.js`、`scheduler.js`、`taskRunner.js` |
+| **R3** | 中 | 损坏 db 备份：解析失败时先 `fs.copyFileSync` 备份为 `.corrupt-<ts>` 再重置，避免静默清空不可恢复；`persist` 加 `if(!cache) return` 防御 | `store.js` |
+| **R4** | 低 | dev 模式停用调度器：`app.listen` 仅 production 启动 `startScheduler`，否则打印警告，避免 `npm run dev` 真去签到 | `index.js` |
+| **S4** | 中 | `GET /:id/smzdm` 加 `authRequired`，与 `/:id/refresh` 一致，杜绝匿名用存储凭据对外发请求 | `routes/users.js` |
+| **S5** | 中 | `GET /stats` 加 `authRequired`，匿名不再可读账号/任务/签到数等行为画像 | `routes/admin.js` |
+| **S6** | 中 | `/status`、`/history` 加 `authRequired`，收敛签到活动规律泄漏 | `routes/clock.js` |
+| **S7** | 低 | `maskCookie` 改为全隐藏 `"已保存(已隐藏)"`，不再暴露 cookie 片段 | `auth.js` |
+| **S9** | 低 | `POST /`（建账号）校验 cookie 为字符串且非空；nickname/smzdmId 用 `clean()` 长度钳制，拒绝对象等非预期类型 | `routes/users.js` |
+| **S10** | 低 | 生产环境 500 返回泛化消息「服务器内部错误」，避免泄露内部路径 | `index.js` |
+| **b1** | — | 昨天用本地日历 `setDate(-1)` 计算（`localYesterdayStr`），替代 `Date.now()-86400000` 在 DST/跨月边界偏移 | `clockCore.js` |
+| **b2** | — | 分页 `pageSize` 钳制 ≤200；任务动作 `count` 钳制 1–5（`COUNT_MAX`） | `routes/clock.js`、`taskRunner.js` |
+| **b3** | — | 新增 `validateCron`（5 段 + 取值范围严格校验）；`PUT /tasks/:id` 在校验失败时返回 400，避免非法 cron 静默永不触发 | `scheduler.js`、`routes/tasks.js` |
+| **b5** | — | `realAdapter.call` 对响应体加 2MB 上限，超则拒绝，防超大响应占内存 | `smzdm/realAdapter.js` |
+| **b6** | — | `scheduler.tick` 整体包 `try/catch`，同步异常不再中断 30s 轮询循环 | `scheduler.js` |
+| **b7** | — | 新增 `auth.safeEqual`（恒定时间比较）；登录与 token 校验均改用，缓解时序侧信道 | `auth.js`、`routes/auth.js` |
+| **b8** | — | 新增 `schedulerRunning` 状态 + `isSchedulerRunning()`；health 端点如实返回 `scheduler: on/off` | `scheduler.js`、`index.js` |
+| **b9** | — | 新增最小单元验证，覆盖 `applyClock`（首签/重复幂等/连续天数）、`withWriteLock`（串行化）、`validateCron`（合法/非法） | `server/test/clockCore.test.js` |
+| **F2** | 中 | `getUserInfo` 改用 `user-api.smzdm.com` 基址（原 `www.smzdm.com/user/` 返回 HTML 无法解析）；端点标注为社区经验值未验证 | `smzdm/realAdapter.js` |
+| **F3** | 中 | `doComment/doFavorite/doPoint` 真正按 `count`（上限 5）循环，消息如实；`mock` 适配器同样按 count 循环 | `smzdm/realAdapter.js`、`smzdm/mockAdapter.js` |
+| **F5** | 低 | 前端 `today` 改用本地日期（`localToday`），与后端 `localDateStr` 同基准，消除北京凌晨 00:00–08:00 视觉错位 | `web/src/views/UserClock.vue` |
+| **S8** | 低 | 爆料链接渲染前校验 `^https?://`，阻断 `javascript:` 伪协议自 XSS；补 `noreferrer` | `web/src/views/Baoliao.vue` |
+
+### 残余项（主动留白，非遗漏）
+- **S1 强制鉴权**：`REQUIRE_AUTH` 默认仍 `false`（保持开箱即跑 + UI 无登录拦截），依靠启动告警 + README 安全须知要求公网部署时设 `true`。
+- **S3 明文 cookie**：已通过 `.gitignore`/`.dockerignore` 排除 + 部署指南收紧文件权限；静态加密（字段级加密）属可选增强，未在本轮实现。
+- **F4 `GptReply.vue`**：纯前端 localStorage 演示，后端无对应任务/适配器，UI 已应明确标注"演示"；本轮未改动。
+- **R5/R6**：日志分级、登录防爆破为低优增强，留待后续。

@@ -6,7 +6,7 @@ import { authRequired, maskCookie } from '../auth.js';
 const router = Router();
 
 // 账号列表（cookie 遮罩）
-router.get('/', (req, res) => {
+router.get('/', authRequired, (req, res) => {
   const db = load();
   const list = db.users.map((u) => ({ ...u, cookie: maskCookie(u.cookie) }));
   res.json({ total: list.length, list });
@@ -15,7 +15,10 @@ router.get('/', (req, res) => {
 // 新增 smzdm 账号（录入 cookie）
 router.post('/', authRequired, async (req, res) => {
   const { smzdmId, nickname, cookie } = req.body || {};
-  if (!cookie) return res.status(400).json({ error: 'missing_cookie', message: 'cookie 必填' });
+  if (typeof cookie !== 'string' || !cookie.trim()) {
+    return res.status(400).json({ error: 'missing_cookie', message: 'cookie 必填且为字符串' });
+  }
+  const clean = (v, max = 64) => (typeof v === 'string' ? v.slice(0, max) : ''); // S9：类型/长度约束
   const db = load();
   let info = {};
   try {
@@ -25,8 +28,8 @@ router.post('/', authRequired, async (req, res) => {
   }
   const user = {
     id: genId('u'),
-    smzdmId: smzdmId || info.smzdmId || '',
-    nickname: nickname || info.nickname || '未命名账号',
+    smzdmId: clean(smzdmId) || info.smzdmId || '',
+    nickname: clean(nickname) || info.nickname || '未命名账号',
     cookie,
     points: info.points || 0,
     level: info.level || '',
@@ -41,7 +44,7 @@ router.post('/', authRequired, async (req, res) => {
 });
 
 // 账号详情
-router.get('/:id', (req, res) => {
+router.get('/:id', authRequired, (req, res) => {
   const db = load();
   const u = db.users.find((x) => x.id === req.params.id);
   if (!u) return res.status(404).json({ error: 'not_found' });
@@ -83,7 +86,7 @@ router.delete('/:id', authRequired, (req, res) => {
 });
 
 // 拉取该账号在 smzdm 的真实资料（调用适配器 getUserInfo）
-router.get('/:id/smzdm', async (req, res) => {
+router.get('/:id/smzdm', authRequired, async (req, res) => {
   const db = load();
   const u = db.users.find((x) => x.id === req.params.id);
   if (!u) return res.status(404).json({ error: 'not_found' });

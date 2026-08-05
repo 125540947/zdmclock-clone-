@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { load, persist, todayStr } from '../store.js';
 import { runTask } from '../taskRunner.js';
+import { validateCron } from '../scheduler.js';
 import { authRequired } from '../auth.js';
 
 const router = Router();
@@ -18,7 +19,16 @@ router.put('/:id', authRequired, (req, res) => {
   if (!t) return res.status(404).json({ error: 'not_found' });
   const { enabled, cron, name } = req.body || {};
   if (enabled !== undefined) t.enabled = enabled;
-  if (cron !== undefined) t.cron = cron;
+  if (cron !== undefined) {
+    // b3：拒绝非法 cron，避免静默永不触发
+    if (!validateCron(cron)) {
+      return res.status(400).json({
+        error: 'invalid_cron',
+        message: 'cron 表达式非法（需 5 段：分 时 日 月 周，如 "0 9 * * *"）',
+      });
+    }
+    t.cron = cron;
+  }
   if (name !== undefined) t.name = name;
   persist();
   res.json(t);

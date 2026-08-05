@@ -1,4 +1,4 @@
-import { load, persist, todayStr } from './store.js';
+import { load, persist, withWriteLock, todayStr } from './store.js';
 import { runTask } from './taskRunner.js';
 
 // 轻量定时调度器（零依赖）：
@@ -8,6 +8,7 @@ import { runTask } from './taskRunner.js';
 // 适合个人单机部署；如需高可用/多实例，请改用外部调度（如系统 cron / k8s CronJob）。
 
 let timer = null;
+let schedulerRunning = false;
 const lastFiredMinute = {}; // taskId -> 分钟时间戳，用于同一分钟内去重
 
 // 单字段匹配：支持 * 、*/n 、a-b 、a,b,c
@@ -29,6 +30,55 @@ function fieldMatch(field, val, min, max) {
     });
 }
 
+// 校验单个 cron 字段语法是否合法（严格，含取值范围）
+function validateField(field, min, max) {
+  if (field === '*') return true;
+  if (field.startsWith('*/')) {
+    const step = parseInt(field.slice(2), 10);
+    return Number.isInteger(step) && step > 0;
+  }
+  return String(field)
+    .split(',')
+    .every((p) => {
+      if (p === '') return false;
+      if (p.includes('-')) {
+        const parts = p.split('-');
+        if (parts.length !== 2) return false;
+        const a = parseInt(parts[0], 10);
+        const b = parseInt(parts[1], 10);
+        return (
+          Number.isInteger(a) &&
+          Number.isInteger(b) &&
+          a >= min &&
+          a <= max &&
+          b >= min &&
+          b <= max &&
+          a <= b
+        );
+      }
+      const n = parseInt(p, 10);
+      return Number.isInteger(n) && n >= min && n <= max;
+    });
+}
+
+// 校验整条 cron 表达式（5 段）语法是否合法。
+// 用于接口入参校验：非法 cron 会被 cronMatch 永远判为不命中（静默永不触发），
+// 因此在写入前就必须拒绝（b3）。
+export function validateCron(expr) {
+  const f = String(expr || '').trim().split(/\s+/);
+  if (f.length !== 5) return false;
+  const ranges = [
+    [0, 59], // 分
+    [0, 23], // 时
+    [1, 31], // 日
+    [1, 12], // 月
+    [0, 6], // 周
+  ];
+  return f.every(
+    (field, i) => field !== '' && validateField(field, ranges[i][0], ranges[i][1])
+  );
+}
+
 // 标准 5 段 cron 求值：分 时 日 月 周
 export function cronMatch(expr, date = new Date()) {
   const f = String(expr || '').trim().split(/\s+/);
@@ -44,41 +94,58 @@ export function cronMatch(expr, date = new Date()) {
 }
 
 function tick() {
-  const db = load();
-  const now = new Date();
-  const minuteKey = Math.floor(now.getTime() / 60000);
-  const today = todayStr();
-  for (const t of db.tasks) {
-    if (!t.enabled || !t.cron) continue;
-    if (!cronMatch(t.cron, now)) continue;
-    if (lastFiredMinute[t.id] === minuteKey) continue; // 本分钟已触发，跳过
-    lastFiredMinute[t.id] = minuteKey;
-    runTask(t, db)
-      .then((r) => {
-        if (r.ok) {
-          t.lastRun = today;
-          t.lastResult = r.result.message;
-          t.status = 'done';
-        } else {
-          t.lastResult = r.message;
-          t.status = 'error';
-        }
-        persist();
-      })
-      .catch((e) => {
-        t.lastResult = e.message;
-        t.status = 'error';
-        persist();
-      });
+  try {
+    const db = load();
+    const now = new Date();
+    const minuteKey = Math.floor(now.getTime() / 60000);
+    const today = todayStr();
+    for (const t of db.tasks) {
+      if (!t.enabled || !t.cron) continue;
+      if (!cronMatch(t.cron, now)) continue;
+      if (lastFiredMinute[t.id] === minuteKey) continue; // 本分钟已触发，跳过
+      lastFiredMinute[t.id] = minuteKey;
+      runTask(t, db)
+        .then((r) => {
+          // 写锁内更新任务状态并落盘，避免与其他写请求互相覆盖（R2）
+          withWriteLock(() => {
+            if (r.ok) {
+              t.lastRun = today;
+              t.lastResult = r.result.message;
+              t.status = 'done';
+            } else {
+              t.lastResult = r.message;
+              t.status = 'error';
+            }
+            persist();
+          });
+        })
+        .catch((e) => {
+          withWriteLock(() => {
+            t.lastResult = e.message;
+            t.status = 'error';
+            persist();
+          });
+        });
+    }
+  } catch (e) {
+    // b6：tick 内同步异常不应中断调度循环
+    // eslint-disable-next-line no-console
+    console.error('[scheduler] tick 异常:', e);
   }
 }
 
 export function startScheduler() {
   stopScheduler();
   timer = setInterval(tick, 30_000);
+  schedulerRunning = true;
 }
 
 export function stopScheduler() {
   if (timer) clearInterval(timer);
   timer = null;
+  schedulerRunning = false;
+}
+
+export function isSchedulerRunning() {
+  return schedulerRunning;
 }

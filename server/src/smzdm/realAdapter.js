@@ -72,6 +72,7 @@ async function call(path, { method = 'GET', cookie, body, ua = UA, base = API_BA
   }
   if (!resp.ok) throw new Error(`HTTP ${resp.status} @ ${path}`);
   const text = await resp.text();
+  if (text.length > 2_000_000) throw new Error('响应体过大，已拒绝（疑似异常响应）'); // b5：防超大响应占内存
   let json;
   try {
     json = JSON.parse(text);
@@ -117,7 +118,8 @@ export const realAdapter = {
   name: 'real',
 
   async getUserInfo(cookie) {
-    const json = await call(ENDPOINTS.userInfo, { cookie, base: BASE });
+    // F2：改用 user-api 基址（www.smzdm.com/user/ 返回 HTML 无法解析）；端点为社区经验值，未验证
+    const json = await call(ENDPOINTS.userInfo, { cookie, base: API_BASE });
     const d = json?.data || json || {};
     return {
       smzdmId: d.userId || d.smzdm_id || '',
@@ -149,27 +151,41 @@ export const realAdapter = {
   },
 
   async doComment(cookie, opts = {}) {
-    const body = {
-      article_id: opts.articleId || '',
-      content: opts.content || '好价，感谢分享！'
-    };
-    const json = await call(ENDPOINTS.comment, { method: 'POST', cookie, body, base: BASE });
-    assertOk(json, '评论');
-    return { success: true, message: `评论成功 ×${opts.count || 1}`, count: opts.count || 1 };
+    if (!opts.articleId) throw new Error('评论需要 articleId（real 模式暂未采集文章 ID）');
+    const count = Math.min(Math.max(1, Number(opts.count) || 1), 5); // F3：真正循环 count（上限 5），消息如实
+    let last;
+    for (let i = 0; i < count; i++) {
+      last = await call(ENDPOINTS.comment, {
+        method: 'POST',
+        cookie,
+        body: { article_id: opts.articleId, content: opts.content || '好价，感谢分享！' },
+        base: BASE
+      });
+      assertOk(last, '评论');
+    }
+    return { success: true, message: `评论成功 ×${count}`, count };
   },
 
   async doFavorite(cookie, opts = {}) {
-    const body = { article_id: opts.articleId || '' };
-    const json = await call(ENDPOINTS.favorite, { method: 'POST', cookie, body, base: BASE });
-    assertOk(json, '收藏');
-    return { success: true, message: `收藏成功 ×${opts.count || 1}`, count: opts.count || 1 };
+    if (!opts.articleId) throw new Error('收藏需要 articleId（real 模式暂未采集文章 ID）');
+    const count = Math.min(Math.max(1, Number(opts.count) || 1), 5);
+    let last;
+    for (let i = 0; i < count; i++) {
+      last = await call(ENDPOINTS.favorite, { method: 'POST', cookie, body: { article_id: opts.articleId }, base: BASE });
+      assertOk(last, '收藏');
+    }
+    return { success: true, message: `收藏成功 ×${count}`, count };
   },
 
   async doPoint(cookie, opts = {}) {
-    const body = { article_id: opts.articleId || '' };
-    const json = await call(ENDPOINTS.point, { method: 'POST', cookie, body, base: BASE });
-    assertOk(json, '点赞');
-    return { success: true, message: `点赞成功 ×${opts.count || 1}`, count: opts.count || 1 };
+    if (!opts.articleId) throw new Error('点赞需要 articleId（real 模式暂未采集文章 ID）');
+    const count = Math.min(Math.max(1, Number(opts.count) || 1), 5);
+    let last;
+    for (let i = 0; i < count; i++) {
+      last = await call(ENDPOINTS.point, { method: 'POST', cookie, body: { article_id: opts.articleId }, base: BASE });
+      assertOk(last, '点赞');
+    }
+    return { success: true, message: `点赞成功 ×${count}`, count };
   },
 
   async submitBaoliao(cookie, payload = {}) {

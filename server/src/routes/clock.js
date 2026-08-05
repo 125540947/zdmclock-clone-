@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { load, persist, genId, todayStr, localDateStr } from '../store.js';
+import { load, persist, todayStr, localDateStr, withWriteLock } from '../store.js';
+import { applyClock } from '../clockCore.js';
 import { smzdm } from '../smzdm/adapter.js';
 import { authRequired } from '../auth.js';
 
@@ -23,7 +24,7 @@ function buildCalendar(records, days = 30) {
 }
 
 // 签到状态（打卡页核心数据）
-router.get('/status', (req, res) => {
+router.get('/status', authRequired, (req, res) => {
   const db = load();
   const userId = req.query.userId;
   const records = userId ? db.clockRecords.filter((r) => r.userId === userId) : db.clockRecords;
@@ -40,15 +41,15 @@ router.get('/status', (req, res) => {
 });
 
 // 签到记录列表（按时间倒序，可选 userId / 分页）
-router.get('/history', (req, res) => {
+router.get('/history', authRequired, (req, res) => {
   const db = load();
   const { userId, page = 1, pageSize = 30 } = req.query;
   let recs = db.clockRecords;
   if (userId) recs = recs.filter((r) => r.userId === userId);
   recs = [...recs].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const total = recs.length;
-  const p = Math.max(1, Number(page));
-  const ps = Math.max(1, Number(pageSize));
+  const p = Math.max(1, Number(page) || 1);
+  const ps = Math.min(200, Math.max(1, Number(pageSize) || 30)); // b2：钳制分页上限，防放大
   const list = recs.slice((p - 1) * ps, p * ps);
   // 附带昵称
   const userMap = Object.fromEntries(db.users.map((u) => [u.id, u.nickname]));
@@ -63,23 +64,20 @@ router.post('/do', authRequired, async (req, res) => {
   const user = userId ? db.users.find((u) => u.id === userId) : db.users[0];
   if (!user) return res.status(400).json({ error: 'no_user', message: '请先添加 smzdm 账号' });
 
-  const today = todayStr();
-  if (db.clockRecords.some((r) => r.userId === user.id && r.date === today)) {
-    return res.status(409).json({ error: 'already', message: '今日已签到' });
-  }
   try {
     const r = await smzdm.doClockIn(user.cookie);
     if (!r.success) return res.status(502).json({ error: 'clock_failed', message: r.message });
-    const rec = { id: genId('c'), userId: user.id, date: today, points: r.points || 0, createdAt: new Date().toISOString() };
-    db.clockRecords.push(rec);
-    const ys = localDateStr(new Date(Date.now() - 86400000));
-    user.streak = db.clockRecords.some((x) => x.userId === user.id && x.date === ys) ? (user.streak || 0) + 1 : 1;
-    user.totalClockIn = (user.totalClockIn || 0) + 1;
-    user.points = (user.points || 0) + (r.points || 0);
-    persist();
+    // 写锁内完成"幂等检查 + 落库 + 更新用户"，避免并发双重签到（N1 + R2）
+    const result = await withWriteLock(() => {
+      const res = applyClock(user, r, db);
+      if (res.duplicate) return res;
+      persist();
+      return res;
+    });
+    if (result.duplicate) return res.status(409).json({ error: 'already', message: '今日已签到' });
     res.json({
       ok: true,
-      record: rec,
+      record: result.record,
       user: { id: user.id, streak: user.streak, points: user.points, total: user.totalClockIn }
     });
   } catch (e) {

@@ -77,7 +77,14 @@
 import { ref, onMounted } from 'vue';
 import api from '../api/client.js';
 
-const today = ref(new Date().toISOString().slice(0, 10));
+// F5 修复：前端"今天"改用本地日期，与后端 localDateStr 同基准，
+// 避免北京 00:00–08:00 期间 UTC 与本地错位导致"今日已签到"视觉矛盾
+function localToday() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+const today = ref(localToday());
 const users = ref([]);
 const userId = ref('');
 const status = ref({ streak: 0, points: 0, total: 0, todayChecked: false, calendar: [] });

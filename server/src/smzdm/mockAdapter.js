@@ -28,17 +28,20 @@ export const mockAdapter = {
   },
 
   async doComment(_cookie, opts = {}) {
-    const count = opts.count || 1;
+    const count = Math.min(Math.max(1, Number(opts.count) || 1), 5);
+    for (let i = 0; i < count; i++) await Promise.resolve(); // 模拟动作（无副作用，仅让计数真实）
     return { success: true, message: `评论成功 ×${count}`, count };
   },
 
   async doFavorite(_cookie, opts = {}) {
-    const count = opts.count || 1;
+    const count = Math.min(Math.max(1, Number(opts.count) || 1), 5);
+    for (let i = 0; i < count; i++) await Promise.resolve();
     return { success: true, message: `收藏成功 ×${count}`, count };
   },
 
   async doPoint(_cookie, opts = {}) {
-    const count = opts.count || 1;
+    const count = Math.min(Math.max(1, Number(opts.count) || 1), 5);
+    for (let i = 0; i < count; i++) await Promise.resolve();
     return { success: true, message: `点赞成功 ×${count}`, count };
   },
 

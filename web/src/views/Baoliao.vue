@@ -57,8 +57,8 @@
         <div class="dm">
           <span class="tag" v-if="d.price">¥{{ d.price }}</span>
           <span class="tag" v-if="d.cat">{{ d.cat }}</span>
-          <a v-if="d.url" :href="d.url" target="_blank" rel="noopener" class="tag on">原链接</a>
-          <a v-if="d.smzdmUrl" :href="d.smzdmUrl" target="_blank" rel="noopener" class="tag on">smzdm</a>
+          <a v-if="safeUrl(d.url)" :href="safeUrl(d.url)" target="_blank" rel="noopener noreferrer" class="tag on">原链接</a>
+          <a v-if="safeUrl(d.smzdmUrl)" :href="safeUrl(d.smzdmUrl)" target="_blank" rel="noopener noreferrer" class="tag on">smzdm</a>
         </div>
         <div class="actions">
           <button class="mini" :disabled="d.status === 'submitted' || !submitUserId" @click="submit(d)">
@@ -95,6 +95,11 @@ function flash(text, type = 'ok') {
 }
 function statusText(s) {
   return { draft: '草稿', submitted: '已提交', failed: '失败' }[s] || s;
+}
+
+// S8：仅允许 https? 协议，阻断 javascript: 等伪协议造成的自 XSS
+function safeUrl(u) {
+  return typeof u === 'string' && /^https?:\/\//i.test(u) ? u : '';
 }
 
 async function loadAccounts() {
