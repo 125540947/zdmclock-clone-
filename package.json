@@ -1,0 +1,23 @@
+{
+  "name": "zdmclock-clone",
+  "version": "1.0.0",
+  "private": true,
+  "description": "什么值得买(smzdm) 自动化助手 - 前端+后端完整骨架（mock 适配器可本地跑通）",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "build": "npm run build -w web",
+    "start": "cross-env NODE_ENV=production npm run start -w server",
+    "dev": "concurrently -n server,web -c green,cyan \"npm run dev -w server\" \"npm run dev -w web\"",
+    "install:all": "npm install"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,13 @@
+node_modules
+dist-ssr
+.npmcache
+.npmcache2
+*.local
+.env
+server/data/*.json
+server/data_demo/*.json
+server/data_test/*.json
+# web/dist 预构建产物保留入库，使克隆后 `npm start` 无需先 build 即可运行
+!web/dist
+.DS_Store
+npm-debug.log*

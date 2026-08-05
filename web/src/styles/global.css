@@ -1,0 +1,316 @@
+/* =========================================================
+   设计系统 —— 深色暖调「签到奖励」主题
+   配色致敬 smzdm 品牌红，但更克制：深咖底色 + 珊瑚红主色 + 琥珀金奖励色
+   字体：Fraunces（衬线大数字/标题） + Sora（正文/UI），中文回退到系统字体
+   ========================================================= */
+
+:root {
+  --bg: #14110f;
+  --bg-2: #1b1612;
+  --surface: rgba(255, 255, 255, 0.045);
+  --surface-2: rgba(255, 255, 255, 0.07);
+  --surface-strong: rgba(255, 255, 255, 0.1);
+  --border: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.16);
+
+  --primary: #ff5a4d;
+  --primary-strong: #ff3b2f;
+  --primary-soft: rgba(255, 90, 77, 0.14);
+  --gold: #f5b942;
+  --gold-soft: rgba(245, 185, 66, 0.14);
+
+  --text: #f5ece4;
+  --text-dim: #b6a69b;
+  --text-faint: #7d7068;
+
+  --radius: 18px;
+  --radius-sm: 12px;
+  --shadow: 0 18px 40px -18px rgba(0, 0, 0, 0.7);
+  --font-display: 'Fraunces', 'Sora', 'PingFang SC', 'Microsoft YaHei', serif;
+  --font-body: 'Sora', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-body);
+  color: var(--text);
+  background: var(--bg);
+  background-image:
+    radial-gradient(900px 500px at 12% -8%, rgba(255, 90, 77, 0.18), transparent 60%),
+    radial-gradient(800px 520px at 92% 4%, rgba(245, 185, 66, 0.12), transparent 55%),
+    radial-gradient(700px 700px at 50% 120%, rgba(255, 90, 77, 0.08), transparent 60%);
+  background-attachment: fixed;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* 细颗粒噪点，增加质感（不抢内容） */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.04;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+#app {
+  position: relative;
+  z-index: 1;
+}
+
+/* 移动端外壳 */
+.app-shell {
+  max-width: 480px;
+  margin: 0 auto;
+  min-height: 100vh;
+  padding: 22px 18px calc(86px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* 顶部标题区 */
+.page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 4px;
+}
+.page-head h1 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 26px;
+  margin: 0;
+  letter-spacing: 0.3px;
+}
+.page-head .sub {
+  color: var(--text-dim);
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+/* 玻璃卡片 */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: var(--shadow);
+}
+.card-title {
+  font-size: 13px;
+  color: var(--text-dim);
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  margin: 0 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 大数字（Fraunces） */
+.display {
+  font-family: var(--font-display);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.5px;
+}
+
+/* 主按钮 */
+.btn {
+  appearance: none;
+  border: none;
+  border-radius: 14px;
+  padding: 14px 18px;
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 15px;
+  color: #fff;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.25s ease, opacity 0.2s;
+  background: linear-gradient(135deg, var(--primary), var(--primary-strong));
+  box-shadow: 0 12px 30px -10px rgba(255, 59, 47, 0.6);
+}
+.btn:active {
+  transform: translateY(1px) scale(0.99);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.btn.ghost {
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  box-shadow: none;
+}
+.btn.gold {
+  background: linear-gradient(135deg, #ffd06b, var(--gold));
+  color: #3a2a06;
+  box-shadow: 0 12px 30px -10px rgba(245, 185, 66, 0.55);
+}
+.btn.block {
+  width: 100%;
+}
+
+/* 输入 */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-bottom: 14px;
+}
+.field label {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.input,
+.textarea {
+  font-family: var(--font-body);
+  font-size: 14px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  outline: none;
+  transition: border 0.2s, background 0.2s;
+  width: 100%;
+}
+.input:focus,
+.textarea:focus {
+  border-color: var(--primary);
+  background: var(--surface-strong);
+}
+.textarea {
+  resize: vertical;
+  min-height: 92px;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+/* 标签 / 徽章 */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.tag.on {
+  color: #06210f;
+  background: rgba(120, 224, 143, 0.85);
+  border-color: transparent;
+}
+.tag.off {
+  color: var(--text-faint);
+}
+
+/* 列表行 */
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--border);
+}
+.row:last-child {
+  border-bottom: none;
+}
+.row .l {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.row .l .t {
+  font-size: 15px;
+  font-weight: 500;
+}
+.row .l .d {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+/* 入场动画 */
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.rise {
+  animation: fadeUp 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* 签到按钮光晕脉冲 */
+@keyframes glowPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 90, 77, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 16px rgba(255, 90, 77, 0);
+  }
+}
+.pulse {
+  animation: glowPulse 2.2s ease-out infinite;
+}
+
+@keyframes pop {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.12);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.pop {
+  animation: pop 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.muted {
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.empty {
+  text-align: center;
+  color: var(--text-faint);
+  padding: 40px 0;
+  font-size: 14px;
+}
+.gold-text {
+  color: var(--gold);
+}
+.primary-text {
+  color: var(--primary);
+}
