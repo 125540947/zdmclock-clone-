@@ -201,6 +201,39 @@ docker compose up -d --build
 3. **真实 Cookie 明文存储**：`server/data*/db.json` 以明文保存 smzdm 登录态（等同于你的账号凭据）。已通过 `.gitignore` 排除，请勿提交、备份或共享这些目录。
 4. **CORS 默认仅同源**：已修复为默认 `cors({ origin: false })`，不返回跨域头，**杜绝任意域调用**。仅在「前端部署在独立域名」时才设置 `CORS_ORIGIN` 环境变量放行你的域名。
 
+### Ubuntu 公网部署安全加固清单
+
+在云服务器（如腾讯云 / 阿里云 / AWS 的 Ubuntu）上把服务暴露到公网时，**仅改 `.env` 还不够**，还需在系统层面收口：
+
+1. **开防火墙，只留必要的"门"**：用 `ufw` 只放行 `22`（SSH 远程管理）和 `3000`（或下方反代的 `443` / `80`），其余全部拒绝。
+   ```bash
+   sudo ufw allow 22/tcp
+   sudo ufw allow 3000/tcp      # 若走反代则放行 443/80，不必开 3000
+   sudo ufw enable
+   sudo ufw status
+   ```
+2. **避免长期以 root 跑、给 docker 权限**：新建专用用户并加入 `docker` 组，避免反复 `sudo` 也避免 root 暴露。
+   ```bash
+   sudo usermod -aG docker $USER   # 把当前用户加入 docker 组（免 sudo 跑 docker）
+   newgrp docker                  # 当前终端立即生效，免注销
+   ```
+   > 注意：`docker` 组权限约等于 root，仅把**可信用户**加入；不要对不信任账号开放。
+3. **用反向代理 + 免费 HTTPS 隐藏裸端口**：对外只暴露 `443`，用 nginx/Caddy 反代到 `:3000`，并自动签发 Let's Encrypt 免费证书，避免管理后台以明文 HTTP 暴露被嗅探。
+   ```bash
+   # 例：Caddy（最简，自动申请并续期证书）
+   # Caddyfile:
+   # your.domain.com {
+   #   reverse_proxy localhost:3000
+   # }
+   sudo apt install -y caddy && sudo systemctl enable --now caddy
+   ```
+   此后浏览器用 `https://your.domain.com` 访问，`.env` 的 `CORS_ORIGIN` 设为该域名。
+4. **定期更新系统**以修复内核 / 库漏洞：
+   ```bash
+   sudo apt update && sudo apt -y upgrade
+   ```
+5. **复核 `.env` 安全项**（见上方 1）：`REQUIRE_AUTH=true`、强 `ADMIN_PASSWORD`、固定强 `API_TOKEN`、按需设 `CORS_ORIGIN`。
+
 ### 真实适配器端点状态
 - ✅ **已验证可用**：`doClockIn`（`robot/token → checkin` 真实签到链路；签名算法已修正 `error_code` 字符串比较 bug）。
 - ⚠️ **待你抓包验证（可能失效）**：`getUserInfo`（`/user/`）、`doComment` / `doFavorite` / `doPoint` 的 `BASE` 为 `www.smzdm.com`、路径为社区推测值，大概率需按真实接口修正。启用对应自动任务前请先手动验证，避免触发风控。
