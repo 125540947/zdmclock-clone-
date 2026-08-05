@@ -141,12 +141,23 @@ npm start
 
 ### 方式一：Docker（推荐）
 
+**一键部署脚本**（推荐：自动生成 `.env` 并等待服务健康检查）：
 ```bash
-docker compose up -d --build
+chmod +x deploy.sh
+./deploy.sh
 # 访问 http://<服务器IP>:3000
 ```
 
-数据持久化于挂载卷 `./server/data`。
+或手动部署：
+```bash
+cp .env.example .env   # 按需修改：真实 cookie / SMZDM_ADAPTER=real / 强 API_TOKEN 等
+docker compose up -d --build
+```
+
+要点：
+- 配置统一从宿主机 **`.env`** 读取（compose 的 `env_file`），真实签到所需的 cookie、`SMZDM_ADAPTER` 等写在 `.env` 即生效，无需改 compose。
+- 数据持久化于**命名卷 `zdmclock-data`**（与宿主机代码隔离，容器重建不丢、不与本地开发数据混淆）。
+- 镜像已强制 `NODE_ENV=production`，后端自动托管 `web/dist` 前端。
 
 ### 方式二：云服务器 / PaaS
 

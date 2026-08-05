@@ -1,17 +1,30 @@
+# zdmclock-clone 一键部署
+# 用法：docker compose up -d --build
 services:
   zdmclock:
     build: .
+    image: zdmclock-clone:latest
     container_name: zdmclock
+    restart: unless-stopped
     ports:
       - "3000:3000"
+    # 从宿主机 .env 注入配置（API_TOKEN / REQUIRE_AUTH / SMZDM_ADAPTER=cookie 等），
+    # 不写死在 compose 中，真实配置可随 .env 生效。
+    env_file:
+      - .env
+    # 强制生产环境，确保后端托管前端静态资源（覆盖 .env 中可能残留的 development）
     environment:
       - NODE_ENV=production
       - PORT=3000
-      - SMZDM_ADAPTER=mock
-      - REQUIRE_AUTH=false
-      - ADMIN_USERNAME=admin
-      - ADMIN_PASSWORD=admin123
+    # 持久化签到数据（容器重建不丢）；命名卷与宿主机代码目录隔离，不会和本地开发数据混淆
     volumes:
-      # 持久化本地 JSON 数据库，避免容器重建丢数据
-      - ./server/data:/app/server/data
-    restart: unless-stopped
+      - zdmclock-data:/app/server/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  zdmclock-data:
