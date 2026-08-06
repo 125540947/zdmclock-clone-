@@ -66,16 +66,18 @@
               </button>
               <div v-if="expandedId === t.id" class="ep-form">
                 <p class="hint-sm">
-                  该任务已内置真实端点与签名，无需抓包。仅需填写动态参数：
-                  转盘/抽奖填 <code>active_id</code>，众测填 <code>crowd_id</code>；
-                  也可填 <code>topicUrl</code>（专题页链接）让其自动抓取活动ID。
+                  该任务已内置真实端点与签名，开启后<strong>自动运行</strong>：
+                  转盘/抽奖会<strong>自动从 smzdm 专题页获取 active_id</strong>（无需手填）；
+                  众测会<strong>自动跑全民众测能量值任务</strong>（无需 crowd_id）。
+                  仅在想覆盖时才填参数：<code>active_id</code> / <code>crowd_id</code> /
+                  <code>topicUrl</code>（专题页链接）均可选填。
                 </p>
-                <label class="lbl">参数(JSON)</label>
+                <label class="lbl">参数(JSON，可选覆盖)</label>
                 <textarea
                   class="input sm full area"
                   v-model="form.paramsText"
                   rows="3"
-                  placeholder='{"activeId":"xxx"} 或 {"topicUrl":"https://m.smzdm.com/topic/..."}'
+                  placeholder='留空即自动获取；或 {"activeId":"xxx"} / {"crowdId":"xxx"} / {"topicUrl":"https://m.smzdm.com/topic/..."}'
                 ></textarea>
                 <div class="ep-actions">
                   <button class="btn primary sm" :disabled="saving" @click="saveConfig(t)">保存参数</button>
@@ -306,7 +308,7 @@ function toggleConfig(t) {
 function loadTemplate(t) {
   // 内置真实任务端点已写死在后端，无需模板；引导用户填参数
   if (isReal(t.type)) {
-    showToast('该任务已内置真实端点，请在上方"配置参数"里填 active_id / crowd_id / topicUrl', 'err');
+    showToast('该任务已内置真实端点，开启即自动运行（active_id/众测活动自动获取）；如需覆盖可在"配置参数"里填 active_id / crowd_id / topicUrl', 'err');
     return;
   }
   const tpl = templates.value[t.type] || templates.value.taskReceive;

@@ -53,12 +53,12 @@ test('CUSTOM_TYPES 含 6 个补全任务（含内置 dailyTasks）', () => {
   );
 });
 
-test('内置真实策略：turntable 缺动态参数 → need_param 待配置', async () => {
+test('内置真实策略：turntable 现已自动获取 active_id，缺参不再 need_param', async () => {
   const db = { settings: { taskEndpoints: {} } };
   const r = await runCustomEndpointTask({ type: 'turntable', name: '转盘抽奖' }, db, { id: 'u1', cookie: 'c' });
-  assert.equal(r.ok, false);
+  // 不再报 need_param（运行时自动从专题页获取）；mock 下仅因无 requestRaw 而待配置
+  assert.notEqual(r.error, 'need_param');
   assert.equal(r.pendingCapture, true);
-  assert.equal(r.error, 'need_param');
 });
 
 test('内置真实策略：dailyTasks 在 mock 模式下仍标 pendingCapture（不假跑）', async () => {

@@ -22,11 +22,9 @@ router.get('/', authRequired, (req, res) => {
     let configured = true;
     if (t.needsEndpoint) {
       if (REAL_STRATEGY_TYPES.has(t.type)) {
-        // 内置真实任务：dailyTasks 无需参数即视为已就绪；其余需动态参数（active_id/crowd_id/topicUrl）
-        configured =
-          t.type === 'dailyTasks'
-            ? true
-            : !!(endpoints[t.type] && endpoints[t.type].params && (endpoints[t.type].params.activeId || endpoints[t.type].params.crowdId || endpoints[t.type].params.topicUrl));
+        // 内置真实任务：所需动态参数（active_id / 众测活动）均由运行时自动获取，无需用户手填，
+        // 故一律视为已就绪；仅当用户显式提供覆盖参数时仍以用户值为准。
+        configured = true;
       } else {
         configured = !!endpoints[t.type];
       }

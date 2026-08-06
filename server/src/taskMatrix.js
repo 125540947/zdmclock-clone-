@@ -15,12 +15,12 @@ import { REAL_STRATEGIES, REAL_STRATEGY_TYPES, extractReward } from './smzdm/tas
 export { REAL_STRATEGIES, REAL_STRATEGY_TYPES };
 
 // 自定义端点任务的元数据（前端据此渲染徽标与配置表单）
-// builtin:true 表示端点/签名/多步流程已内置（移植自青龙社区逆向），用户仅需填动态参数；
-// 非 builtin 的 follow/share 仍需从 App 抓包（社区暂无稳定逆向端点）。
+// builtin:true 表示端点/签名/多步流程已内置（移植自青龙社区逆向），且所需动态参数均自动获取，
+// 用户无需手填；非 builtin 的 follow/share 仍需从 App 抓包（社区暂无稳定逆向端点）。
 export const CUSTOM_TASK_DEFS = [
-  { type: 'lottery', name: '每日抽奖', icon: '🎰', builtin: true, desc: '已内置青龙社区逆向端点（jsonp_draw），填写 active_id 即可运行，无需抓包' },
-  { type: 'turntable', name: '转盘抽奖', icon: '🎡', builtin: true, desc: '已内置青龙社区逆向端点（jsonp_draw），填写 active_id 即可运行，无需抓包' },
-  { type: 'crowdtest', name: '众测申请', icon: '🧪', builtin: true, desc: '已内置青龙社区逆向端点（ajax_participate），填写 crowd_id 或专题页URL即可' },
+  { type: 'lottery', name: '每日抽奖', icon: '🎰', builtin: true, desc: '已内置青龙社区逆向端点（jsonp_draw）；active_id 自动从 smzdm 转盘专题页获取，开启即运行，无需手填' },
+  { type: 'turntable', name: '转盘抽奖', icon: '🎡', builtin: true, desc: '已内置青龙社区逆向端点（jsonp_draw）；active_id 自动获取（含会员/值会员双转盘），无需手填' },
+  { type: 'crowdtest', name: '全民众测', icon: '🧪', builtin: true, desc: '已内置：自动发现全民众测活动并完成能量值任务（无需 crowd_id）；也可填 crowd_id 走"申请具体商品"' },
   { type: 'follow', name: '自动关注', icon: '➕', desc: '关注指定作者/话题；社区暂无稳定逆向端点，需抓包 follow 接口' },
   { type: 'share', name: '自动分享', icon: '🔗', desc: '分享内容领奖励；社区暂无稳定逆向端点，需抓包 share 接口' },
   { type: 'dailyTasks', name: '每日任务', icon: '📋', builtin: true, desc: '已内置：自动领取每日任务奖励（list_v2 → activity_task_receive）' }
