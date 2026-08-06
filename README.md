@@ -162,7 +162,7 @@ SMZDM_COOKIE="你的Cookie" node tools/verifyRealMode.mjs
 - 加 `--with-checkin` 才真正签一次到（每日一次，低风险），用于端到端验证签到链路。
 - 任一项 `✗ FAIL`：多为 smzdm 端点/结构变更或 Cookie 失效，用同名环境变量（`SMZDM_SIGN_KEY` / `SMZDM_API_BASE` / …）覆盖或重新抓包更新。
 
-**Web 端一键自检**：登录后进入「我的账号」，每个账号卡片有 **🔍 自检** 按钮，点击即用该账号 Cookie 在服务端跑同一套 `runVerification` 探测，结果以 ✓/✗/⚠ 表格直接展示，无需敲命令行（核心逻辑见 `server/src/verifyRealMode.js`，CLI 与接口共用）。
+**Web 端一键自检**：登录后进入「我的账号」，每个账号卡片有 **🔍 自检** 按钮，点击即用该账号 Cookie 在服务端跑同一套 `runVerification` 探测，结果以**可视化图表**展示（环形图呈现 PASS/FAIL/SKIP 状态占比 + 圆心通过率，下方条形图展示各端点的真实响应耗时 ms），无需敲命令行（核心逻辑见 `server/src/verifyRealMode.js`，CLI 与接口共用；图表组件见 `web/src/components/VerifyChart.vue`）。
 
 ---
 

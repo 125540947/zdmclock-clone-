@@ -83,15 +83,12 @@
           </div>
           <div v-if="verifyState[u.id].loading" class="vloading">探测中…（含网络请求，请稍候）</div>
           <div v-else-if="verifyState[u.id].error" class="verr">{{ verifyState[u.id].error }}</div>
-          <table v-else class="vtable">
-            <tbody>
-              <tr v-for="r in verifyState[u.id].results" :key="r.name">
-                <td class="vstat" :class="r.status">{{ { PASS: '✓', FAIL: '✗', SKIP: '⚠' }[r.status] }}</td>
-                <td class="vname">{{ r.name }}</td>
-                <td class="vdetail">{{ r.detail }}</td>
-              </tr>
-            </tbody>
-          </table>
+          <VerifyChart
+            v-else
+            :results="verifyState[u.id].results"
+            :failed-count="verifyState[u.id].failedCount"
+            :nickname="u.nickname"
+          />
         </div>
       </div>
     </section>
@@ -106,6 +103,7 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue';
+import VerifyChart from '../components/VerifyChart.vue';
 import api, { updateUser, getClockDistribution, checkCookies, verifyReal } from '../api/client.js';
 
 const users = ref([]);
@@ -450,41 +448,5 @@ onMounted(async () => {
 }
 .verr {
   color: #ffb3ac;
-}
-.vtable {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-.vtable td {
-  padding: 6px 6px;
-  vertical-align: top;
-  border-bottom: 1px dashed var(--border);
-}
-.vtable tr:last-child td {
-  border-bottom: none;
-}
-.vstat {
-  width: 22px;
-  font-weight: 700;
-  text-align: center;
-}
-.vstat.PASS {
-  color: #7ce08f;
-}
-.vstat.FAIL {
-  color: #ff6b5e;
-}
-.vstat.SKIP {
-  color: #ffd06b;
-}
-.vname {
-  width: 150px;
-  color: var(--text);
-  font-weight: 500;
-}
-.vdetail {
-  color: var(--text-dim);
-  line-height: 1.45;
 }
 </style>

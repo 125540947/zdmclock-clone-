@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>真机端点自检 · 可视化图表 Demo</title>
+<style>
+  :root{
+    --bg:#14110f; --surface:rgba(255,255,255,.045); --surface-2:rgba(255,255,255,.07);
+    --surface-strong:rgba(255,255,255,.1); --border:rgba(255,255,255,.09); --border-strong:rgba(255,255,255,.16);
+    --primary:#ff5a4d; --gold:#f5b942; --text:#f5ece4; --text-dim:#b6a69b; --text-faint:#7d7068;
+    --radius:18px; --radius-sm:12px;
+    --font-display:'Fraunces','PingFang SC','Microsoft YaHei',serif;
+    --font-body:'Sora','PingFang SC','Microsoft YaHei',system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:var(--font-body);color:var(--text);background:
+    radial-gradient(900px 500px at 12% -8%,rgba(255,90,77,.18),transparent 60%),
+    radial-gradient(800px 520px at 92% 4%,rgba(245,185,66,.12),transparent 55%),
+    var(--bg);min-height:100vh;}
+  .app-shell{max-width:480px;margin:0 auto;padding:22px 18px 40px;display:flex;flex-direction:column;gap:18px;}
+  .page-head h1{font-family:var(--font-display);font-size:26px;margin:0;font-weight:600}
+  .page-head .sub{color:var(--text-dim);font-size:13px;margin-top:2px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;backdrop-filter:blur(14px)}
+  .vhead{display:flex;justify-content:space-between;align-items:center;font-weight:600;font-size:14px;margin-bottom:12px}
+  .vbadge{font-size:12px;padding:3px 9px;border-radius:20px;font-weight:600}
+  .vbadge.good{color:#b7f3c6;background:rgba(120,224,143,.14)}
+  .vbadge.bad{color:#ffb3ac;background:rgba(255,90,77,.14)}
+  .donut-wrap{display:flex;align-items:center;gap:16px}
+  .donut{width:124px;height:124px;flex:none}
+  .track{stroke:var(--surface-strong)}
+  .d-num{font-family:var(--font-display);font-size:26px;font-weight:600;text-anchor:middle}
+  .d-sub{font-size:11px;fill:var(--text-dim);text-anchor:middle}
+  .legend{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;flex:1}
+  .legend li{display:flex;align-items:center;gap:8px;font-size:13px}
+  .lg-dot{width:10px;height:10px;border-radius:50%;flex:none}
+  .lg-name{color:var(--text-dim);flex:1}
+  .lg-val{font-family:var(--font-display);font-weight:600}
+  .vnote{font-size:12.5px;line-height:1.5;margin:0;padding:8px 10px;border-radius:var(--radius-sm);background:var(--surface-2);border:1px solid var(--border)}
+  .vnote.ok{color:#b7f3c6;border-color:rgba(120,224,143,.3)}
+  .vnote.warn{color:#ffb3ac;border-color:rgba(255,90,77,.35)}
+  .bars{display:flex;flex-direction:column;gap:11px;margin-top:12px}
+  .ep-top{display:flex;align-items:center;gap:7px;font-size:13px}
+  .dot{width:9px;height:9px;border-radius:50%;flex:none}
+  .ep-name{font-weight:500;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ep-kind{font-size:11px;color:var(--text-faint);padding:1px 7px;border:1px solid var(--border);border-radius:999px;flex:none}
+  .ep-ms{font-family:var(--font-display);font-size:12px;color:var(--text-dim);flex:none}
+  .ep-bar{height:6px;border-radius:999px;background:var(--surface-strong);overflow:hidden;margin:5px 0 3px}
+  .ep-fill{height:100%;border-radius:999px;transition:width .5s cubic-bezier(.22,1,.36,1)}
+  .ep-detail{font-size:11.5px;color:var(--text-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .seg{display:flex;gap:7px}
+  .seg-btn{flex:1;padding:9px 8px;font-size:13px;border-radius:10px;border:1px solid var(--border);background:transparent;color:var(--text-dim);cursor:pointer}
+  .seg-btn.active{border-color:var(--primary);color:var(--primary);background:rgba(255,90,77,.1)}
+</style>
+</head>
+<body>
+<div class="app-shell">
+  <header class="page-head">
+    <div><h1>真机端点自检</h1><div class="sub" id="who">—</div></div>
+  </header>
+
+  <div class="seg" id="seg">
+    <button class="seg-btn active" data-k="ok">全部通过</button>
+    <button class="seg-btn" data-k="fail">含失败</button>
+    <button class="seg-btn" data-k="skip">含跳过</button>
+  </div>
+
+  <section class="card">
+    <div class="vhead">
+      <span>🔍 真机端点自检</span>
+      <span class="vbadge" id="badge">—</span>
+    </div>
+    <div class="donut-wrap">
+      <svg viewBox="0 0 140 140" class="donut" id="donut"></svg>
+      <ul class="legend" id="legend"></ul>
+    </div>
+    <p class="vnote" id="note">—</p>
+    <div class="bars" id="bars"></div>
+  </section>
+</div>
+
+<script>
+const COLORS={PASS:'#7ce08f',FAIL:'#ff6b5e',SKIP:'#ffd06b'};
+const LABELS={PASS:'通过',FAIL:'失败',SKIP:'跳过'};
+const KIND={offline:'离线',cookie:'身份',auth:'鉴权',endpoint:'端点',MUTATING:'写操作'};
+const SCEN={
+  ok:{nick:'小值(全部通过)',fail:0,results:[
+    {name:'签名算法 signFormData',kind:'offline',status:'PASS',detail:'sign=A1B2C3D4E5F6',ms:0},
+    {name:'账号身份 /user/',kind:'cookie',status:'PASS',detail:'昵称=小值 等级=12 积分=8840',ms:312},
+    {name:'robot/token 鉴权',kind:'auth',status:'PASS',detail:'token=ab12cd…（32 字符）',ms:188},
+    {name:'每日任务 list_v2',kind:'endpoint',status:'PASS',detail:'接口可达，任务分组数=5',ms:401},
+    {name:'转盘 active_id 自动发现',kind:'endpoint',status:'PASS',detail:'命中 2 个: 992031, 992018',ms:523},
+    {name:'众测 全民众测 activity_id',kind:'endpoint',status:'PASS',detail:'activity_id=66012',ms:266},
+    {name:'评论 ajax_post_comment',kind:'endpoint',status:'PASS',detail:'接口可达（空参数返回错误码）',ms:145},
+    {name:'收藏 ajax_favorite',kind:'endpoint',status:'PASS',detail:'接口可达',ms:139},
+    {name:'点赞 ajax_vote',kind:'endpoint',status:'PASS',detail:'接口可达',ms:128},
+    {name:'爆料 ajax_create',kind:'endpoint',status:'PASS',detail:'接口可达',ms:201},
+    {name:'签到 /checkin（实签）',kind:'MUTATING',status:'SKIP',detail:'默认不执行（避免重复签到）',ms:0}
+  ]},
+  fail:{nick:'老王(Cookie 失效)',fail:2,results:[
+    {name:'签名算法 signFormData',kind:'offline',status:'PASS',detail:'sign=A1B2C3D4E5F6',ms:0},
+    {name:'账号身份 /user/',kind:'cookie',status:'FAIL',detail:'返回空身份（Cookie 失效或端点变更）',ms:97},
+    {name:'robot/token 鉴权',kind:'auth',status:'FAIL',detail:'未返回 token',ms:88},
+    {name:'每日任务 list_v2',kind:'endpoint',status:'PASS',detail:'接口可达，任务分组数=5',ms:388},
+    {name:'转盘 active_id 自动发现',kind:'endpoint',status:'PASS',detail:'命中 2 个: 992031, 992018',ms:512},
+    {name:'众测 全民众测 activity_id',kind:'endpoint',status:'PASS',detail:'activity_id=66012',ms:241},
+    {name:'评论 ajax_post_comment',kind:'endpoint',status:'PASS',detail:'接口可达',ms:140},
+    {name:'收藏 ajax_favorite',kind:'endpoint',status:'PASS',detail:'接口可达',ms:133},
+    {name:'点赞 ajax_vote',kind:'endpoint',status:'PASS',detail:'接口可达',ms:121},
+    {name:'爆料 ajax_create',kind:'endpoint',status:'PASS',detail:'接口可达',ms:198},
+    {name:'签到 /checkin（实签）',kind:'MUTATING',status:'SKIP',detail:'默认不执行（避免重复签到）',ms:0}
+  ]},
+  skip:{nick:'阿珍(仅探测)',fail:0,results:[
+    {name:'签名算法 signFormData',kind:'offline',status:'PASS',detail:'sign=A1B2C3D4E5F6',ms:0},
+    {name:'账号身份 /user/',kind:'cookie',status:'PASS',detail:'昵称=阿珍 等级=8',ms:298},
+    {name:'robot/token 鉴权',kind:'auth',status:'PASS',detail:'token=xy78zt…（32 字符）',ms:176},
+    {name:'每日任务 list_v2',kind:'endpoint',status:'PASS',detail:'接口可达，任务分组数=5',ms:410},
+    {name:'转盘 active_id 自动发现',kind:'endpoint',status:'PASS',detail:'命中 1 个: 992018',ms:499},
+    {name:'众测 全民众测 activity_id',kind:'endpoint',status:'SKIP',detail:'未找到进行中的活动（可能暂未开启）',ms:0},
+    {name:'评论 ajax_post_comment',kind:'endpoint',status:'PASS',detail:'接口可达',ms:142},
+    {name:'收藏 ajax_favorite',kind:'endpoint',status:'PASS',detail:'接口可达',ms:135},
+    {name:'点赞 ajax_vote',kind:'endpoint',status:'PASS',detail:'接口可达',ms:124},
+    {name:'爆料 ajax_create',kind:'endpoint',status:'PASS',detail:'接口可达',ms:190},
+    {name:'签到 /checkin（实签）',kind:'MUTATING',status:'SKIP',detail:'默认不执行（避免重复签到）',ms:0}
+  ]}
+};
+
+const R=54,STROKE=14,CIRC=2*Math.PI*R;
+function render(key){
+  const s=SCEN[key];
+  document.getElementById('who').textContent='账号：'+s.nick;
+  const total=s.results.length;
+  const c={PASS:0,FAIL:0,SKIP:0};
+  s.results.forEach(r=>c[r.status]++);
+  const passRate=total?Math.round(c.PASS/total*100):0;
+  const overall=c.FAIL>0?COLORS.FAIL:COLORS.PASS;
+
+  // donut
+  const donut=document.getElementById('donut');
+  let acc=0,segs='';
+  ['PASS','FAIL','SKIP'].forEach(st=>{
+    if(!c[st])return;
+    const len=(c[st]/total)*CIRC;
+    segs+=`<circle cx="70" cy="70" r="${R}" fill="none" stroke="${COLORS[st]}" stroke-width="${STROKE}" stroke-dasharray="${len} ${CIRC-len}" stroke-dashoffset="${-acc}" stroke-linecap="butt"/>`;
+    acc+=len;
+  });
+  donut.innerHTML=`<circle cx="70" cy="70" r="${R}" class="track" stroke-width="${STROKE}" fill="none"/>`+
+    `<g transform="rotate(-90 70 70)">${segs}</g>`+
+    `<text x="70" y="66" class="d-num" fill="${overall}">${passRate}%</text>`+
+    `<text x="70" y="86" class="d-sub">${c.PASS}/${total} 通过</text>`;
+
+  // legend
+  document.getElementById('legend').innerHTML=['PASS','FAIL','SKIP'].map(st=>
+    `<li><span class="lg-dot" style="background:${COLORS[st]}"></span><span class="lg-name">${LABELS[st]}</span><span class="lg-val">${c[st]}</span></li>`).join('');
+
+  // badge + note
+  const badge=document.getElementById('badge');
+  if(s.fail){badge.className='vbadge bad';badge.textContent=s.fail+' 项异常';}
+  else{badge.className='vbadge good';badge.textContent='全部通过';}
+  const note=document.getElementById('note');
+  if(s.fail){note.className='vnote warn';note.textContent='⚠ 有 '+s.fail+' 项端点异常，真实运行可能因该链路失败。';}
+  else if(c.SKIP){note.className='vnote';note.textContent='✓ 全部连通；'+c.SKIP+' 项写操作按安全策略默认跳过。';}
+  else{note.className='vnote ok';note.textContent='✓ 全部端点通过自检。';}
+
+  // bars
+  const maxMs=Math.max(1,...s.results.filter(r=>r.ms>0).map(r=>r.ms));
+  document.getElementById('bars').innerHTML=s.results.map(r=>{
+    const w=r.ms>0?Math.max(4,Math.round(r.ms/maxMs*100)):0;
+    return `<div class="ep"><div class="ep-top"><span class="dot" style="background:${COLORS[r.status]}"></span>`+
+      `<span class="ep-name">${r.name}</span><span class="ep-kind">${KIND[r.kind]||r.kind}</span>`+
+      `<span class="ep-ms">${r.ms?r.ms+' ms':'—'}</span></div>`+
+      `<div class="ep-bar"><div class="ep-fill" style="width:${w}%;background:${COLORS[r.status]}"></div></div>`+
+      `<div class="ep-detail">${r.detail}</div></div>`;
+  }).join('');
+}
+
+document.getElementById('seg').addEventListener('click',e=>{
+  const b=e.target.closest('.seg-btn');if(!b)return;
+  document.querySelectorAll('.seg-btn').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active');
+  render(b.dataset.k);
+});
+render('ok');
+</script>
+</body>
+</html>
