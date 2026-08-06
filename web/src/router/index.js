@@ -19,6 +19,7 @@ import Baoliao from '../views/Baoliao.vue';
 import GptReply from '../views/GptReply.vue';
 import Notify from '../views/Notify.vue';
 import AssetsView from '../views/AssetsView.vue';
+import Update from '../views/Update.vue';
 
 const routes = [
   { path: '/', redirect: '/userclock' },
@@ -59,6 +60,7 @@ const routes = [
   { path: '/gptReply', name: 'gptReply', component: GptReply, meta: { title: 'GPT 回复', icon: '🤖' } },
   { path: '/notify', name: 'notify', component: Notify, meta: { title: '推送通知', icon: '🔔' } },
   { path: '/assets', name: 'assets', component: AssetsView, meta: { title: '资产仪表盘', icon: '📈' } },
+  { path: '/update', name: 'update', component: Update, meta: { title: '系统更新', icon: '⬆️' } },
 
   // 长尾变体重定向到就近真实页
   { path: '/commentArticle', redirect: '/comment' },

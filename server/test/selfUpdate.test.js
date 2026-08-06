@@ -1,0 +1,150 @@
+// 自动更新核心逻辑单测（node:test）：用可注入的假 runner 模拟 git/npm 输出，
+// 覆盖仓库状态解析、落后/领先计数、ff-only 更新、依赖/前端变更判定、脏工作区/Docker/无远程拒绝。
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  getRepoState,
+  checkUpdate,
+  runUpdate,
+  scheduleRestart,
+  updateSupported
+} from '../src/selfUpdate.js';
+
+function okOut(stdout) {
+  return { ok: true, code: 0, stdout, stderr: '' };
+}
+function failOut(stderr, code = 1) {
+  return { ok: false, code, stdout: '', stderr };
+}
+
+// 基础假 runner：默认返回"干净、有远程、main 分支"的仓库；可用 overrides 覆盖特定命令。
+function baseRunner(overrides = {}) {
+  return async (cmd, args = []) => {
+    const a = args.join(' ');
+    const key = cmd + '|' + a;
+    if (overrides[key] !== undefined) {
+      const v = overrides[key];
+      return typeof v === 'function' ? v() : v;
+    }
+    if (cmd === 'git') {
+      if (a === 'rev-parse --is-inside-work-tree') return okOut('true');
+      if (a === 'rev-parse --show-toplevel') return okOut('/repo');
+      if (a === 'branch --show-current') return okOut('main');
+      if (a === 'rev-parse HEAD') return okOut('abc123def456');
+      if (a === 'log -1 --format=%s') return okOut('feat: base');
+      if (a === 'remote get-url origin') return okOut('https://github.com/x/y.git');
+      if (a === 'status --porcelain') return okOut(overrides._status || '');
+      if (a.startsWith('fetch')) return okOut('');
+      if (a.startsWith('rev-list --count HEAD..origin')) return okOut(overrides._behind ?? '0');
+      if (a.startsWith('rev-list --count origin')) return okOut(overrides._ahead ?? '0');
+      if (a.startsWith('rev-parse origin')) return okOut('def789');
+      if (a.startsWith('pull')) return okOut('Already up to date.');
+      if (a.startsWith('diff --name-only')) return okOut(overrides._diff || '');
+    }
+    if (cmd === 'npm') {
+      if (a === 'install') return okOut('added 0 packages');
+      if (a === 'run build') return okOut('built');
+    }
+    return okOut('');
+  };
+}
+
+test('getRepoState：解析分支/提交/远程/是否脏', async () => {
+  const r = await getRepoState({ runner: baseRunner() });
+  assert.equal(r.isRepo, true);
+  assert.equal(r.branch, 'main');
+  assert.equal(r.commitShort, 'abc123d'); // 'abc123def456'.slice(0,7)
+  assert.equal(r.commitMsg, 'feat: base');
+  assert.equal(r.hasRemote, true);
+  assert.equal(r.dirty, false);
+  assert.equal(r.channel, 'native');
+});
+
+test('getRepoState：非仓库时给出错误', async () => {
+  const r = await getRepoState({
+    runner: async (cmd, args) =>
+      cmd === 'git' && args.join(' ') === 'rev-parse --is-inside-work-tree'
+        ? failOut('not a tree')
+        : okOut('')
+  });
+  assert.equal(r.isRepo, false);
+  assert.ok(r.error);
+});
+
+test('updateSupported：仅 native + 仓库 + 有远程 为 true', () => {
+  assert.equal(updateSupported({ isRepo: true, hasRemote: true, channel: 'native' }), true);
+  assert.equal(updateSupported({ isRepo: true, hasRemote: true, channel: 'docker' }), false);
+  assert.equal(updateSupported({ isRepo: false, hasRemote: true, channel: 'native' }), false);
+});
+
+test('checkUpdate：解析落后/领先提交数', async () => {
+  const r = await checkUpdate(
+    { repoRoot: '/repo', branch: 'main', commit: 'abc' },
+    baseRunner({ _behind: '3', _ahead: '0' })
+  );
+  assert.equal(r.ok, true);
+  assert.equal(r.behind, 3);
+  assert.equal(r.ahead, 0);
+  assert.equal(r.remoteCommit, 'def789');
+});
+
+test('runUpdate：无文件变更 → 跳过 install/build，标记重启', async () => {
+  const r = await runUpdate({ restart: true, runner: baseRunner({ _diff: '' }) });
+  assert.equal(r.ok, true);
+  assert.equal(r.needInstall, false);
+  assert.equal(r.needBuild, false);
+  assert.equal(r.restarting, true);
+  assert.ok(!r.log.some((l) => l.includes('依赖安装完成')));
+  assert.ok(!r.log.some((l) => l.includes('前端构建完成')));
+});
+
+test('runUpdate：依赖/前端变更 → 执行 install+build', async () => {
+  const r = await runUpdate({
+    restart: true,
+    runner: baseRunner({ _diff: 'package.json\nweb/src/App.vue' })
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.needInstall, true);
+  assert.equal(r.needBuild, true);
+  assert.ok(r.log.some((l) => l.includes('依赖安装完成')));
+  assert.ok(r.log.some((l) => l.includes('前端构建完成')));
+});
+
+test('runUpdate：工作区脏 → 拒绝更新', async () => {
+  const r = await runUpdate({ runner: baseRunner({ _status: ' M server/src/x.js' }) });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /提交|stash/);
+});
+
+test('runUpdate：无 origin 远程 → 拒绝更新', async () => {
+  const r = await runUpdate({ runner: baseRunner({ 'git|remote get-url origin': okOut('') }) });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /远程/);
+});
+
+test('runUpdate：Docker 通道 → 拒绝并提示 compose', async () => {
+  const prev = process.env.DOCKER_CONTAINER;
+  process.env.DOCKER_CONTAINER = '1';
+  try {
+    const r = await runUpdate({ runner: baseRunner({}) });
+    assert.equal(r.ok, false);
+    assert.equal(r.channel, 'docker');
+    assert.match(r.error, /docker compose/);
+  } finally {
+    if (prev === undefined) delete process.env.DOCKER_CONTAINER;
+    else process.env.DOCKER_CONTAINER = prev;
+  }
+});
+
+test('scheduleRestart：NODE_ENV=test 时不真正重启进程', () => {
+  const prev = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'test';
+  try {
+    // 不应抛出，也不应退出进程
+    scheduleRestart(0);
+    assert.ok(true);
+  } finally {
+    if (prev === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = prev;
+  }
+});

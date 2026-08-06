@@ -68,6 +68,11 @@ export const config = {
   // Cookie 健康检测节流：每隔多少分钟对所有账号做一次 Cookie 探活（仅 real 模式）。
   // 防止高频无效请求；设 0 表示每轮 tick 都检测（不推荐）。默认 360（6 小时）。
   cookieHealthIntervalMin: Number(process.env.COOKIE_HEALTH_INTERVAL_MIN || 360),
+  // 自动更新（从 Git 仓库拉取最新代码并重建/重启）：仅在 production 环境由调度器节流执行。
+  // - updateCheckIntervalMin：定时检查更新的节流间隔（分钟），默认 1440（每天检查一次）；设 0 关闭自动检查。
+  // - autoUpdateApply：检查到落后时是否自动拉取+重建+重启；默认 false（仅推送"有更新"通知，需手动点更新）。
+  updateCheckIntervalMin: Number(process.env.UPDATE_CHECK_INTERVAL_MIN || 1440),
+  autoUpdateApply: parseBool(process.env.AUTO_UPDATE_APPLY, false),
   // 风控（反检测/反封号）保守模式：默认开启，降低被 smzdm 风控识别/限流/封号概率。
   riskEnabled: parseBool(process.env.RISK_ENABLED, true),
   // 每次签到尝试前的"人类化随机等待"窗口（毫秒）：打破固定周期，避免请求过于机械。

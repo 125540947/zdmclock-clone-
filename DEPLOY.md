@@ -94,4 +94,23 @@
 
 ---
 
+---
+
+## 7. 系统更新（自动从仓库更新）
+
+部署后想跟上仓库最新提交，无需手动 SSH 进服务器。后端内置「从 Git 仓库拉取更新」能力，覆盖 `git pull`（仅 fast-forward）+ 按需 `npm install` / `npm run build` + 自重启。
+
+**入口**：「全部模块 → 系统更新」（`/update`）。需管理员鉴权（`REQUIRE_AUTH=true` 时带 Token）。
+
+- **当前版本**：展示运行环境（原生 Node / Docker）、分支、当前提交、是否有未提交修改。
+- **检查更新**：`git fetch` 后比较 `HEAD` 与 `origin/<branch>`，显示落后/领先提交数。
+- **立即更新**：ff-only 拉取 → 对比变更文件，仅当 `package*.json` 变化才重装依赖、仅当 `web/` 变化才重建前端 → 响应后**自重启**加载新代码（原生部署有效）。
+
+**自动更新（环境变量）**：仅 `NODE_ENV=production` 由调度器按 `UPDATE_CHECK_INTERVAL_MIN`（默认 1440 分钟，每天）节流检查；落后时若 `AUTO_UPDATE_APPLY=true` 则自动拉取+重建+重启，否则仅推送「有更新」通知，需手动点升级。
+
+**安全护栏**：
+- 仅 `git pull --ff-only`，绝不自动 merge/rebase，避免覆盖本地提交或产生冲突。
+- 工作区有未提交修改（被追踪文件）时**拒绝更新**，避免丢改动。
+- Docker 容器内禁用「容器内 pull」（镜像层不可变，pull 不会在重建后保留）→ 页面提示改用 `docker compose pull && docker compose up -d`。
+
 本手册为工程骨架示例，仅供学习与研究。接入真实第三方平台时请遵守其服务条款与相关法律法规。

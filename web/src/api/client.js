@@ -138,3 +138,17 @@ export async function verifyReal(userId, withCheckin = false) {
   const { data } = await api.post('/health/verify', { userId, withCheckin });
   return data;
 }
+
+// ===== 系统更新（从 Git 仓库拉取最新代码）=====
+export async function getUpdateStatus() {
+  const { data } = await api.get('/update/status');
+  return data;
+}
+export async function checkUpdateRepo() {
+  const { data } = await api.post('/update/check');
+  return data;
+}
+export async function applyUpdateRepo() {
+  const { data } = await api.post('/update/apply');
+  return data;
+}

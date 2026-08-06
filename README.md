@@ -93,8 +93,12 @@ npm start
 | `SMZDM_REQUEST_TIMEOUT` | `10000` | real 适配器对外请求超时（毫秒），防止 smzdm 无响应时永久挂起 |
 | `DATA_DIR` | `./data` | JSON 数据库相对路径 |
 | `WEB_DIST` | `../web/dist` | 前端产物目录 |
+| `UPDATE_CHECK_INTERVAL_MIN` | `1440` | 自动更新检查节流间隔（分钟），仅 production 生效；设 0 关闭 |
+| `AUTO_UPDATE_APPLY` | `false` | 检查到落后时是否自动拉取+重建+重启（否则仅推送"有更新"通知） |
 
 前端 `web/.env` 中 `VITE_API_BASE=/api` 为相对路径，开发经 Vite 代理、生产由同源后端接管，无需改。
+
+> **系统更新**：后端内置「从 Git 仓库拉取更新」能力（ff-only pull + 按需 rebuild + 自重启），入口在「全部模块 → 系统更新」（`/update`）。详见 [DEPLOY.md §7](./DEPLOY.md)。Docker 部署请用 `docker compose pull && up -d`（容器内 pull 无效）。
 
 ---
 

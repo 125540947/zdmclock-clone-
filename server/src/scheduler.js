@@ -5,6 +5,7 @@ import { config } from './config.js';
 import { zonedWallClock } from './clockSchedule.js';
 import { smzdm } from './smzdm/adapter.js';
 import { checkAccounts } from './health.js';
+import { getRepoState, checkUpdate, runUpdate, scheduleRestart, updateSupported } from './selfUpdate.js';
 
 // 轻量定时调度器（零依赖）：
 // - 内置一个最小 cron 求值器，支持 * / */n / a-b / a,b
@@ -16,6 +17,7 @@ let timer = null;
 let schedulerRunning = false;
 const lastFiredMinute = {}; // taskId -> 分钟时间戳，用于同一分钟内去重
 let lastHealthMinute = 0; // 上次 Cookie 健康检测的"分钟"时间戳，用于节流
+let lastUpdateCheckMinute = 0; // 上次仓库更新检查的"分钟"时间戳，用于节流
 
 // 单字段匹配：支持 * 、*/n 、a-b 、a,b,c
 function fieldMatch(field, val, min, max) {
@@ -128,11 +130,57 @@ export async function runHealthCheck() {
   }
 }
 
+// 定时仓库更新检查（仅 production，按 updateCheckIntervalMin 节流）：
+// 检查本地是否落后于 origin；落后时若 AUTO_UPDATE_APPLY=true 则自动拉取+重建+重启，
+// 否则仅推送"有可用更新"通知，由用户在「系统更新」页手动升级。非生产环境直接跳过（开发态无意义）。
+export async function runUpdateCheck() {
+  try {
+    if (process.env.NODE_ENV !== 'production') return;
+    if (config.updateCheckIntervalMin <= 0) return;
+    const minute = Math.floor(zonedWallClock(new Date(), config.tz).getTime() / 60000);
+    if (minute - lastUpdateCheckMinute < config.updateCheckIntervalMin) return;
+    lastUpdateCheckMinute = minute;
+
+    const state = await getRepoState();
+    if (!updateSupported(state)) return;
+
+    const r = await checkUpdate(state);
+    if (!r.ok || r.behind === 0) return;
+
+    const db = load();
+    if (config.autoUpdateApply) {
+      const res = await runUpdate({ restart: false });
+      if (res.ok) {
+        await notify(db, {
+          title: '⬆️ 已自动更新',
+          message: `已拉取 ${r.behind} 个新提交（${res.commitShort}），服务即将重启加载新版本。`
+        }).catch(() => {});
+        scheduleRestart(1500);
+      } else {
+        await notify(db, {
+          title: '⚠️ 自动更新失败',
+          message: res.error || '请到「系统更新」手动处理'
+        }).catch(() => {});
+      }
+    } else {
+      await notify(db, {
+        title: '⬆️ 有可用更新',
+        message: `检测到 ${r.behind} 个新提交（${r.remoteCommit.slice(0, 7)}），请到「系统更新」手动升级。`
+      }).catch(() => {});
+    }
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[update] 检查异常:', e);
+  }
+}
+
 export function tick() {
   try {
     // 定时 Cookie 健康检测（仅 real 模式，内部已按 cookieHealthIntervalMin 节流）。
     // 非阻塞：fire-and-forget，异常已被 runHealthCheck 内部捕获，不影响调度主流程。
     runHealthCheck().catch(() => {});
+    // 定时仓库更新检查（仅 production，按 updateCheckIntervalMin 节流）。
+    runUpdateCheck().catch(() => {});
 
     const db = load();
     const now = new Date();
