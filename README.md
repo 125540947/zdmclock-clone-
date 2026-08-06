@@ -103,6 +103,7 @@ npm start
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/health` | 健康检查 |
+| GET | `/api/health/cookies` | 手动触发全部账号 Cookie 健康检测（检测 + 标记失效 + 推送告警） |
 | POST | `/api/auth/login` | 管理员登录，签发 Token |
 | GET | `/api/users` | 账号列表（cookie 遮罩） |
 | POST | `/api/users` | 录入 smzdm 账号（cookie） |
@@ -134,6 +135,18 @@ npm start
 - 手动执行（`POST /api/tasks/:id/run`）与定时调度共用 `server/src/taskRunner.js` 的同一套执行逻辑。
 
 > 适合个人单机部署。若需多实例高可用，请改用系统 cron / k8s CronJob 等外部调度，并将本调度器关闭。
+
+### Cookie 健康检测（防静默失效）
+
+Cookie 失效后任务只会静默标 `error`，难以察觉。本工具内置 **Cookie 健康检测**：
+
+- **定时**：调度器每轮轮询时，按 `COOKIE_HEALTH_INTERVAL_MIN`（默认 360 分钟）节流，仅 **real 模式**下对所有账号做一次探活（`server/src/health.js`）。
+- **手动**：`「我的账号」页` 点 **🍪 检测** 按钮（`GET /api/health/cookies`），或任意时刻调用该接口。
+- **判定**：调用适配器 `getUserInfo`——返回有效身份即有效；抛错（网络/超时/被踢线重定向）或返回空身份即视为失效。
+- **告警**：失效时通过已配置的推送渠道（`notifier`）发「🍪 Cookie 失效告警」，且**仅在「有效→失效」状态迁移时触发一次**（自愈恢复后清零，不重复刷屏）。
+- 前端「我的账号」列表对失效账号显示 **🍪 Cookie 失效** 红色徽标。
+
+> 注：检测为 best-effort，单次瞬时网络抖动可能误报，故内置 1 次重试（800ms）吸收抖动；即便误标，下一轮成功会自动自愈。
 
 ---
 

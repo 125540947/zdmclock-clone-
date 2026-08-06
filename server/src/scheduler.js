@@ -3,6 +3,8 @@ import { runTask } from './taskRunner.js';
 import { notify } from './notifier.js';
 import { config } from './config.js';
 import { zonedWallClock } from './clockSchedule.js';
+import { smzdm } from './smzdm/adapter.js';
+import { checkAccounts } from './health.js';
 
 // 轻量定时调度器（零依赖）：
 // - 内置一个最小 cron 求值器，支持 * / */n / a-b / a,b
@@ -13,6 +15,7 @@ import { zonedWallClock } from './clockSchedule.js';
 let timer = null;
 let schedulerRunning = false;
 const lastFiredMinute = {}; // taskId -> 分钟时间戳，用于同一分钟内去重
+let lastHealthMinute = 0; // 上次 Cookie 健康检测的"分钟"时间戳，用于节流
 
 // 单字段匹配：支持 * 、*/n 、a-b 、a,b,c
 function fieldMatch(field, val, min, max) {
@@ -96,8 +99,41 @@ export function cronMatch(expr, date = new Date()) {
   );
 }
 
+// 定时 Cookie 健康检测（仅 real 模式，按 cookieHealthIntervalMin 节流）：
+// 检测所有账号 Cookie，失效即推送告警并标记 cookieExpired（best-effort，失败不影响调度）。
+export async function runHealthCheck() {
+  try {
+    if (config.smzdmAdapter !== 'real') return; // mock 永远有效，探活无意义
+    const db = load();
+    if (!db.users.length) return;
+    const minute = Math.floor(zonedWallClock(new Date(), config.tz).getTime() / 60000);
+    if (minute - lastHealthMinute < (config.cookieHealthIntervalMin || 360)) return;
+    lastHealthMinute = minute;
+    const results = await checkAccounts(db, smzdm, {
+      onExpired: (u, reason) =>
+        notify(db, {
+          title: '🍪 Cookie 失效告警',
+          message: `账号「${u.nickname || u.smzdmId || u.id}」Cookie 可能已失效：${reason}`
+        })
+    });
+    await withWriteLock(() => persist());
+    const bad = results.filter((r) => !r.valid).length;
+    if (bad) {
+      // eslint-disable-next-line no-console
+      console.warn(`[health] ${bad}/${results.length} 个账号 Cookie 失效`);
+    }
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[health] 检测异常:', e);
+  }
+}
+
 export function tick() {
   try {
+    // 定时 Cookie 健康检测（仅 real 模式，内部已按 cookieHealthIntervalMin 节流）。
+    // 非阻塞：fire-and-forget，异常已被 runHealthCheck 内部捕获，不影响调度主流程。
+    runHealthCheck().catch(() => {});
+
     const db = load();
     const now = new Date();
     const minuteKey = Math.floor(now.getTime() / 60000);

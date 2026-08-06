@@ -6,6 +6,7 @@
         <div class="sub">共 {{ users.length }} 个 smzdm 账号</div>
       </div>
       <button class="btn ghost" @click="$router.push({ name: 'addCookies' })">+ 录入</button>
+      <button class="btn ghost" :disabled="checking" @click="checkAll">🍪 检测</button>
     </header>
 
     <section v-if="users.length" class="card rise" style="animation-delay: 0.05s">
@@ -83,11 +84,12 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue';
-import api, { updateUser, getClockDistribution } from '../api/client.js';
+import api, { updateUser, getClockDistribution, checkCookies } from '../api/client.js';
 
 const users = ref([]);
 const busy = ref('');
 const saving = ref('');
+const checking = ref(false);
 const toast = ref('');
 const toastType = ref('ok');
 const openSched = reactive({});
@@ -127,6 +129,24 @@ async function remove(u) {
   await api.delete(`/users/${u.id}`);
   showToast('已删除');
   await load();
+}
+
+// 手动触发全部账号 Cookie 健康检测
+async function checkAll() {
+  if (!users.value.length) {
+    showToast('暂无账号', 'err');
+    return;
+  }
+  checking.value = true;
+  try {
+    const data = await checkCookies();
+    showToast(data.message || '检测完成');
+    await load(); // 刷新列表以反映 cookieExpired 徽标
+  } catch (e) {
+    showToast(e.response?.data?.message || '检测失败', 'err');
+  } finally {
+    checking.value = false;
+  }
 }
 
 function schedLabel(u) {

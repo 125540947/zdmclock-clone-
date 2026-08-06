@@ -65,6 +65,9 @@ export const config = {
   // 补签宽限：个人签到时间已过、但距现在不超过该分钟数时，仍补签一次，
   // 覆盖"服务宕机/休眠/刚部署"期间错过的签到（避免永久漏签）。设 0 关闭补签。
   catchupGraceMin: Number(process.env.CATCHUP_GRACE_MIN || 180),
+  // Cookie 健康检测节流：每隔多少分钟对所有账号做一次 Cookie 探活（仅 real 模式）。
+  // 防止高频无效请求；设 0 表示每轮 tick 都检测（不推荐）。默认 360（6 小时）。
+  cookieHealthIntervalMin: Number(process.env.COOKIE_HEALTH_INTERVAL_MIN || 360),
   // 风控（反检测/反封号）保守模式：默认开启，降低被 smzdm 风控识别/限流/封号概率。
   riskEnabled: parseBool(process.env.RISK_ENABLED, true),
   // 每次签到尝试前的"人类化随机等待"窗口（毫秒）：打破固定周期，避免请求过于机械。

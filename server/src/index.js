@@ -13,6 +13,7 @@ import baoliaoRoutes from './routes/baoliao.js';
 import gptRoutes from './routes/gpt.js';
 import notifyRoutes from './routes/notify.js';
 import assetsRoutes from './routes/assets.js';
+import healthRoutes from './routes/health.js';
 import { startScheduler, isSchedulerRunning } from './scheduler.js';
 
 // 构建并配置 Express 应用（不在此处监听端口，便于测试复用同一份中间件装配）
@@ -48,6 +49,7 @@ export function createApp() {
   app.use('/api/gpt', gptRoutes);
   app.use('/api/notify', notifyRoutes);
   app.use('/api/assets', assetsRoutes);
+  app.use('/api/health', healthRoutes);
 
   // 生产环境：托管前端构建产物（单进程对外）
   if (config.nodeEnv === 'production' && fs.existsSync(config.webDist)) {

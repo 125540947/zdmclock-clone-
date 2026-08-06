@@ -126,3 +126,9 @@ export async function applyCaptures(items) {
   const { data } = await api.post('/tasks/captures/apply', { items });
   return data;
 }
+
+// ===== Cookie 健康检测：手动触发全部账号探活 =====
+export async function checkCookies() {
+  const { data } = await api.get('/health/cookies');
+  return data;
+}
