@@ -21,6 +21,41 @@ export const CUSTOM_TASK_DEFS = [
 
 export const CUSTOM_TYPES = CUSTOM_TASK_DEFS.map((d) => d.type);
 
+// 推荐端点模板（社区脚本逆向得到的真实形态）。用户无需记住 URL —— 在「自动任务」页点
+// "加载推荐模板"即可把真实端点形态填进表单，只需替换动态参数（如转盘的 active_id）。
+// 注意：这些端点未在"你本人账号"逐一验证；动态参数（active_id / task_id）依赖抓包或导入器。
+export const TASK_TEMPLATES = {
+  lottery: {
+    endpoint: 'https://zhiyou.smzdm.com/user/lottery/jsonp_draw?active_id=REPLACE_WITH_CAPTURED_ID',
+    method: 'GET',
+    jsonp: true,
+    referer: 'https://m.smzdm.com/',
+    headers: { 'x-requested-with': 'com.smzdm.client.android' },
+    body: { callback: '' },
+    assetFields: { message: 'error_msg' },
+    note: '社区逆向端点；active_id 为动态值，需从 smzdm 专题页抓包获取（或用抓包导入器自动填）'
+  },
+  turntable: {
+    endpoint: 'https://zhiyou.smzdm.com/user/lottery/jsonp_draw?active_id=REPLACE_WITH_CAPTURED_ID',
+    method: 'GET',
+    jsonp: true,
+    referer: 'https://m.smzdm.com/',
+    headers: { 'x-requested-with': 'com.smzdm.client.android' },
+    body: { callback: '' },
+    assetFields: { message: 'error_msg' },
+    note: '转盘与抽奖共用 jsonp_draw，仅 active_id 不同；需抓包获取对应专题页的 active_id'
+  },
+  // 每日任务领奖（浏览/分享/关注等日常任务统一走此端点，task_id 为动态值）
+  taskReceive: {
+    endpoint: 'https://user-api.smzdm.com/task/activity_task_receive',
+    method: 'POST',
+    robotToken: true,
+    tokenField: 'robot_token',
+    assetFields: { message: 'data.reward_msg' },
+    note: '每日任务统一领奖端点；task_id 每日变化，需从 /task/list_v2 抓包或用导入器自动填'
+  }
+};
+
 // 安全读取嵌套路径：'data.gold' -> obj.data.gold；任一层缺失返回 undefined
 export function getPath(obj, path) {
   if (!path || typeof path !== 'string') return undefined;
@@ -36,6 +71,15 @@ export function extractAsset(json, af = {}) {
     levelAfter: getPath(json, af.level) ?? null,
     message: String(getPath(json, af.message) || '执行成功')
   };
+}
+
+// 剥离 JSONP 响应外壳：形如 `callback({...})` 或 `jQuery123({...})` 提取内部 JSON。
+// 纯函数，便于单测；无法解析时抛出。
+export function parseJsonp(text) {
+  if (typeof text !== 'string') return text;
+  const m = text.match(/\(([\s\S]*)\)\s*$/);
+  const inner = m ? m[1] : text;
+  return JSON.parse(inner);
 }
 
 // 渲染请求体：支持对象或 JSON 字符串，并把占位符替换为账号信息
@@ -96,13 +140,34 @@ export async function runCustomEndpointTask(task, db, user) {
   }
 
   const method = (def.method || 'POST').toUpperCase();
-  const body = renderBody(def.body, user);
-  const json = await smzdm.requestRaw(def.endpoint, {
+  let body = renderBody(def.body, user);
+
+  // 预取 robot token（部分 user-api 端点如 task 领奖需要）：注入到请求体指定字段
+  if (def.robotToken && typeof smzdm.getRobotToken === 'function') {
+    const tok = await smzdm.getRobotToken(user.cookie);
+    const field = def.tokenField || 'robot_token';
+    body = typeof body === 'object' && body ? { ...body, [field]: tok } : { [field]: tok };
+  }
+
+  // 抓包接口可能需特定来源/请求头（如 jsonp 抽奖需 m.smzdm.com Referer + 安卓 x-requested-with）
+  const extraOpts = {
     method,
     cookie: user.cookie,
     body: method === 'GET' ? undefined : body,
-    // 抓包接口通常走 user-api 基址；若 endpoint 已是完整 http(s) URL 则 call 直接用
-  });
+    referer: def.referer,
+    extraHeaders: def.headers
+  };
+  const raw = def.jsonp ? await smzdm.requestRaw(def.endpoint, { ...extraOpts, raw: true }) : await smzdm.requestRaw(def.endpoint, extraOpts);
+
+  // JSONP 响应形如 callback({...})，需剥离外层函数壳再解析
+  let json = raw;
+  if (def.jsonp && typeof raw === 'string') {
+    try {
+      json = parseJsonp(raw);
+    } catch {
+      throw new Error('JSONP 响应解析失败：' + raw.slice(0, 80));
+    }
+  }
 
   // 提取资产增量（按你抓包后填写的字段映射）
   const af = def.assetFields || {};

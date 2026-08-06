@@ -48,7 +48,8 @@ function headers(cookie, ua = UA) {
 }
 
 // 统一请求：表单提交（x-www-form-urlencoded），解析 JSON（兼容 )]}' 前缀）
-async function call(path, { method = 'GET', cookie, body, ua = UA, base = API_BASE } = {}) {
+// 扩展：raw（返回原始文本，供 JSONP 类接口）、referer / extraHeaders（抓包接口常需特定来源与头）
+async function call(path, { method = 'GET', cookie, body, ua = UA, base = API_BASE, raw = false, referer, extraHeaders } = {}) {
   const url = path.startsWith('http') ? path : base + path;
   const timeoutMs = Number(process.env.SMZDM_REQUEST_TIMEOUT || 10000);
   const init = {
@@ -58,6 +59,8 @@ async function call(path, { method = 'GET', cookie, body, ua = UA, base = API_BA
     // 关键可靠性修复：对外请求必须带超时，避免 smzdm 无响应时 Promise 永久 pending
     signal: AbortSignal.timeout(timeoutMs)
   };
+  if (referer) init.headers['Referer'] = referer;
+  if (extraHeaders && typeof extraHeaders === 'object') Object.assign(init.headers, extraHeaders);
   if (body) {
     init.headers['Content-Type'] = 'application/x-www-form-urlencoded';
     init.body = new URLSearchParams(body).toString();
@@ -73,6 +76,7 @@ async function call(path, { method = 'GET', cookie, body, ua = UA, base = API_BA
   }
   if (!resp.ok) throw new Error(`HTTP ${resp.status} @ ${path}`);
   const text = await resp.text();
+  if (raw) return text; // JSONP / 非 JSON 响应原样返回，由调用方自行解析
   if (text.length > 2_000_000) throw new Error('响应体过大，已拒绝（疑似异常响应）'); // b5：防超大响应占内存
   let json;
   try {
@@ -123,8 +127,14 @@ export const realAdapter = {
 
   // 自定义端点任务的底层请求（抓包得到的真实接口）。封装统一的签名头/超时/JSON 解析，
   // 供 taskMatrix 的"其他接口来源"任务调用。仅 real 适配器提供；mock 无此方法（自定义任务将标"待抓包"）。
+  // opts 支持：method / cookie / body / raw(JSONP 原样返回) / referer / extraHeaders / base
   async requestRaw(path, opts = {}) {
     return call(path, opts);
+  },
+
+  // 取 robot token（部分 user-api 端点如 task 领奖需要），供 taskMatrix 的 needsRobotToken 任务预取
+  async getRobotToken(cookie) {
+    return getRobotToken(cookie);
   },
 
   async getUserInfo(cookie) {
@@ -155,9 +165,21 @@ export const realAdapter = {
     });
     if (Number(json?.error_code) !== 0) throw new Error('签到失败：' + (json?.error_msg || '未知'));
     const d = json.data || {};
-    const points = Number(d.add_point ?? d.addPoint ?? 0);
-    const continuity = Number(d.continue_sign_days ?? d.continueSignDays ?? 0);
-    return { success: true, points, message: `签到成功，+${points} 金币`, continuity };
+    // 社区逆向确认：/checkin 返回体直接带权威余额字段，用作模块 B 资产落账的"之后"总额，
+    // 避免再依赖可能返回 HTML 的 /user/ 接口（cgold=金币余额, pre_re_silver=碎银, cexperience=经验, rank=等级）
+    const gold = Number(d.cgold ?? 0);
+    const silver = Number(d.pre_re_silver ?? 0);
+    const exp = Number(d.cexperience ?? 0);
+    const level = d.rank ?? d.rank_name ?? null;
+    const points = Number(d.add_point ?? d.addPoint ?? gold); // 本次 awarded（优先）否则用余额
+    const continuity = Number(d.daily_num ?? d.continue_sign_days ?? 0);
+    return {
+      success: true,
+      points,
+      balances: { gold, silver, exp, level },
+      continuity,
+      message: `签到成功，金币 ${gold} / 碎银 ${silver} / 经验 ${exp}`
+    };
   },
 
   async doComment(cookie, opts = {}) {

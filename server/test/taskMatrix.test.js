@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runCustomEndpointTask, getPath, renderBody, extractAsset, CUSTOM_TYPES } from '../src/taskMatrix.js';
+import { runCustomEndpointTask, getPath, renderBody, extractAsset, parseJsonp, CUSTOM_TYPES } from '../src/taskMatrix.js';
 
 // 默认 SMZDM_ADAPTER=mock（无 requestRaw），自定义任务应返回 pendingCapture（绝不伪造成功）
 function dbWithEndpoint(type, endpoint) {
@@ -51,4 +51,11 @@ test('CUSTOM_TYPES 含 5 个补全任务', () => {
     [...CUSTOM_TYPES].sort(),
     ['crowdtest', 'follow', 'lottery', 'share', 'turntable'].sort()
   );
+});
+
+test('parseJsonp 剥离函数外壳', () => {
+  assert.deepEqual(parseJsonp('jQuery123({"error_code":0,"data":{}})'), { error_code: 0, data: {} });
+  assert.deepEqual(parseJsonp('cb({"a":1})'), { a: 1 });
+  assert.deepEqual(parseJsonp('{"plain":true}'), { plain: true });
+  assert.throws(() => parseJsonp('not json at all'));
 });

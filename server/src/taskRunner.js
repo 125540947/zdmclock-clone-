@@ -165,7 +165,7 @@ export async function runClockForUser(db, user, opts = {}) {
       });
       if (risk.enabled) recordSuccess(user.id);
       if (res.duplicate) return { ok: true, duplicate: true, message: '今日已签到' };
-      return { ok: true, message: `签到成功，+${r.points} 金币`, record: res.record };
+      return { ok: true, message: `签到成功，+${r.points} 金币`, record: res.record, balances: r.balances };
     } catch (e) {
       lastMessage = `签到异常：${e.message}`;
       // 登录 / Cookie 失效异常单独标记，便于熔断外再做"停止盲目重试 + 告警"
@@ -360,23 +360,23 @@ export async function runTask(task, db, opts = {}) {
     }
     try {
       let r;
-      let explicit = null; // 动作明确返回的增量（签到 +N 金币等），优先落账
+      let assetAfter = null; // 权威"之后"余额：签到用响应余额（最准），其他任务回退 getUserInfo
       if (task.type === 'clock') {
         r = await runClockForUser(db, user, opts.scheduled ? { today: schedToday, yesterday: schedYesterday } : {});
-        if (r.ok && r.record) explicit = { gold: r.record.points || 0 };
+        if (r.ok && r.balances) assetAfter = r.balances;
       } else if (CUSTOM_SET.has(task.type)) {
         // 自定义端点任务（抽奖/转盘/众测/关注/分享）：未配置接口时 r.ok=false 且 pendingCapture
         r = await runCustomEndpointTask(task, db, user);
-        if (r.ok) explicit = r.explicit || null;
       } else {
         r = await runEngagement(task, db, user, opts);
       }
       // A → B 联动：任一账号动作成功，统一刷新权威资产并写入共享账本（供资产仪表盘读取）
       if (r && r.ok) {
-        const after = await safeGetUserInfo(user);
+        const after = assetAfter || (await safeGetUserInfo(user));
         await withWriteLock(() => {
           applyAssetEffect(db, user, task.type, task.name || taskNameOf(task.type), {
-            explicit,
+            // 有余额则以余额差落账（最准）；否则用动作显式增量（如抽奖返回的奖励）
+            explicit: assetAfter ? undefined : (r.explicit || null),
             after,
             success: true,
             message: r.message || ''

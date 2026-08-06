@@ -20,3 +20,8 @@ server/data_test/
 web/vitest.config.js.timestamp-*.mjs
 .DS_Store
 npm-debug.log*
+
+# 抓包导入：用户抓包文件与生成结果，不进仓库
+server/captures/*.har
+server/captures/*.curl.txt
+server/captures/detected.json

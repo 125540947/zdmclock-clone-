@@ -111,3 +111,18 @@ export async function saveTaskEndpoint(type, payload) {
   const { data } = await api.put('/tasks/endpoints', { type, ...payload });
   return data;
 }
+// 推荐端点模板（社区逆向的真实形态），前端"加载推荐模板"用
+export async function getTaskTemplates() {
+  const { data } = await api.get('/tasks/templates');
+  return data.templates || {};
+}
+// 扫描 captures 目录：读取 importCapture.mjs 生成的 detected.json
+export async function getCaptures() {
+  const { data } = await api.get('/tasks/captures');
+  return data.items || [];
+}
+// 应用抓包结果到任务接口配置
+export async function applyCaptures(items) {
+  const { data } = await api.post('/tasks/captures/apply', { items });
+  return data;
+}
