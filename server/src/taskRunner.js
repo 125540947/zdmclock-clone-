@@ -13,6 +13,26 @@ import {
   isCircuitOpen,
   isAuthExpiredError
 } from './riskControl.js';
+import { runCustomEndpointTask, CUSTOM_TYPES } from './taskMatrix.js';
+import { applyAssetEffect, taskNameOf } from './assetLedger.js';
+
+const CUSTOM_SET = new Set(CUSTOM_TYPES);
+
+// 安全刷新权威资产（smzdm 用户接口，即"其他接口来源"）：失败返回 null 而不抛错，
+// 保证单账号资产接口异常不影响整体任务执行。
+async function safeGetUserInfo(user) {
+  try {
+    const info = await smzdm.getUserInfo(user.cookie);
+    return {
+      gold: Number(info.points ?? info.gold ?? 0),
+      silver: Number(info.silver ?? 0),
+      exp: Number(info.exp ?? info.experience ?? 0),
+      level: info.level ?? info.rank ?? null
+    };
+  } catch {
+    return null;
+  }
+}
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -326,7 +346,7 @@ export async function runTask(task, db, opts = {}) {
     users = due;
   }
 
-  // 逐账号执行并聚合（clock / comment / favorite / point）
+  // 逐账号执行并聚合（clock / comment / favorite / point / 自定义端点任务）
   const parts = [];
   let okCount = 0;
   for (let i = 0; i < users.length; i++) {
@@ -339,12 +359,33 @@ export async function runTask(task, db, opts = {}) {
       await sleep(config.clockStaggerMs + jitter);
     }
     try {
-      const r =
-        task.type === 'clock'
-          ? await runClockForUser(db, user, opts.scheduled ? { today: schedToday, yesterday: schedYesterday } : {})
-          : await runEngagement(task, db, user, opts);
-      if (r.ok) okCount += 1;
-      parts.push(`${who}：${r.message}`);
+      let r;
+      let explicit = null; // 动作明确返回的增量（签到 +N 金币等），优先落账
+      if (task.type === 'clock') {
+        r = await runClockForUser(db, user, opts.scheduled ? { today: schedToday, yesterday: schedYesterday } : {});
+        if (r.ok && r.record) explicit = { gold: r.record.points || 0 };
+      } else if (CUSTOM_SET.has(task.type)) {
+        // 自定义端点任务（抽奖/转盘/众测/关注/分享）：未配置接口时 r.ok=false 且 pendingCapture
+        r = await runCustomEndpointTask(task, db, user);
+        if (r.ok) explicit = r.explicit || null;
+      } else {
+        r = await runEngagement(task, db, user, opts);
+      }
+      // A → B 联动：任一账号动作成功，统一刷新权威资产并写入共享账本（供资产仪表盘读取）
+      if (r && r.ok) {
+        const after = await safeGetUserInfo(user);
+        await withWriteLock(() => {
+          applyAssetEffect(db, user, task.type, task.name || taskNameOf(task.type), {
+            explicit,
+            after,
+            success: true,
+            message: r.message || ''
+          });
+          persist();
+        });
+      }
+      if (r && r.ok) okCount += 1;
+      parts.push(`${who}：${r ? r.message : '未知结果'}`);
     } catch (e) {
       parts.push(`${who}：异常 ${e.message}`);
     }

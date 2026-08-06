@@ -4,13 +4,59 @@ import { runTask } from '../taskRunner.js';
 import { validateCron } from '../scheduler.js';
 import { authRequired } from '../auth.js';
 import { notify } from '../notifier.js';
+import { CUSTOM_TYPES, CUSTOM_TASK_DEFS } from '../taskMatrix.js';
 
 const router = Router();
 
-// 任务列表
+// 任务列表（附带自定义端点任务的"已配置"标记，供前端显示待抓包徽标）
 router.get('/', authRequired, (req, res) => {
   const db = load();
-  res.json({ list: db.tasks });
+  const endpoints = (db.settings && db.settings.taskEndpoints) || {};
+  const list = db.tasks.map((t) => ({
+    ...t,
+    configured: t.needsEndpoint ? !!endpoints[t.type] : true
+  }));
+  res.json({ list });
+});
+
+// 任务接口配置（抓包结果）读取：返回已配置端点 + 自定义任务元数据
+router.get('/endpoints', authRequired, (req, res) => {
+  const db = load();
+  res.json({
+    endpoints: (db.settings && db.settings.taskEndpoints) || {},
+    customTypes: CUSTOM_TASK_DEFS
+  });
+});
+
+// 保存某任务类型的接口配置（抓包得到的真实 URL/参数/资产字段映射）。
+// endpoint 传空即清空（回到"待抓包"）。仅允许 CUSTOM_TYPES。
+router.put('/endpoints', authRequired, async (req, res) => {
+  const db = load();
+  const { type, endpoint, method, body, assetFields, note } = req.body || {};
+  if (!CUSTOM_TYPES.includes(type)) {
+    return res.status(400).json({ error: 'invalid_type', message: '仅自定义端点任务可配置接口' });
+  }
+  if (!db.settings.taskEndpoints) db.settings.taskEndpoints = {};
+  if (endpoint === '' || endpoint == null) {
+    delete db.settings.taskEndpoints[type]; // 清空 → 待抓包
+  } else {
+    // 仅允许白名单键作为资产字段映射，避免任意字段污染账本
+    const af = {};
+    if (assetFields && typeof assetFields === 'object') {
+      for (const k of ['gold', 'silver', 'exp', 'level', 'message']) {
+        if (assetFields[k] != null && typeof assetFields[k] === 'string') af[k] = assetFields[k].slice(0, 80);
+      }
+    }
+    db.settings.taskEndpoints[type] = {
+      endpoint: String(endpoint).slice(0, 2000),
+      method: String(method || 'POST').toUpperCase() === 'GET' ? 'GET' : 'POST',
+      body: body ?? null,
+      assetFields: af,
+      note: typeof note === 'string' ? note.slice(0, 500) : ''
+    };
+  }
+  await withWriteLock(() => persist());
+  res.json({ ok: true, endpoints: db.settings.taskEndpoints });
 });
 
 // 更新任务（启用/停用/名称/cron）

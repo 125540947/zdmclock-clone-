@@ -48,6 +48,7 @@ const built = [
   { name: 'baoliao', label: '好价爆料', icon: '📣' },
   { name: 'gptReply', label: 'GPT 回复', icon: '🤖' },
   { name: 'notify', label: '推送通知', icon: '🔔' },
+  { name: 'assets', label: '资产仪表盘', icon: '📈' },
   { name: 'manage', label: '运行台', icon: '🛠️' },
   { name: 'admin', label: '管理后台', icon: '📊' }
 ];

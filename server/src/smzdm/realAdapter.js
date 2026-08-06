@@ -121,6 +121,12 @@ async function getRobotToken(cookie) {
 export const realAdapter = {
   name: 'real',
 
+  // 自定义端点任务的底层请求（抓包得到的真实接口）。封装统一的签名头/超时/JSON 解析，
+  // 供 taskMatrix 的"其他接口来源"任务调用。仅 real 适配器提供；mock 无此方法（自定义任务将标"待抓包"）。
+  async requestRaw(path, opts = {}) {
+    return call(path, opts);
+  },
+
   async getUserInfo(cookie) {
     // F2：改用 user-api 基址（www.smzdm.com/user/ 返回 HTML 无法解析）；端点为社区经验值，未验证
     const json = await call(ENDPOINTS.userInfo, { cookie, base: API_BASE });

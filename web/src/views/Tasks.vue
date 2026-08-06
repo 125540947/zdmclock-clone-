@@ -54,6 +54,41 @@
             </div>
             <span class="hint-sm">定时从 smzdm 公开好价列表抓取并写入爆料箱（自动去重），供评论/收藏/点赞与 GPT 生成取用</span>
           </div>
+          <div v-else-if="t.needsEndpoint" class="art">
+            <span v-if="!t.configured" class="badge warn">⚠ 待抓包：未配置真实接口，运行会提示待抓包</span>
+            <span v-else class="badge ok">✓ 已配置接口</span>
+            <button class="btn ghost sm" @click="toggleConfig(t)">
+              {{ expandedId === t.id ? '收起' : '配置接口' }}
+            </button>
+            <div v-if="expandedId === t.id" class="ep-form">
+              <p class="hint-sm">
+                从 smzdm App 抓包得到该任务的真实请求，填入下方。系统不会内置任何伪造端点；
+                仅当你提供真实 URL/参数后才真正发起请求。资产字段映射用于把响应中的金币/碎银/经验/等级提取进资产账本。
+              </p>
+              <label class="lbl">接口 URL（完整 http(s) 或 /path）</label>
+              <input class="input sm full" v-model="form.endpoint" placeholder="如 https://user-api.smzdm.com/xxx/lottery" />
+              <label class="lbl">方法</label>
+              <select class="input sm" v-model="form.method">
+                <option value="POST">POST</option>
+                <option value="GET">GET</option>
+              </select>
+              <label class="lbl">请求体（JSON 或 key=value，支持 {{uid}} {{smzdmId}} 占位符）</label>
+              <textarea class="input sm full area" v-model="form.body" placeholder='{"act":"lottery"}' rows="3"></textarea>
+              <label class="lbl">资产字段映射（响应 JSON 路径，如 data.gold）</label>
+              <div class="af-grid">
+                <input class="input sm" v-model="form.gold" placeholder="金币路径" />
+                <input class="input sm" v-model="form.silver" placeholder="碎银路径" />
+                <input class="input sm" v-model="form.exp" placeholder="经验路径" />
+                <input class="input sm" v-model="form.level" placeholder="等级路径" />
+                <input class="input sm" v-model="form.message" placeholder="结果文案路径" />
+              </div>
+              <label class="lbl">备注</label>
+              <input class="input sm full" v-model="form.note" placeholder="便于回忆该接口来源/版本" />
+              <div class="ep-actions">
+                <button class="btn primary sm" :disabled="saving" @click="saveConfig(t)">保存接口</button>
+              </div>
+            </div>
+          </div>
         </div>
         <div class="task-actions">
           <label class="switch">
@@ -73,12 +108,16 @@
 
 <script setup>
 import { ref, onMounted } from 'vue';
-import api from '../api/client.js';
+import api, { getTaskEndpoints, saveTaskEndpoint } from '../api/client.js';
 
 const tasks = ref([]);
+const endpoints = ref({});
 const busy = ref('');
 const toast = ref('');
 const toastType = ref('ok');
+const expandedId = ref('');
+const form = ref({ endpoint: '', method: 'POST', body: '', gold: '', silver: '', exp: '', level: '', message: '', note: '' });
+const saving = ref(false);
 
 function showToast(m, t = 'ok') {
   toast.value = m;
@@ -87,7 +126,8 @@ function showToast(m, t = 'ok') {
 }
 
 async function load() {
-  const { data } = await api.get('/tasks');
+  const [{ data }, ep] = await Promise.all([api.get('/tasks'), getTaskEndpoints()]);
+  endpoints.value = ep.endpoints || {};
   // GPT 批量生成任务由 GPT 自动回复页统一管理，这里只展示互动类任务
   tasks.value = (data.list || []).filter((t) => t.type !== 'gpt');
 }
@@ -133,6 +173,52 @@ async function run(t) {
     showToast(e.response?.data?.message || '执行失败', 'err');
   } finally {
     busy.value = '';
+  }
+}
+
+// 打开/收起某自定义任务的接口配置（抓包结果）
+function toggleConfig(t) {
+  if (expandedId.value === t.id) {
+    expandedId.value = '';
+    return;
+  }
+  const ep = endpoints.value[t.type] || {};
+  form.value = {
+    endpoint: ep.endpoint || '',
+    method: ep.method || 'POST',
+    body: ep.body ? (typeof ep.body === 'string' ? ep.body : JSON.stringify(ep.body, null, 2)) : '',
+    gold: (ep.assetFields && ep.assetFields.gold) || '',
+    silver: (ep.assetFields && ep.assetFields.silver) || '',
+    exp: (ep.assetFields && ep.assetFields.exp) || '',
+    level: (ep.assetFields && ep.assetFields.level) || '',
+    message: (ep.assetFields && ep.assetFields.message) || '',
+    note: ep.note || ''
+  };
+  expandedId.value = t.id;
+}
+
+async function saveConfig(t) {
+  saving.value = true;
+  try {
+    const af = {};
+    for (const k of ['gold', 'silver', 'exp', 'level', 'message']) {
+      if (form.value[k] && form.value[k].trim()) af[k] = form.value[k].trim();
+    }
+    const payload = {
+      endpoint: form.value.endpoint.trim(),
+      method: form.value.method,
+      body: form.value.body.trim() || null,
+      assetFields: af,
+      note: form.value.note.trim()
+    };
+    const { data } = await saveTaskEndpoint(t.type, payload);
+    endpoints.value = data.endpoints || {};
+    showToast('已保存接口配置');
+    await load();
+  } catch (e) {
+    showToast(e.response?.data?.message || '保存失败', 'err');
+  } finally {
+    saving.value = false;
   }
 }
 onMounted(load);
@@ -216,6 +302,68 @@ onMounted(load);
 }
 .row-limit .input.sm {
   width: 90px;
+}
+.badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  margin-right: 6px;
+}
+.badge.warn {
+  color: #ffcf6b;
+  border: 1px solid rgba(255, 207, 107, 0.5);
+  background: rgba(255, 207, 107, 0.08);
+}
+.badge.ok {
+  color: #79e08f;
+  border: 1px solid rgba(120, 224, 143, 0.5);
+  background: rgba(120, 224, 143, 0.08);
+}
+.ep-form {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ep-form .lbl {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+.input.sm.full {
+  width: 100%;
+  max-width: none;
+}
+.input.sm.area {
+  width: 100%;
+  max-width: none;
+  resize: vertical;
+  font-family: ui-monospace, monospace;
+}
+.af-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+}
+.ep-actions {
+  margin-top: 8px;
+}
+.btn.primary.sm {
+  padding: 8px 14px;
+  font-size: 12px;
+  border-radius: 10px;
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+}
+.btn.primary.sm:disabled {
+  opacity: 0.5;
 }
 .src-toggle {
   display: flex;

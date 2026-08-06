@@ -19,10 +19,25 @@ function defaultData() {
       // GPT 定时批量生成：从好价列表取内容 → 大模型生成评论草稿（可选自动发布）
       { id: 't_gpt', type: 'gpt', name: 'GPT 批量生成', icon: '🤖', enabled: false, cron: '30 21 * * *', source: 'baoliao', autoPost: false, limit: 3, lastRun: null, lastResult: null, status: 'idle' },
       // 好价真实抓取：定时从 smzdm 公开好价列表抓取并写入 db.baoliao（best-effort，自动去重）
-      { id: 't_fetch', type: 'fetch', name: '刷新好价', icon: '📥', enabled: false, cron: '0 8 * * *', limit: 20, lastRun: null, lastResult: null, status: 'idle' }
+      { id: 't_fetch', type: 'fetch', name: '刷新好价', icon: '📥', enabled: false, cron: '0 8 * * *', limit: 20, lastRun: null, lastResult: null, status: 'idle' },
+      // 任务矩阵补全（需抓包/其他接口来源）：抽奖/转盘/众测/关注/分享。
+      // 这些端点 smzdm 未公开，需你从 App 抓包取得真实 URL/参数后，在「自动任务」页配置，
+      // 系统对未配置的接口明确标记"待抓包"，绝不伪造成功（详见 taskMatrix.js）。
+      { id: 't_lottery', type: 'lottery', name: '每日抽奖', icon: '🎰', enabled: false, cron: '0 9 * * *', needsEndpoint: true, lastRun: null, lastResult: null, status: 'idle' },
+      { id: 't_turntable', type: 'turntable', name: '转盘抽奖', icon: '🎡', enabled: false, cron: '5 9 * * *', needsEndpoint: true, lastRun: null, lastResult: null, status: 'idle' },
+      { id: 't_crowdtest', type: 'crowdtest', name: '众测申请', icon: '🧪', enabled: false, cron: '10 9 * * *', needsEndpoint: true, lastRun: null, lastResult: null, status: 'idle' },
+      { id: 't_follow', type: 'follow', name: '自动关注', icon: '➕', enabled: false, cron: '15 9 * * *', needsEndpoint: true, lastRun: null, lastResult: null, status: 'idle' },
+      { id: 't_share', type: 'share', name: '自动分享', icon: '🔗', enabled: false, cron: '20 9 * * *', needsEndpoint: true, lastRun: null, lastResult: null, status: 'idle' }
     ],
-    // GPT 自动回复配置（前端开关与提示词存这里，后端据此是否真正调用大模型）
+    // 资产账本：模块 A（任务执行）落账，模块 B（资产仪表盘）读取。
+    // 每次资产相关动作记录一条 {goldDelta,silverDelta,expDelta,...} 事件，供日收益曲线/任务贡献统计。
+    assetLedger: [],
+    // 每日资产快照（每用户每天保留最新总额），用于补齐历史日期的总量（避免只靠增量反推）
+    assetSnapshots: [],
+    // 任务接口配置（抓包结果）：taskType -> { endpoint, method, body, assetFields, note }
+    // 仅自定义端点任务（needsEndpoint=true）需要；配置缺失时该任务标"待抓包"。
     settings: {
+      // GPT 自动回复配置（前端开关与提示词存这里，后端据此是否真正调用大模型）
       gpt: { enabled: false, target: 'comment', tone: 'friendly', prompt: '' },
       // 推送通知配置（渠道 + 令牌）。env 的 PUSH_* 作为初始默认值，UI 可覆盖并持久化到 db
       push: {
@@ -31,7 +46,9 @@ function defaultData() {
         token: config.pushToken || '',
         chatId: config.pushChatId || '',
         webhook: config.pushWebhook || ''
-      }
+      },
+      // 任务接口配置（抓包结果）：taskType -> { endpoint, method, body, assetFields, note }
+      taskEndpoints: {}
     },
     meta: { version: 1 }
   };
@@ -83,6 +100,8 @@ export function load() {
   cache.clockRecords = cache.clockRecords || [];
   cache.baoliao = cache.baoliao || [];
   cache.gptDrafts = Array.isArray(cache.gptDrafts) ? cache.gptDrafts : [];
+  cache.assetLedger = Array.isArray(cache.assetLedger) ? cache.assetLedger : [];
+  cache.assetSnapshots = Array.isArray(cache.assetSnapshots) ? cache.assetSnapshots : [];
   cache.tasks = cache.tasks && cache.tasks.length ? cache.tasks : d.tasks;
   // 兼容旧库：补齐非签到任务的字段（articleSource / articleId），并补上新增的默认任务（如 t_gpt）
   cache.tasks.forEach((t) => {
@@ -119,6 +138,11 @@ export function load() {
     cache.settings.push && typeof cache.settings.push === 'object'
       ? { ...d.settings.push, ...cache.settings.push }
       : { ...d.settings.push };
+  // settings.taskEndpoints 合并：保留已有抓包配置，缺省补空对象
+  cache.settings.taskEndpoints =
+    cache.settings.taskEndpoints && typeof cache.settings.taskEndpoints === 'object'
+      ? cache.settings.taskEndpoints
+      : {};
   // 用户签到时间字段迁移：新增 schedMode / checkInTime。
   // 旧账号（无 schedMode）默认设为 'auto'，并由系统在其窗口内确定性分配一个分散的固定时间，
   // 直接解决"多账号同一秒扎堆签到"触发限流/漏签的问题。新账号在录入时即写入这两个字段。
@@ -134,6 +158,16 @@ export function load() {
     }
     // 登录失效标记：旧库缺省补 false（风控包会按需置 true 并持久化）
     if (u.cookieExpired === undefined) u.cookieExpired = false;
+    // 资产快照：旧库缺省初始化（gold 以既有 points 为准，silver/exp 留空待真实接口刷新）
+    if (!u.assets) {
+      u.assets = {
+        gold: Number(u.points || 0),
+        silver: 0,
+        exp: 0,
+        level: u.level || null,
+        updatedAt: null
+      };
+    }
   });
   // t_clock 任务 cron 迁移：旧版 '0 9 * * *'（全员 09:00 一次性签到）改为每分钟轮询，
   // 由调度器按各账号个人时间过滤执行，从而实现错峰。仅当仍是旧默认值时迁移，避免覆盖用户自定义。

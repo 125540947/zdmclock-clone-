@@ -83,3 +83,31 @@ export async function saveRiskSettings(settings) {
   const { data } = await api.put('/admin/risk-settings', { settings });
   return data;
 }
+
+// ===== 资产仪表盘（模块 B）：读取共享资产账本 =====
+export async function getAssetsSummary() {
+  const { data } = await api.get('/assets/summary');
+  return data;
+}
+export async function getAssetsDaily(days = 30) {
+  const { data } = await api.get('/assets/daily?days=' + days);
+  return data;
+}
+export async function getAssetsByTask(days = 30) {
+  const { data } = await api.get('/assets/by-task?days=' + days);
+  return data;
+}
+export async function getAssetsLedger(limit = 50) {
+  const { data } = await api.get('/assets/ledger?limit=' + limit);
+  return data;
+}
+
+// ===== 任务接口配置（抓包结果）：模块 A 的"其他接口来源" =====
+export async function getTaskEndpoints() {
+  const { data } = await api.get('/tasks/endpoints');
+  return data;
+}
+export async function saveTaskEndpoint(type, payload) {
+  const { data } = await api.put('/tasks/endpoints', { type, ...payload });
+  return data;
+}
