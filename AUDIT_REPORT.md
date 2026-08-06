@@ -195,3 +195,36 @@
 - 推送为尽力而为：渠道拒绝 / 超时（10s）/ 网络异常都不会影响签到与任务主流程，仅静默跳过或在 UI 显示错误。
 - Server酱 / Bark / Telegram 为第三方服务，令牌由用户自填，本工具不做存储转发之外的处理。
 - 若用环境变量部署（`PUSH_CHANNEL`+凭据），首次运行即生效，UI 配置会持久化覆盖。
+
+---
+
+## 十一、多账号自动化 & 好价真实抓取实施记录（第六轮，2026-08-06）
+
+> 用户要求补全「剩下最该做的两块」：① 多账号自动遍历；② 好价真实抓取。
+
+### 增强一：多账号自动遍历（Task #42）
+- **动机**：此前定时调度与手动运行默认只取 `db.users[0]`，录入的第 2、3 个账号永远不会被自动签到/评论/收藏/点赞。
+- **实现**（`taskRunner.js`）：新增 `resolveUsers(db, opts)`——指定 `userId` 仅该账号（保持手动单账号签到语义），未指定则覆盖**全部**已录入账号；`runTask` 对 clock/comment/favorite/point 逐账号执行并**聚合**结果（`共 N 个账号：X 成功 / Y 失败` + 每账号明细）；gpt/fetch 不依赖账号仅跑一次。
+- **调度器**（`scheduler.js`）：`r.partial`（部分账号成功）视为完成（绿色），仅全部失败才标 `error`（红色）；推送标题区分 ✅ / ⚠️ / ❌。
+- 修复潜在缺陷：clock 在调度器中原本 `t.lastResult = r.result.message` 取到 `undefined`（旧 runTask clock 分支返回结构不一致），现统一为 `{ ok, result:{message} }` 形状。
+
+### 增强二：好价真实抓取（Task #43）
+- **动机**：`baoliao` 列表此前只能手工录入，「从好价列表取文章」「GPT 批量生成」缺乏真实数据源。
+- **实现**：
+  - `realAdapter.fetchBaoliao`：抓取 smzdm 公开好价列表页（`SMZDM_BAOLIAO_URL` 可覆盖，默认首页），抽取 `/p/<id>` 文章卡片（best-effort，未验证），健壮处理超时/HTTP 错误/超大响应/解析为空；公开页无需登录 Cookie。
+  - `mockAdapter.fetchBaoliao`：返回 3 条样例，保证未启用 real 时也能验证完整链路。
+  - `store.mergeBaoliao(items)`：按 `smzdmUrl` 去重合并，仅接受合法 http(s) 链接、字段长度钳制（边界安全）。
+  - 默认任务 `t_fetch`（type:`fetch`，cron `0 8 * * *`，limit 20）：定时刷新好价；`load()` 规范化 limit（1~50）。
+  - `routes/baoliao.js` 新增 `POST /refresh`（须定义在 `/:id` 之前，否则 "refresh" 会被当 id 匹配），合并进爆料箱。
+  - 前端：`Baoliao.vue` 加「从 smzdm 抓取好价」卡片 + 立即刷新按钮；`Tasks.vue` 为 `t_fetch` 显示抓取条数输入并注明任务对所有账号生效；`client.js` 加 `refreshBaoliao`。
+  - `taskRunner.runGptBatch` 放宽筛选：接受「有标题/内容」**或**「有文章链接」的好价（兼容抓取到的无标题条目），GPT 提示词补上文章链接。
+
+### 验证
+- `node --check` 全量通过；`clockCore.test.js` 8 用例全绿。
+- 冒烟测试（临时，已删）：2 个 mock 账号下 comment 聚合「共 2 个账号：2 成功」、clock 两账号均写入、fetch 新增 3 条、gpt 无 key 友好拒绝 `gpt_disabled`，全部通过。
+- 前端重建 `web/dist`（`index-DUZC9WoQ.js` / `index-DA1mnkp3.css`）。
+
+### 注意事项 / 边界
+- 多账号下 comment/favorite/point 会对**每个账号**就同一批文章执行动作（你的自有账号，知悉风险）；gpt 自动发布仅用首个账号 Cookie。
+- `fetchBaoliao` 是社区经验值、未验证：smzdm 改版可能解析为空（明确报错，不静默成功）；高频抓取可能触发风控，建议 limit 适中、cron 低频。
+- 仍存在的占位模块 `shops` / `updateTSFP` / `test` 未实现（原 zdmclock 残留路由）。

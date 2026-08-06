@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { load, persist, genId } from '../store.js';
+import { load, persist, genId, mergeBaoliao } from '../store.js';
 import { smzdm } from '../smzdm/adapter.js';
 import { authRequired } from '../auth.js';
 
@@ -12,6 +12,29 @@ router.get('/', (req, res) => {
   let list = db.baoliao.slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
   if (userId) list = list.filter((x) => x.userId === userId);
   res.json({ items: list, total: list.length });
+});
+
+// 从 smzdm 抓取好价并合并进爆料箱（real 适配器抓真实列表；mock 返回样例数据）
+// 注意：必须定义在任何 /:id 路由之前，否则 "refresh" 会被当成 id 匹配
+router.post('/refresh', authRequired, async (req, res) => {
+  const db = load();
+  const { limit } = req.body || {};
+  const lim = Math.min(50, Math.max(1, Number(limit) || 20));
+  try {
+    const fetched = await smzdm.fetchBaoliao({ limit: lim });
+    const items = (fetched && fetched.items) || [];
+    if (!items.length) {
+      return res.status(502).json({ error: 'no_items', message: '未抓取到好价（页面结构可能已变更或被风控）' });
+    }
+    let added = 0;
+    await withWriteLock(() => {
+      added = mergeBaoliao(items);
+      persist();
+    });
+    res.json({ ok: true, fetched: items.length, added, total: db.baoliao.length });
+  } catch (e) {
+    res.status(502).json({ error: 'fetch_failed', message: e.message });
+  }
 });
 
 // 新增爆料草稿

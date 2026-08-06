@@ -212,5 +212,55 @@ export const realAdapter = {
       url: d.url || d.article_url || '',
       points: 0
     };
+  },
+
+  // ⚠️ 好价真实抓取（best-effort，未验证）：
+  // 抓取 smzdm 公开好价列表页，抽取文章卡片（href="/p/<id>" 及其标题文本）。
+  // - 公开页无需登录 Cookie 即可读取；
+  // - 页面结构可能随 smzdm 改版而失效，解析为空会明确报错，绝不静默成功；
+  // - 任何网络异常 / 超时 / 超大响应都被捕获，调用方据此友好提示。
+  async fetchBaoliao({ cookie, limit = 20, page = 1 } = {}) {
+    const url = (process.env.SMZDM_BAOLIAO_URL || BASE + '/').replace(/\/$/, '') + `/?page=${page}`;
+    const timeoutMs = Number(process.env.SMZDM_REQUEST_TIMEOUT || 10000);
+    let resp;
+    try {
+      resp = await fetch(url, {
+        headers: headers(cookie),
+        redirect: 'follow',
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+    } catch (e) {
+      if (e?.name === 'TimeoutError' || e?.name === 'AbortError') {
+        throw new Error(`抓取好价超时（>${timeoutMs}ms），可能被风控或网络不通`);
+      }
+      throw new Error('抓取好价网络错误：' + e.message);
+    }
+    if (!resp.ok) throw new Error(`抓取好价 HTTP ${resp.status}`);
+    const html = await resp.text();
+    if (html.length > 5_000_000) throw new Error('好价列表响应过大，已拒绝（疑似异常响应）');
+    // 抽取文章卡片：捕获 /p/<id> 链接与相邻标题文本（容忍标签嵌套）
+    const cardRe = /href="\/p\/(\d+)"[^>]*>([\s\S]*?)<\/a>/gi;
+    const seen = new Set();
+    const items = [];
+    let m;
+    while ((m = cardRe.exec(html)) !== null && items.length < limit) {
+      const id = m[1];
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const rawTitle = String(m[2] || '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 120);
+      items.push({
+        title: rawTitle,
+        url: '',
+        smzdmUrl: `${BASE}/p/${id}`,
+        price: '',
+        content: rawTitle
+      });
+    }
+    if (!items.length) throw new Error('未能从页面解析到好价文章（页面结构可能已变更）');
+    return { ok: true, items, page };
   }
 };

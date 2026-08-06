@@ -3,7 +3,7 @@
     <header class="page-head rise">
       <div>
         <h1>自动任务</h1>
-        <div class="sub">启用后由后端按 cron 自动执行（已接入调度器）</div>
+        <div class="sub">启用后由后端按 cron 自动执行（已接入调度器），对所有已录入账号生效</div>
       </div>
     </header>
 
@@ -39,6 +39,20 @@
             />
             <span class="hint-sm" v-if="t.articleSource === 'baoliao'">将对你好价列表中的文章自动取 ID 执行（无需手填）</span>
             <span class="hint-sm" v-else>评论/收藏/点赞需指定目标文章，否则运行会报错</span>
+          </div>
+          <div v-else-if="t.type === 'fetch'" class="art">
+            <div class="row-limit">
+              <label>每次抓取条数</label>
+              <input
+                class="input sm"
+                type="number"
+                min="1"
+                max="50"
+                v-model.number="t.limit"
+                @change="saveLimit(t)"
+              />
+            </div>
+            <span class="hint-sm">定时从 smzdm 公开好价列表抓取并写入爆料箱（自动去重），供评论/收藏/点赞与 GPT 生成取用</span>
           </div>
         </div>
         <div class="task-actions">
@@ -95,6 +109,16 @@ async function setSource(t, src) {
   try {
     await api.put(`/tasks/${t.id}`, { articleSource: src });
     showToast('已切换文章来源');
+  } catch (e) {
+    showToast(e.response?.data?.message || '保存失败', 'err');
+  }
+}
+async function saveLimit(t) {
+  const lim = Math.min(50, Math.max(1, Number(t.limit) || 20));
+  t.limit = lim;
+  try {
+    await api.put(`/tasks/${t.id}`, { limit: lim });
+    showToast('已保存抓取条数');
   } catch (e) {
     showToast(e.response?.data?.message || '保存失败', 'err');
   }
@@ -178,6 +202,20 @@ onMounted(load);
 .hint-sm {
   font-size: 10px;
   color: var(--text-faint);
+}
+.row-limit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.row-limit label {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.row-limit .input.sm {
+  width: 90px;
 }
 .src-toggle {
   display: flex;

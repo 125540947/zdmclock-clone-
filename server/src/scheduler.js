@@ -107,22 +107,24 @@ function tick() {
       lastFiredMinute[t.id] = minuteKey;
       runTask(t, db)
         .then((r) => {
+          // 多账号部分成功（partial）视为完成（绿色），仅全部失败才标 error（红色）
+          const ok = r.ok || r.partial;
           // 写锁内更新任务状态并落盘，避免与其他写请求互相覆盖（R2）
           withWriteLock(() => {
-            if (r.ok) {
-              t.lastRun = today;
-              t.lastResult = r.result.message;
-              t.status = 'done';
-            } else {
-              t.lastResult = r.message;
-              t.status = 'error';
-            }
+            t.lastRun = today;
+            t.lastResult = r.result ? r.result.message : r.message;
+            t.status = ok ? 'done' : 'error';
             persist();
           });
           // 推送通知（best-effort，失败不影响主流程）
+          const title = r.ok
+            ? `✅ 任务完成 · ${t.name}`
+            : r.partial
+            ? `⚠️ 任务部分完成 · ${t.name}`
+            : `❌ 任务失败 · ${t.name}`;
           notify(db, {
-            title: r.ok ? `✅ 任务完成 · ${t.name}` : `❌ 任务失败 · ${t.name}`,
-            message: r.ok ? r.result.message : r.message
+            title,
+            message: r.result ? r.result.message : r.message
           }).catch(() => {});
         })
         .catch((e) => {

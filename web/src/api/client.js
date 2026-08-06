@@ -52,3 +52,7 @@ export async function submitBaoliao(id, userId) {
   const { data } = await api.post(`/baoliao/${id}/submit`, { userId });
   return data;
 }
+export async function refreshBaoliao(limit = 20) {
+  const { data } = await api.post('/baoliao/refresh', { limit });
+  return data;
+}

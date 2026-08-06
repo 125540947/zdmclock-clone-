@@ -56,5 +56,22 @@ export const mockAdapter = {
       url: `https://www.smzdm.com/article/${id}`,
       points: 0
     };
+  },
+
+  // 好价真实抓取（mock）：返回样例数据，便于在未启用 real 适配器时验证刷新→取文章→评论/生成 的完整链路
+  async fetchBaoliao({ limit = 20 } = {}) {
+    const n = Math.min(3, Math.max(1, Number(limit) || 3));
+    const items = [];
+    for (let i = 0; i < n; i++) {
+      const id = 100000 + Math.floor(Math.random() * 899999);
+      items.push({
+        title: `【模拟好价】京东自营 商品${i + 1} 到手价 ¥${99 + i * 50}`,
+        url: '',
+        smzdmUrl: `https://www.smzdm.com/p/${id}`,
+        price: String(99 + i * 50),
+        content: `模拟抓取到的好价商品${i + 1}，可用于评论/收藏/点赞与 GPT 生成演示。`
+      });
+    }
+    return { ok: true, items, page: 1 };
   }
 };

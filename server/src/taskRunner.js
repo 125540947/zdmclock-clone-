@@ -1,6 +1,6 @@
 import { smzdm } from './smzdm/adapter.js';
 import { applyClock } from './clockCore.js';
-import { withWriteLock, persist, genId } from './store.js';
+import { withWriteLock, persist, genId, mergeBaoliao } from './store.js';
 import { normalizeArticleId } from './smzdm/articleId.js';
 import { generateReply } from './gptAdapter.js';
 
@@ -10,6 +10,7 @@ import { generateReply } from './gptAdapter.js';
 
 const COUNT_MAX = 5; // 防滥用：单次任务动作次数上限
 const GPT_BATCH_MAX = 10; // GPT 批量生成单次最多处理的好价条数
+const FETCH_MAX = 50; // 单次抓取好价条数上限
 
 // 采集目标文章 ID 列表：
 // - baoliao 来源：遍历 db.baoliao，从 smzdmUrl/url 提取文章 ID（去重）
@@ -79,18 +80,33 @@ async function runEngagement(task, db, user, opts) {
   };
 }
 
+// 单账号签到（含幂等落库）：返回 { ok, message, duplicate }
+async function runClockForUser(db, user) {
+  const r = await smzdm.doClockIn(user.cookie);
+  if (!r.success) return { ok: false, message: `签到失败：${r.message}` };
+  const res = await withWriteLock(() => {
+    const c = applyClock(user, r, db);
+    if (!c.duplicate) persist();
+    return c;
+  });
+  if (res.duplicate) return { ok: true, duplicate: true, message: '今日已签到' };
+  return { ok: true, message: `签到成功，+${r.points} 金币` };
+}
+
 // GPT 定时批量生成：从好价列表取内容 → 大模型生成评论草稿（可选自动发布为评论）
-async function runGptBatch(task, db, user) {
+// 接受「有标题/内容」或「有文章链接」的好价（兼容抓取到的无标题条目）
+async function runGptBatch(task, db) {
   if (!db.settings.gpt.enabled) {
     return { ok: false, error: 'gpt_disabled', message: '请先在 GPT 自动回复页启用自动回复' };
   }
   const limit = Math.min(GPT_BATCH_MAX, Math.max(1, Number(task.limit) || 3));
   const items = (db.baoliao || [])
-    .filter((it) => (it.title || it.content || '').trim())
+    .filter((it) => (it.title || it.content || '').trim() || normalizeArticleId(it.smzdmUrl || it.url || ''))
     .slice(0, limit);
   if (!items.length) {
     return { ok: false, error: 'no_source', message: '好价列表为空，没有可用于生成回复的内容' };
   }
+  const user = db.users[0]; // 仅自动发布时使用首个账号 Cookie；无账号时跳过发布
   let gen = 0;
   let posted = 0;
   let failed = 0;
@@ -98,7 +114,9 @@ async function runGptBatch(task, db, user) {
   const drafts = [];
   await withWriteLock(async () => {
     for (const item of items) {
-      const text = `标题：${item.title || ''}\n内容：${item.content || ''}`;
+      const text =
+        `文章：${item.smzdmUrl || item.url || ''}\n` +
+        `标题：${item.title || ''}\n内容：${item.content || ''}`;
       try {
         const reply = await generateReply({
           text,
@@ -115,7 +133,7 @@ async function runGptBatch(task, db, user) {
           autoPost: false,
           createdAt: new Date().toISOString()
         };
-        if (task.autoPost && aid) {
+        if (task.autoPost && aid && user) {
           try {
             await smzdm.doComment(user.cookie, { count: 1, articleId: aid, content: reply });
             draft.status = 'posted';
@@ -146,26 +164,75 @@ async function runGptBatch(task, db, user) {
   return { ok: true, result: { success: true, message, count: gen, drafts }, message };
 }
 
+// 好价真实抓取：调用适配器抓取 smzdm 公开好价列表，去重合并进 db.baoliao
+async function runFetch(task, db) {
+  const limit = Math.min(FETCH_MAX, Math.max(1, Number(task.limit) || 20));
+  let fetched;
+  try {
+    fetched = await smzdm.fetchBaoliao({ limit });
+  } catch (e) {
+    return { ok: false, error: 'fetch_failed', message: '抓取好价失败：' + e.message };
+  }
+  const items = (fetched && fetched.items) || [];
+  if (!items.length) {
+    return { ok: false, error: 'no_items', message: '未抓取到好价（页面结构可能已变更或被风控拦截）' };
+  }
+  let added = 0;
+  await withWriteLock(() => {
+    added = mergeBaoliao(items);
+    persist();
+  });
+  const message = `抓取好价完成：解析 ${items.length} 条，新增 ${added} 条（已去重）`;
+  return { ok: true, result: { success: true, message, count: added }, message };
+}
+
+// 选定目标账号：
+// - 指定 userId → 仅该账号（手动单账号签到 / 提交等场景）
+// - 未指定 → 覆盖全部已录入账号（多账号自动化：定时任务与手动"运行"均如此）
+function resolveUsers(db, opts) {
+  const { userId } = opts || {};
+  if (userId) {
+    const u = db.users.find((x) => x.id === userId);
+    return u ? [u] : [];
+  }
+  return db.users.slice();
+}
+
 export async function runTask(task, db, opts = {}) {
-  const { userId, count, articleId } = opts;
-  const user = userId ? db.users.find((u) => u.id === userId) : db.users[0];
-  if (!user) {
+  // gpt / fetch 不依赖账号 Cookie，无需账号即可运行（gpt 仅自动发布时用首个账号）
+  if (task.type === 'gpt') return runGptBatch(task, db);
+  if (task.type === 'fetch') return runFetch(task, db);
+
+  const users = resolveUsers(db, opts);
+  if (!users.length) {
     return { ok: false, error: 'no_user', message: '请先添加 smzdm 账号' };
   }
-  // 签到类型：真正落库（N1），与手动签到共用 applyClock
-  if (task.type === 'clock') {
-    const result = await smzdm.doClockIn(user.cookie);
-    if (!result.success) return { ok: false, error: 'clock_failed', message: result.message };
-    const clock = await withWriteLock(() => {
-      const c = applyClock(user, result, db);
-      if (!c.duplicate) persist();
-      return c;
-    });
-    return { ok: true, result, user, clock };
+
+  // 逐账号执行并聚合（clock / comment / favorite / point）
+  const parts = [];
+  let okCount = 0;
+  for (const user of users) {
+    const who = user.nickname || user.smzdmId || user.id;
+    try {
+      const r =
+        task.type === 'clock'
+          ? await runClockForUser(db, user)
+          : await runEngagement(task, db, user, opts);
+      if (r.ok) okCount += 1;
+      parts.push(`${who}：${r.message}`);
+    } catch (e) {
+      parts.push(`${who}：异常 ${e.message}`);
+    }
   }
-  if (task.type === 'gpt') {
-    return runGptBatch(task, db, user);
-  }
-  // 评论 / 收藏 / 点赞
-  return runEngagement(task, db, user, opts);
+  const total = users.length;
+  const allOk = okCount === total;
+  const message =
+    `共 ${total} 个账号：${okCount} 成功 / ${total - okCount} 失败\n` + parts.join('\n');
+  // 全部成功才标 ok；部分失败标 partial（调度器据此仍记为完成，避免误报红色错误）
+  return {
+    ok: allOk,
+    partial: !allOk && okCount > 0,
+    result: { success: allOk, message, perUser: parts },
+    message
+  };
 }

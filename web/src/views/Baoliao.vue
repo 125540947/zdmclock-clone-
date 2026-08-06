@@ -7,6 +7,18 @@
       </div>
     </header>
 
+    <section class="card rise" style="animation-delay:.02s">
+      <div class="refresh-row">
+        <div>
+          <div class="rt">🔄 从 smzdm 抓取好价</div>
+          <div class="rh">实时抓取公开好价列表并写入爆料箱（自动去重）。real 模式抓真实数据，mock 模式返回示例。</div>
+        </div>
+        <button class="btn ghost" :disabled="refreshing" @click="refresh">
+          {{ refreshing ? '抓取中…' : '立即刷新' }}
+        </button>
+      </div>
+    </section>
+
     <section class="card rise" style="animation-delay:.05s">
       <div class="field">
         <label>标题</label>
@@ -77,7 +89,7 @@
 
 <script setup>
 import { ref, onMounted } from 'vue';
-import { api, listBaoliao, createBaoliao, deleteBaoliao, submitBaoliao } from '../api/client.js';
+import { api, listBaoliao, createBaoliao, deleteBaoliao, submitBaoliao, refreshBaoliao } from '../api/client.js';
 
 const form = ref({ title: '', url: '', price: '', cat: '', content: '' });
 const items = ref([]);
@@ -85,6 +97,7 @@ const accounts = ref([]);
 const submitUserId = ref('');
 const saving = ref(false);
 const loading = ref(false);
+const refreshing = ref(false);
 const msg = ref('');
 const msgType = ref('');
 
@@ -159,6 +172,19 @@ async function submit(d) {
   }
 }
 
+async function refresh() {
+  refreshing.value = true;
+  try {
+    const data = await refreshBaoliao(20);
+    flash(`刷新完成：解析 ${data.fetched} 条，新增 ${data.added} 条`);
+    await loadList();
+  } catch (e) {
+    flash('刷新失败：' + (e.response?.data?.message || e.message || '未知错误'), 'err');
+  } finally {
+    refreshing.value = false;
+  }
+}
+
 onMounted(() => {
   loadAccounts();
   loadList();
@@ -171,6 +197,36 @@ onMounted(() => {
   grid-template-columns: 1fr 1fr;
   gap: 12px;
   margin-bottom: 14px;
+}
+.refresh-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.refresh-row .rt {
+  font-size: 14px;
+  font-weight: 600;
+}
+.refresh-row .rh {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-top: 4px;
+  line-height: 1.6;
+}
+.btn.ghost {
+  flex: none;
+  padding: 9px 16px;
+  font-size: 13px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+}
+.btn.ghost:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .hint {
   font-size: 11px;

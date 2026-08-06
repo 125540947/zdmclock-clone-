@@ -16,7 +16,9 @@ function defaultData() {
       { id: 't_favorite', type: 'favorite', name: '自动收藏', icon: '⭐', enabled: false, cron: '0 11 * * *', articleId: '', articleSource: 'manual', lastRun: null, lastResult: null, status: 'idle' },
       { id: 't_point', type: 'point', name: '自动点赞', icon: '👍', enabled: false, cron: '0 12 * * *', articleId: '', articleSource: 'manual', lastRun: null, lastResult: null, status: 'idle' },
       // GPT 定时批量生成：从好价列表取内容 → 大模型生成评论草稿（可选自动发布）
-      { id: 't_gpt', type: 'gpt', name: 'GPT 批量生成', icon: '🤖', enabled: false, cron: '30 21 * * *', source: 'baoliao', autoPost: false, limit: 3, lastRun: null, lastResult: null, status: 'idle' }
+      { id: 't_gpt', type: 'gpt', name: 'GPT 批量生成', icon: '🤖', enabled: false, cron: '30 21 * * *', source: 'baoliao', autoPost: false, limit: 3, lastRun: null, lastResult: null, status: 'idle' },
+      // 好价真实抓取：定时从 smzdm 公开好价列表抓取并写入 db.baoliao（best-effort，自动去重）
+      { id: 't_fetch', type: 'fetch', name: '刷新好价', icon: '📥', enabled: false, cron: '0 8 * * *', limit: 20, lastRun: null, lastResult: null, status: 'idle' }
     ],
     // GPT 自动回复配置（前端开关与提示词存这里，后端据此是否真正调用大模型）
     settings: {
@@ -99,6 +101,12 @@ export function load() {
     const lim = Number(gptTask.limit);
     gptTask.limit = Number.isFinite(lim) && lim >= 1 ? Math.min(10, Math.floor(lim)) : 3;
   }
+  // 规范化 t_fetch 抓取条数，避免旧库配置异常（1~50）
+  const fetchTask = cache.tasks.find((t) => t.id === 't_fetch');
+  if (fetchTask) {
+    const fl = Number(fetchTask.limit);
+    fetchTask.limit = Number.isFinite(fl) && fl >= 1 ? Math.min(50, Math.floor(fl)) : 20;
+  }
   // settings.gpt 合并：保留已有配置，缺省补齐，避免旧库无 settings 字段时报错
   cache.settings = cache.settings && typeof cache.settings === 'object' ? cache.settings : {};
   cache.settings.gpt =
@@ -123,6 +131,39 @@ export function persist() {
 
 export function genId(prefix = 'id') {
   return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// 合并抓取到的好价：按 smzdmUrl 去重，新增返回条数。
+// 边界处理：① cache 未初始化直接返回 0；② 仅接受合法 http(s) 链接；
+// ③ 已存在的同链接跳过；④ 字段长度钳制，避免异常数据撑爆库。
+// 调用方需在 withWriteLock 内调用，确保与 persist() 原子。
+export function mergeBaoliao(items = []) {
+  if (!cache) return 0;
+  if (!Array.isArray(items)) return 0;
+  let added = 0;
+  const now = new Date().toISOString();
+  for (const it of items) {
+    if (!it || typeof it !== 'object') continue;
+    const url = String(it.smzdmUrl || it.url || '').trim();
+    if (!/^https?:\/\//i.test(url)) continue; // 只接受合法 http(s) 链接
+    if (cache.baoliao.some((x) => (x.smzdmUrl || x.url || '') === url)) continue;
+    cache.baoliao.unshift({
+      id: genId('bl'),
+      userId: null,
+      title: String(it.title || '').slice(0, 200),
+      url: String(it.url || '').slice(0, 2000),
+      price: String(it.price || '').slice(0, 50),
+      cat: '',
+      content: String(it.content || '').slice(0, 2000),
+      status: 'fetched',
+      smzdmUrl: url,
+      lastResult: '',
+      createdAt: now,
+      updatedAt: now
+    });
+    added += 1;
+  }
+  return added;
 }
 
 // 统一使用「本地时区」日期，避免 UTC 与本地混用导致重复签到 / 连续天数错乱
