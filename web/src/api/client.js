@@ -132,3 +132,9 @@ export async function checkCookies() {
   const { data } = await api.get('/health/cookies');
   return data;
 }
+
+// ===== 真机端点一键自检（针对单个账号）=====
+export async function verifyReal(userId, withCheckin = false) {
+  const { data } = await api.post('/health/verify', { userId, withCheckin });
+  return data;
+}

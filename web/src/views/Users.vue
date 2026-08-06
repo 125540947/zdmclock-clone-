@@ -69,7 +69,29 @@
 
         <div class="acc-actions">
           <button class="btn ghost sm" :disabled="busy === u.id" @click="refresh(u)">刷新资料</button>
+          <button class="btn ghost sm" :disabled="!u.cookie || verifyState[u.id]?.loading" @click="verify(u)">🔍 自检</button>
           <button class="btn ghost sm danger" @click="remove(u)">删除</button>
+        </div>
+
+        <!-- 真机端点一键自检结果 -->
+        <div v-if="verifyState[u.id]" class="verify-box">
+          <div class="vhead">
+            <span>🔍 真机端点自检</span>
+            <span class="vbadge" :class="verifyState[u.id].failedCount ? 'bad' : 'good'">
+              {{ verifyState[u.id].failedCount ? verifyState[u.id].failedCount + ' 项异常' : '全部通过' }}
+            </span>
+          </div>
+          <div v-if="verifyState[u.id].loading" class="vloading">探测中…（含网络请求，请稍候）</div>
+          <div v-else-if="verifyState[u.id].error" class="verr">{{ verifyState[u.id].error }}</div>
+          <table v-else class="vtable">
+            <tbody>
+              <tr v-for="r in verifyState[u.id].results" :key="r.name">
+                <td class="vstat" :class="r.status">{{ { PASS: '✓', FAIL: '✗', SKIP: '⚠' }[r.status] }}</td>
+                <td class="vname">{{ r.name }}</td>
+                <td class="vdetail">{{ r.detail }}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </section>
@@ -84,7 +106,7 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue';
-import api, { updateUser, getClockDistribution, checkCookies } from '../api/client.js';
+import api, { updateUser, getClockDistribution, checkCookies, verifyReal } from '../api/client.js';
 
 const users = ref([]);
 const busy = ref('');
@@ -94,6 +116,7 @@ const toast = ref('');
 const toastType = ref('ok');
 const openSched = reactive({});
 const draft = reactive({});
+const verifyState = reactive({});
 const schedModes = [
   { value: 'auto', label: '系统自动' },
   { value: 'manual', label: '手动指定' },
@@ -146,6 +169,27 @@ async function checkAll() {
     showToast(e.response?.data?.message || '检测失败', 'err');
   } finally {
     checking.value = false;
+  }
+}
+
+// 真机端点一键自检（针对单个账号）：逐项报告各内置端点是否仍通
+async function verify(u) {
+  verifyState[u.id] = { loading: true, results: [], failedCount: 0, error: '' };
+  try {
+    const data = await verifyReal(u.id);
+    verifyState[u.id] = {
+      loading: false,
+      results: data.results || [],
+      failedCount: data.failedCount || 0,
+      error: ''
+    };
+  } catch (e) {
+    verifyState[u.id] = {
+      loading: false,
+      results: [],
+      failedCount: 0,
+      error: e.response?.data?.error || '自检失败'
+    };
   }
 }
 
@@ -368,5 +412,79 @@ onMounted(async () => {
 .toast-leave-to {
   opacity: 0;
   transform: translate(-50%, 10px);
+}
+.verify-box {
+  margin: 12px 0 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.02);
+  padding: 12px 13px;
+}
+.vhead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 9px;
+}
+.vbadge {
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 20px;
+  font-weight: 600;
+}
+.vbadge.good {
+  color: #b7f3c6;
+  background: rgba(120, 224, 143, 0.14);
+}
+.vbadge.bad {
+  color: #ffb3ac;
+  background: rgba(255, 90, 77, 0.14);
+}
+.vloading,
+.verr {
+  font-size: 13px;
+  color: var(--text-dim);
+  padding: 6px 0;
+}
+.verr {
+  color: #ffb3ac;
+}
+.vtable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.vtable td {
+  padding: 6px 6px;
+  vertical-align: top;
+  border-bottom: 1px dashed var(--border);
+}
+.vtable tr:last-child td {
+  border-bottom: none;
+}
+.vstat {
+  width: 22px;
+  font-weight: 700;
+  text-align: center;
+}
+.vstat.PASS {
+  color: #7ce08f;
+}
+.vstat.FAIL {
+  color: #ff6b5e;
+}
+.vstat.SKIP {
+  color: #ffd06b;
+}
+.vname {
+  width: 150px;
+  color: var(--text);
+  font-weight: 500;
+}
+.vdetail {
+  color: var(--text-dim);
+  line-height: 1.45;
 }
 </style>

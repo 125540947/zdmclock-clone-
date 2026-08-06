@@ -158,9 +158,11 @@ SMZDM_COOKIE="你的Cookie" node tools/verifyRealMode.mjs
 # 或带参： node tools/verifyRealMode.mjs "<Cookie>" --with-checkin
 ```
 
-- 默认**只读探测**：校验 Cookie 有效性、签名算法、以及 `user-api`、`task/list_v2`、`转盘 active_id 自动发现`、`众测 activity_id 自动发现` 的可达性与解析结构——**不调用任何会消耗抽奖次数/领取奖励的写接口**（jsonp_draw / activity_task_receive / ajax_participate / 实签）。
+- 默认**只读探测**：校验 Cookie 有效性、签名算法、以及 `user-api`、`task/list_v2`、`转盘 active_id 自动发现`、`众测 activity_id 自动发现`、评论/收藏/点赞/爆料遗留端点的可达性与解析结构——**不调用任何会消耗抽奖次数/领取奖励的写接口**（jsonp_draw / activity_task_receive / ajax_participate / 实签）。
 - 加 `--with-checkin` 才真正签一次到（每日一次，低风险），用于端到端验证签到链路。
 - 任一项 `✗ FAIL`：多为 smzdm 端点/结构变更或 Cookie 失效，用同名环境变量（`SMZDM_SIGN_KEY` / `SMZDM_API_BASE` / …）覆盖或重新抓包更新。
+
+**Web 端一键自检**：登录后进入「我的账号」，每个账号卡片有 **🔍 自检** 按钮，点击即用该账号 Cookie 在服务端跑同一套 `runVerification` 探测，结果以 ✓/✗/⚠ 表格直接展示，无需敲命令行（核心逻辑见 `server/src/verifyRealMode.js`，CLI 与接口共用）。
 
 ---
 
