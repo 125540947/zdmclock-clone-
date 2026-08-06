@@ -7,6 +7,7 @@ import {
   parseJsonp,
   extractHashId,
   discoverActiveIds,
+  getTestingActivityId,
   doTurntable,
   doCrowdtest
 } from '../src/smzdm/tasks_real.js';
@@ -99,4 +100,11 @@ test('doCrowdtest 显式 crowd_id：走 ajax_participate 申请路径', async ()
   const r = await doCrowdtest('cookie', { crowdId: 'C123', call: fetcher });
   assert.equal(r.success, true);
   assert.match(r.message, /申请成功/);
+});
+
+test('getTestingActivityId：注入 fetcher 抽取 activity_id（避免联网）', async () => {
+  const fetcher = async () => ({ data: { activity_id: 'ACT_X' } });
+  assert.equal(await getTestingActivityId('cookie', fetcher), 'ACT_X');
+  const empty = async () => ({ data: {} });
+  assert.equal(await getTestingActivityId('cookie', empty), null);
 });

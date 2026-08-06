@@ -148,6 +148,20 @@ Cookie 失效后任务只会静默标 `error`，难以察觉。本工具内置 *
 
 > 注：检测为 best-effort，单次瞬时网络抖动可能误报，故内置 1 次重试（800ms）吸收抖动；即便误标，下一轮成功会自动自愈。
 
+### 真机端点一键验证（部署前自检）
+
+real 模式的端点/签名均来自社区逆向（best-effort），smzdm 改版可能失效。**部署 `SMZDM_ADAPTER=real` 前，先用自己的 Cookie 跑一次诊断**，逐项报告哪些内置端点仍有效：
+
+```bash
+cd server
+SMZDM_COOKIE="你的Cookie" node tools/verifyRealMode.mjs
+# 或带参： node tools/verifyRealMode.mjs "<Cookie>" --with-checkin
+```
+
+- 默认**只读探测**：校验 Cookie 有效性、签名算法、以及 `user-api`、`task/list_v2`、`转盘 active_id 自动发现`、`众测 activity_id 自动发现` 的可达性与解析结构——**不调用任何会消耗抽奖次数/领取奖励的写接口**（jsonp_draw / activity_task_receive / ajax_participate / 实签）。
+- 加 `--with-checkin` 才真正签一次到（每日一次，低风险），用于端到端验证签到链路。
+- 任一项 `✗ FAIL`：多为 smzdm 端点/结构变更或 Cookie 失效，用同名环境变量（`SMZDM_SIGN_KEY` / `SMZDM_API_BASE` / …）覆盖或重新抓包更新。
+
 ---
 
 ## 部署

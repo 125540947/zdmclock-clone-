@@ -8,7 +8,8 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "node --test \"test/**/*.test.js\""
+    "test": "node --test \"test/**/*.test.js\"",
+    "verify:real": "node tools/verifyRealMode.mjs"
   },
   "dependencies": {
     "cors": "^2.8.5",

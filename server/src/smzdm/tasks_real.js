@@ -203,7 +203,7 @@ export async function doDailyTasks(cookie) {
 // 全民众测能量值任务（社区 smzdm_testing.js 逆向）：自动发现活动 → 取任务列表 → 逐个领奖。
 // 这是社区真正可自动化的"众测"玩法，全程无需 crowd_id（用 activity_id 代替）。
 // 端点均为 web 接口（zhiyou.m.smzdm.com / test.m.smzdm.com），不加 app 签名。
-async function getTestingActivityId(cookie, fetcher = call) {
+export async function getTestingActivityId(cookie, fetcher = call) {
   const json = await fetcher('https://zhiyou.m.smzdm.com/task/task/ajax_get_activity_id', {
     method: 'GET',
     cookie,
