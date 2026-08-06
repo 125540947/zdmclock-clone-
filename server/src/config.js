@@ -7,7 +7,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // .env 位于 monorepo 根目录（server/src -> ../../.env）
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
-const bool = (v, d = false) => {
+// 解析布尔型环境变量（导出便于单测，语义不变）
+export const parseBool = (v, d = false) => {
   if (v === undefined) return d;
   return ['1', 'true', 'yes', 'on'].includes(String(v).toLowerCase());
 };
@@ -19,7 +20,7 @@ const apiTokenFromEnv = process.env.API_TOKEN || null;
 export const config = {
   port: Number(process.env.PORT || 3000),
   nodeEnv: process.env.NODE_ENV || 'development',
-  requireAuth: bool(process.env.REQUIRE_AUTH, false),
+  requireAuth: parseBool(process.env.REQUIRE_AUTH, false),
   adminUsername: process.env.ADMIN_USERNAME || 'admin',
   adminPassword: process.env.ADMIN_PASSWORD || 'admin123',
   // 标记是否仍在使用内置默认密码，便于启动时给出安全告警

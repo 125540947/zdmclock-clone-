@@ -43,6 +43,14 @@ test('applyClock 昨日有记录时 streak 递增', () => {
   assert.equal(db.users[0].streak, 1); // 初始 0 → +1
 });
 
+test('applyClock 断签（昨天无记录）streak 重置为 1 而非 +1', () => {
+  const db = makeDb();
+  db.users[0].streak = 5; // 此前连续 5 天，但昨天没签到
+  const r = applyClock(db.users[0], { points: 5 }, db);
+  assert.equal(r.duplicate, false);
+  assert.equal(db.users[0].streak, 1); // 断签重置为 1，而非 6
+});
+
 test('withWriteLock 串行执行（后调用等待先调用完成）', async () => {
   const order = [];
   const slow = withWriteLock(async () => {

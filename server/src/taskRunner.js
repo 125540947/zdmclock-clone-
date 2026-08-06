@@ -15,7 +15,7 @@ const FETCH_MAX = 50; // 单次抓取好价条数上限
 // 采集目标文章 ID 列表：
 // - baoliao 来源：遍历 db.baoliao，从 smzdmUrl/url 提取文章 ID（去重）
 // - manual 来源：用本次运行传入的 articleId 或任务里保存的 articleId
-function collectArticleIds(task, db, articleSource, overrideId) {
+export function collectArticleIds(task, db, articleSource, overrideId) {
   if (articleSource === 'baoliao') {
     const ids = [];
     for (const item of db.baoliao || []) {
@@ -191,7 +191,7 @@ async function runFetch(task, db) {
 // 选定目标账号：
 // - 指定 userId → 仅该账号（手动单账号签到 / 提交等场景）
 // - 未指定 → 覆盖全部已录入账号（多账号自动化：定时任务与手动"运行"均如此）
-function resolveUsers(db, opts) {
+export function resolveUsers(db, opts) {
   const { userId } = opts || {};
   if (userId) {
     const u = db.users.find((x) => x.id === userId);

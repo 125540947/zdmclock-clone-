@@ -94,52 +94,59 @@ export function cronMatch(expr, date = new Date()) {
   );
 }
 
-function tick() {
+export function tick() {
   try {
     const db = load();
     const now = new Date();
     const minuteKey = Math.floor(now.getTime() / 60000);
     const today = todayStr();
+    const jobs = [];
     for (const t of db.tasks) {
       if (!t.enabled || !t.cron) continue;
       if (!cronMatch(t.cron, now)) continue;
       if (lastFiredMinute[t.id] === minuteKey) continue; // 本分钟已触发，跳过
       lastFiredMinute[t.id] = minuteKey;
-      runTask(t, db)
+      const job = runTask(t, db)
         .then((r) => {
           // 多账号部分成功（partial）视为完成（绿色），仅全部失败才标 error（红色）
           const ok = r.ok || r.partial;
           // 写锁内更新任务状态并落盘，避免与其他写请求互相覆盖（R2）
-          withWriteLock(() => {
+          return withWriteLock(() => {
             t.lastRun = today;
             t.lastResult = r.result ? r.result.message : r.message;
             t.status = ok ? 'done' : 'error';
             persist();
+          }).then(() => {
+            // 推送通知（best-effort，失败不影响主流程）
+            const title = r.ok
+              ? `✅ 任务完成 · ${t.name}`
+              : r.partial
+              ? `⚠️ 任务部分完成 · ${t.name}`
+              : `❌ 任务失败 · ${t.name}`;
+            return notify(db, {
+              title,
+              message: r.result ? r.result.message : r.message
+            }).catch(() => {});
           });
-          // 推送通知（best-effort，失败不影响主流程）
-          const title = r.ok
-            ? `✅ 任务完成 · ${t.name}`
-            : r.partial
-            ? `⚠️ 任务部分完成 · ${t.name}`
-            : `❌ 任务失败 · ${t.name}`;
-          notify(db, {
-            title,
-            message: r.result ? r.result.message : r.message
-          }).catch(() => {});
         })
         .catch((e) => {
-          withWriteLock(() => {
+          return withWriteLock(() => {
             t.lastResult = e.message;
             t.status = 'error';
             persist();
+          }).then(() => {
+            return notify(db, { title: `❌ 任务异常 · ${t.name}`, message: e.message }).catch(() => {});
           });
-          notify(db, { title: `❌ 任务异常 · ${t.name}`, message: e.message }).catch(() => {});
         });
+      jobs.push(job);
     }
+    // 返回所有任务完成后的 Promise（allSettled 不拒绝），便于测试 await 与调用方感知结束
+    return Promise.allSettled(jobs);
   } catch (e) {
     // b6：tick 内同步异常不应中断调度循环
     // eslint-disable-next-line no-console
     console.error('[scheduler] tick 异常:', e);
+    return Promise.resolve();
   }
 }
 

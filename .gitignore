@@ -14,5 +14,7 @@ server/data_demo/
 server/data_test/
 # web/dist 预构建产物保留入库，使克隆后 `npm start` 无需先 build 即可运行
 !web/dist
+# 项目级 WorkBuddy 工作记忆（含对话日志/记忆），非源码，切勿入库
+.workbuddy/
 .DS_Store
 npm-debug.log*
