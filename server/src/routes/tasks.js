@@ -22,9 +22,16 @@ router.get('/', authRequired, (req, res) => {
     let configured = true;
     if (t.needsEndpoint) {
       if (REAL_STRATEGY_TYPES.has(t.type)) {
-        // 内置真实任务：所需动态参数（active_id / 众测活动）均由运行时自动获取，无需用户手填，
-        // 故一律视为已就绪；仅当用户显式提供覆盖参数时仍以用户值为准。
-        configured = true;
+        // 内置真实任务分两类：
+        //  - 自动获取动态参数的（turntable/lottery/crowdtest/dailyTasks）：无需手填，一律视为已就绪；
+        //  - 需用户填目标参数的（follow 需 target、share 需 articleId）：须在已存 params 非空时才就绪。
+        const AUTO_TYPES = new Set(['turntable', 'lottery', 'crowdtest', 'dailyTasks']);
+        if (AUTO_TYPES.has(t.type)) {
+          configured = true;
+        } else {
+          const p = endpoints[t.type] && endpoints[t.type].params;
+          configured = !!(p && Object.keys(p).length);
+        }
       } else {
         configured = !!endpoints[t.type];
       }

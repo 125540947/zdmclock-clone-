@@ -9,7 +9,9 @@ import {
   discoverActiveIds,
   getTestingActivityId,
   doTurntable,
-  doCrowdtest
+  doCrowdtest,
+  doFollow,
+  doShare
 } from '../src/smzdm/tasks_real.js';
 
 test('signFormData：按键字母排序 + 追加 key + md5 大写', () => {
@@ -107,4 +109,51 @@ test('getTestingActivityId：注入 fetcher 抽取 activity_id（避免联网）
   assert.equal(await getTestingActivityId('cookie', fetcher), 'ACT_X');
   const empty = async () => ({ data: {} });
   assert.equal(await getTestingActivityId('cookie', empty), null);
+});
+
+// ---- follow / share（内置真实端点，注入 reqFn 避免联网） ----
+
+test('doFollow 关注用户：target 命中即成功', async () => {
+  const req = async (path, opts) => {
+    assert.match(path, /\/dingyue\/create$/);
+    assert.equal(opts.data.type, 'user');
+    assert.equal(opts.data.keyword, 'alice');
+    return { error_code: 0, error_msg: '关注成功' };
+  };
+  const r = await doFollow('cookie', { target: 'alice', type: 'user' }, req);
+  assert.equal(r.success, true);
+  assert.match(r.message, /关注成功/);
+});
+
+test('doFollow 关注品牌：走 user_action 端点且 action=dingyue_lanmu_add', async () => {
+  const req = async (path, opts) => {
+    assert.match(path, /user_action$/);
+    const p = JSON.parse(opts.data.params);
+    assert.equal(p.type, 'brand');
+    assert.equal(opts.data.action, 'dingyue_lanmu_add');
+    return { error_code: 0, error_msg: '关注品牌成功' };
+  };
+  const r = await doFollow('cookie', { target: 'BRAND1', type: 'brand' }, req);
+  assert.equal(r.success, true);
+});
+
+test('doFollow 缺 target 抛错', async () => {
+  await assert.rejects(() => doFollow('cookie', {}, async () => ({})), /关注需要 target/);
+});
+
+test('doShare：三步流程均成功则拼接奖励文案', async () => {
+  const req = async (path) => {
+    if (path.includes('complete_share_rule')) return { error_code: 0, error_msg: '分享完成' };
+    if (path.includes('daily_reward')) return { error_code: 0, data: { reward_msg: '每日+1' } };
+    if (path.includes('callback')) return { error_code: 0, error_msg: '回调成功' };
+    return { error_code: 1 };
+  };
+  const r = await doShare('cookie', { articleId: '12345' }, req);
+  assert.equal(r.success, true);
+  assert.equal(r.count, 3);
+  assert.match(r.message, /分享完成/);
+});
+
+test('doShare 缺 articleId 抛错', async () => {
+  await assert.rejects(() => doShare('cookie', {}, async () => ({})), /分享需要 articleId/);
 });

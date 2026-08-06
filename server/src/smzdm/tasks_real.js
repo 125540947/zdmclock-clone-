@@ -12,6 +12,7 @@ import { call, appRequest, realAdapter } from './realAdapter.js';
 
 const ANDROID_XRW = { 'x-requested-with': 'com.smzdm.client.android' };
 const M_REFERER = 'https://m.smzdm.com/';
+const DINGYUE_BASE = 'https://dingyue-api.smzdm.com';
 
 function removeTags(s) {
   return String(s || '')
@@ -287,9 +288,85 @@ export async function doCrowdtest(cookie, { crowdId, topicUrl, call: fetcher = c
   return await doCrowdEnergyTasks(cookie, fetcher);
 }
 
+// 关注用户 / 栏目 / 品牌（社区 smzdm_task library_task 逆向，app 签名接口）。
+// dingyue-api.smzdm.com：user/tag 走 /dingyue/{create|destroy}，brand 走 /dy/util/api/user_action。
+// 均为 best-effort 社区逆向值，需用户填 target（用户名/栏目名/品牌名），无法运行时自动发现。
+// reqFn 可注入以便单测（默认 appRequest，自带 signFormData 签名）。
+export async function doFollow(cookie, { target, type = 'user', method = 'create', keywordId } = {}, reqFn = appRequest) {
+  if (!target) throw new Error('关注需要 target（用户名 / 栏目名 / 品牌名）');
+  if (!['user', 'tag', 'brand'].includes(type)) throw new Error('type 仅支持 user / tag / brand');
+  if (type === 'brand') {
+    const params = JSON.stringify({ keyword: target, keyword_id: keywordId || target, type: 'brand' });
+    const r = await reqFn('/dy/util/api/user_action', {
+      cookie,
+      method: 'POST',
+      base: DINGYUE_BASE,
+      data: {
+        action: method === 'create' ? 'dingyue_lanmu_add' : 'dingyue_lanmu_del',
+        params,
+        refer: `Android/其他/品牌详情页/${target}/${keywordId || target}/`,
+        touchstone_event: ''
+      }
+    });
+    if (Number(r?.error_code) !== 0) throw new Error('关注品牌失败：' + removeTags(r?.error_msg || '未知响应'));
+    return { success: true, message: removeTags(r?.error_msg || '关注成功') };
+  }
+  const r = await reqFn(`/dingyue/${method}`, {
+    cookie,
+    method: 'POST',
+    base: DINGYUE_BASE,
+    data: {
+      keyword: target,
+      keyword_id: type === 'tag' ? keywordId || target : '',
+      type,
+      refer: '',
+      touchstone_event: ''
+    }
+  });
+  if (Number(r?.error_code) !== 0) throw new Error('关注失败：' + removeTags(r?.error_msg || '未知响应'));
+  return { success: true, message: removeTags(r?.error_msg || '关注成功') };
+}
+
+// 分享文章（社区 smzdm_task library_task 逆向，user-api 签名接口）。
+// 分享流程：complete_share_rule → daily_reward → callback（best-effort，单个失败不阻断）。
+// 需用户填 articleId（文章数字ID，如 https://www.smzdm.com/p/<id> 中的 <id>）；channel_id 可选。
+export async function doShare(cookie, { articleId, channelId = '' } = {}, reqFn = appRequest) {
+  if (!articleId) {
+    throw new Error('分享需要 articleId（文章数字ID，如 https://www.smzdm.com/p/<id> 中的 <id>）');
+  }
+  let token = null;
+  try {
+    token = await realAdapter.getRobotToken(cookie);
+  } catch {
+    token = null;
+  }
+  const steps = [];
+  const calls = [
+    ['/share/complete_share_rule', { article_id: articleId, channel_id: channelId, tag_name: 'gerenzhongxin' }],
+    ['/share/daily_reward', { channel_id: channelId }],
+    ['/share/callback', { article_id: articleId, channel_id: channelId, touchstone_event: '' }]
+  ];
+  for (const [p, extra] of calls) {
+    try {
+      const r = await reqFn(p, { cookie, method: 'POST', data: { token, ...extra } });
+      if (Number(r?.error_code) === 0) steps.push(removeTags(r?.error_msg || r?.data?.reward_msg || '完成'));
+    } catch {
+      /* 单个步骤失败跳过，继续下一步 */
+    }
+  }
+  return {
+    success: true,
+    message: steps.length
+      ? steps.join('；')
+      : '分享流程已触发（响应未含奖励文案，可能无需奖励或端点变更）',
+    count: steps.length
+  };
+}
+
 // 真实策略表：任务类型 → 处理函数 + 是否需动态参数
 // 转盘/抽奖：自动从内置稳定专题页获取 active_id（needsParam 置 null，可选填 activeId/topicUrl 覆盖）
 // 众测：自动跑全民众测能量值任务（无需 crowd_id；可选填 crowd_id 走"申请具体商品"路径）
+// 关注/分享：社区逆向端点已内置，但需用户填目标参数（target / articleId），无法自动发现
 export const REAL_STRATEGIES = {
   turntable: {
     handler: doTurntable,
@@ -305,6 +382,16 @@ export const REAL_STRATEGIES = {
     handler: doCrowdtest,
     needsParam: null,
     paramHint: '可选：crowd_id（不填则自动跑全民众测能量值任务，无需 crowd_id）'
+  },
+  follow: {
+    handler: doFollow,
+    needsParam: 'target',
+    paramHint: 'target（用户名/栏目名/品牌名），可选 type(user/tag/brand)、keywordId、method(create/destroy)'
+  },
+  share: {
+    handler: doShare,
+    needsParam: 'articleId',
+    paramHint: 'articleId（文章数字ID），可选 channelId'
   },
   dailyTasks: { handler: doDailyTasks, needsParam: null }
 };
