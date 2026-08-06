@@ -42,6 +42,14 @@
       </div>
       <p v-else class="empty">暂无活动</p>
     </section>
+
+    <section class="card rise" style="animation-delay: 0.15s">
+      <p class="card-title">📈 运营分析</p>
+      <button class="btn block" @click="$router.push({ name: 'distribution' })">
+        查看签到时间分布 →
+      </button>
+      <p class="hint">按小时或自定义时段统计各时段待签到账号数、已签到数与账号清单，掌握签到分布与活跃情况。</p>
+    </section>
   </div>
 </template>
 
@@ -86,5 +94,21 @@ onMounted(load);
   font-size: 12px;
   color: var(--text-dim);
   margin-top: 4px;
+}
+.btn.block {
+  width: 100%;
+  padding: 14px;
+  font-size: 15px;
+  border-radius: 12px;
+  border: 1px solid var(--primary);
+  color: var(--primary);
+  background: rgba(255, 208, 107, 0.08);
+  cursor: pointer;
+}
+.hint {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin: 10px 0 0;
+  line-height: 1.5;
 }
 </style>

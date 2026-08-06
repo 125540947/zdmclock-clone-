@@ -13,6 +13,7 @@ const { runTask, collectArticleIds, resolveUsers, runClockForUser } = await impo
 const { load } = await import('../src/store.js');
 const { config } = await import('../src/config.js');
 const { smzdm } = await import('../src/smzdm/adapter.js');
+const { resolvedCheckInTime } = await import('../src/clockSchedule.js');
 
 const realFetch = globalThis.fetch;
 function mockFetchOnce(body) {
@@ -166,6 +167,99 @@ test('runTask 多账号签到按错峰间隔分散执行', async () => {
     config.clockStaggerMs = prevStagger;
     config.clockStaggerJitterMs = prevJitter;
   }
+});
+
+test('runTask 定时(scheduled)模式仅执行"当前时段到达个人时间且未签"的账号', async () => {
+  // 固定当前时间为 09:30，使 manual 设 09:30 的账号命中，其它时段账号被过滤
+  const RealDate = Date;
+  const fixed = new RealDate(2026, 7, 6, 9, 30, 0);
+  const FakeDate = class extends RealDate {
+    constructor(...a) { if (a.length) return new RealDate(...a); return new RealDate(fixed); }
+    static now() { return fixed.getTime(); }
+  };
+  globalThis.Date = FakeDate;
+  const prevStagger = config.clockStaggerMs;
+  const prevJitter = config.clockStaggerJitterMs;
+  config.clockStaggerMs = 0;
+  config.clockStaggerJitterMs = 0;
+  try {
+    const db = {
+      users: [
+        { id: 'hit', cookie: 'c', schedMode: 'manual', checkInTime: '09:30' },
+        { id: 'other', cookie: 'c', schedMode: 'manual', checkInTime: '08:00' },
+        { id: 'default', cookie: 'c', schedMode: 'default' }
+      ],
+      clockRecords: []
+    };
+    const r = await runTask({ type: 'clock', name: '签到' }, db, { scheduled: true });
+    assert.equal(r.ok, true);
+    assert.equal(r.skipped, undefined); // 有命中账号，不是 skipped
+    // 仅 hit 被签到（other/default 不在 09:30 时段）
+    assert.equal(db.clockRecords.length, 1);
+    assert.equal(db.clockRecords[0].userId, 'hit');
+  } finally {
+    globalThis.Date = RealDate;
+    config.clockStaggerMs = prevStagger;
+    config.clockStaggerJitterMs = prevJitter;
+  }
+});
+
+test('runTask 定时(scheduled)模式无账号命中返回 skipped', async () => {
+  const RealDate = Date;
+  const fixed = new RealDate(2026, 7, 6, 3, 0, 0); // 凌晨 3 点，无人设定此时段
+  const FakeDate = class extends RealDate {
+    constructor(...a) { if (a.length) return new RealDate(...a); return new RealDate(fixed); }
+    static now() { return fixed.getTime(); }
+  };
+  globalThis.Date = FakeDate;
+  try {
+    const db = {
+      users: [
+        { id: 'a', cookie: 'c', schedMode: 'manual', checkInTime: '09:30' },
+        { id: 'b', cookie: 'c', schedMode: 'auto', checkInTime: '08:10' }
+      ],
+      clockRecords: []
+    };
+    const r = await runTask({ type: 'clock', name: '签到' }, db, { scheduled: true });
+    assert.equal(r.ok, true);
+    assert.equal(r.skipped, true);
+    assert.equal(db.clockRecords.length, 0);
+  } finally {
+    globalThis.Date = RealDate;
+  }
+});
+
+test('runTask 定时(scheduled)模式跳过今日已签账号', async () => {
+  const RealDate = Date;
+  const fixed = new RealDate(2026, 7, 6, 9, 30, 0);
+  const FakeDate = class extends RealDate {
+    constructor(...a) { if (a.length) return new RealDate(...a); return new RealDate(fixed); }
+    static now() { return fixed.getTime(); }
+  };
+  globalThis.Date = FakeDate;
+  const prevStagger = config.clockStaggerMs;
+  config.clockStaggerMs = 0;
+  config.clockStaggerJitterMs = 0;
+  try {
+    const db = {
+      users: [{ id: 'hit', cookie: 'c', schedMode: 'manual', checkInTime: '09:30' }],
+      // 今日（2026-08-06）已签到 → 应被定时过滤排除
+      clockRecords: [{ userId: 'hit', date: '2026-08-06', points: 5, id: 'c1' }]
+    };
+    const r = await runTask({ type: 'clock', name: '签到' }, db, { scheduled: true });
+    assert.equal(r.ok, true);
+    assert.equal(r.skipped, true);
+    assert.equal(db.clockRecords.length, 1); // 未新增
+  } finally {
+    globalThis.Date = RealDate;
+    config.clockStaggerMs = prevStagger;
+    config.clockStaggerJitterMs = 0;
+  }
+});
+
+test('resolvedCheckInTime 与 runTask 过滤一致（手动时间映射）', () => {
+  const u = { id: 'x', schedMode: 'manual', checkInTime: '13:45' };
+  assert.equal(resolvedCheckInTime(u), '13:45');
 });
 
 test('还原全局 fetch', () => {

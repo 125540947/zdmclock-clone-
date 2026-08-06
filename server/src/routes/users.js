@@ -2,8 +2,27 @@ import { Router } from 'express';
 import { load, persist, genId, withWriteLock } from '../store.js';
 import { smzdm } from '../smzdm/adapter.js';
 import { authRequired, maskCookie } from '../auth.js';
+import { resolvedCheckInTime } from '../clockSchedule.js';
 
 const router = Router();
+
+// 校验并归一化 schedMode / checkInTime（manual 必须提供合法 HH:MM）。
+// 返回 { schedMode, checkInTime } 或 { error, message }（HTTP 400 用）。
+function normalizeSchedule(body) {
+  const schedMode = body && body.schedMode;
+  if (schedMode !== undefined && !['auto', 'manual', 'default'].includes(schedMode)) {
+    return { error: 'invalid_sched_mode', message: 'schedMode 仅支持 auto / manual / default' };
+  }
+  const mode = schedMode || 'auto';
+  let checkInTime = body && typeof body.checkInTime === 'string' ? body.checkInTime.trim() : '';
+  if (mode === 'manual') {
+    if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(checkInTime)) {
+      return { error: 'invalid_time', message: '手动模式必须提供合法时间（HH:MM，24 小时制）' };
+    }
+  }
+  // auto / default 下 checkInTime 由系统决定，不强校验；透传（可能为空）
+  return { schedMode: mode, checkInTime };
+}
 
 // 账号列表（cookie 遮罩）
 router.get('/', authRequired, (req, res) => {
@@ -18,6 +37,8 @@ router.post('/', authRequired, async (req, res) => {
   if (typeof cookie !== 'string' || !cookie.trim()) {
     return res.status(400).json({ error: 'missing_cookie', message: 'cookie 必填且为字符串' });
   }
+  const sched = normalizeSchedule(req.body);
+  if (sched.error) return res.status(400).json(sched);
   const clean = (v, max = 64) => (typeof v === 'string' ? v.slice(0, max) : ''); // S9：类型/长度约束
   const db = load();
   let info = {};
@@ -36,8 +57,14 @@ router.post('/', authRequired, async (req, res) => {
     vip: !!info.vip,
     streak: 0,
     totalClockIn: 0,
+    schedMode: sched.schedMode,
+    checkInTime: sched.checkInTime,
     createdAt: new Date().toISOString()
   };
+  // auto 模式：固化系统分配的分散时间（便于展示与统计）
+  if (user.schedMode === 'auto') {
+    user.checkInTime = resolvedCheckInTime(user);
+  }
   db.users.push(user);
   await withWriteLock(() => persist());
   res.json({ ...user, cookie: maskCookie(user.cookie) });
@@ -51,14 +78,26 @@ router.get('/:id', authRequired, (req, res) => {
   res.json({ ...u, cookie: maskCookie(u.cookie) });
 });
 
-// 更新账号（含换 cookie 时刷新资料）
+// 更新账号（含换 cookie 时刷新资料、设置签到时间）
 router.put('/:id', authRequired, async (req, res) => {
   const db = load();
   const u = db.users.find((x) => x.id === req.params.id);
   if (!u) return res.status(404).json({ error: 'not_found' });
-  const { nickname, cookie, smzdmId } = req.body || {};
+  const { nickname, cookie, smzdmId, schedMode, checkInTime } = req.body || {};
   if (nickname !== undefined) u.nickname = nickname;
   if (smzdmId !== undefined) u.smzdmId = smzdmId;
+  // 仅当显式传入 schedMode（或同时传了 checkInTime）时才更新签到时间配置
+  if (schedMode !== undefined || checkInTime !== undefined) {
+    const sched = normalizeSchedule({
+      schedMode: schedMode !== undefined ? schedMode : u.schedMode,
+      checkInTime: checkInTime !== undefined ? checkInTime : u.checkInTime
+    });
+    if (sched.error) return res.status(400).json(sched);
+    u.schedMode = sched.schedMode;
+    u.checkInTime = sched.checkInTime;
+    // auto 模式：固化系统分配的分散时间（便于展示与统计）
+    if (u.schedMode === 'auto') u.checkInTime = resolvedCheckInTime(u);
+  }
   if (cookie) {
     u.cookie = cookie;
     try {

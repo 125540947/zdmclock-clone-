@@ -29,6 +29,42 @@
           <span class="tag">✅ 累计 {{ u.totalClockIn }}</span>
           <span class="tag">🍪 {{ u.cookie }}</span>
         </div>
+
+        <!-- 签到时间设置 -->
+        <div class="sched">
+          <div class="sched-head" @click="toggleSched(u.id)">
+            <span>⏰ 签到时间</span>
+            <span class="sched-val">
+              {{ schedLabel(u) }}
+              <span class="caret" :class="{ open: openSched[u.id] }">▾</span>
+            </span>
+          </div>
+          <div v-if="openSched[u.id]" class="sched-body">
+            <div class="seg">
+              <button
+                v-for="m in schedModes"
+                :key="m.value"
+                class="seg-btn"
+                :class="{ active: draft[u.id]?.mode === m.value }"
+                @click="setMode(u, m.value)"
+              >{{ m.label }}</button>
+            </div>
+            <div v-if="draft[u.id]?.mode === 'manual'" class="sched-time">
+              <input type="time" step="60" v-model="draft[u.id].time" />
+              <span class="hint">手动指定每日签到时间（24 小时制）</span>
+            </div>
+            <div v-else-if="draft[u.id]?.mode === 'auto'" class="hint">
+              系统将在 {{ autoWindow }} 窗口内自动分配一个分散的固定时间（当前：{{ u.checkInTime || '—' }}），避免多账号同时签到被限流。
+            </div>
+            <div v-else class="hint">
+              沿用系统默认时间（{{ defaultTime }}），所有默认账号会在同一时刻签到。
+            </div>
+            <button class="btn sm" :disabled="saving === u.id" @click="saveSched(u)">
+              {{ saving === u.id ? '保存中…' : '保存' }}
+            </button>
+          </div>
+        </div>
+
         <div class="acc-actions">
           <button class="btn ghost sm" :disabled="busy === u.id" @click="refresh(u)">刷新资料</button>
           <button class="btn ghost sm danger" @click="remove(u)">删除</button>
@@ -45,13 +81,23 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue';
-import api from '../api/client.js';
+import { ref, reactive, onMounted } from 'vue';
+import api, { updateUser, getClockDistribution } from '../api/client.js';
 
 const users = ref([]);
 const busy = ref('');
+const saving = ref('');
 const toast = ref('');
 const toastType = ref('ok');
+const openSched = reactive({});
+const draft = reactive({});
+const schedModes = [
+  { value: 'auto', label: '系统自动' },
+  { value: 'manual', label: '手动指定' },
+  { value: 'default', label: '系统默认' }
+];
+const autoWindow = ref('08:00~10:59');
+const defaultTime = ref('09:00');
 
 function showToast(m, t = 'ok') {
   toast.value = m;
@@ -82,7 +128,53 @@ async function remove(u) {
   await load();
 }
 
-onMounted(load);
+function schedLabel(u) {
+  const mode = u.schedMode || 'auto';
+  if (mode === 'manual') return '手动 ' + (u.checkInTime || '—');
+  if (mode === 'auto') return '系统自动 ' + (u.checkInTime || '');
+  return '系统默认 ' + defaultTime.value;
+}
+function toggleSched(id) {
+  openSched[id] = !openSched[id];
+  if (openSched[id] && !draft[id]) {
+    const u = users.value.find((x) => x.id === id);
+    draft[id] = { mode: (u && u.schedMode) || 'auto', time: (u && u.checkInTime) || '09:00' };
+  }
+}
+function setMode(u, mode) {
+  if (!draft[u.id]) draft[u.id] = { mode, time: u.checkInTime || '09:00' };
+  draft[u.id].mode = mode;
+  if (mode === 'manual' && !draft[u.id].time) draft[u.id].time = '09:00';
+}
+async function saveSched(u) {
+  saving.value = u.id;
+  try {
+    const d = draft[u.id];
+    const payload = { schedMode: d.mode };
+    if (d.mode === 'manual') payload.checkInTime = d.time;
+    await updateUser(u.id, payload);
+    showToast('签到时间已保存');
+    await load();
+    openSched[u.id] = false;
+  } catch (e) {
+    showToast(e.response?.data?.message || '保存失败', 'err');
+  } finally {
+    saving.value = '';
+  }
+}
+
+onMounted(async () => {
+  await load();
+  try {
+    const { data } = await getClockDistribution({ mode: 'hour' });
+    if (data.autoWindowStart && data.autoWindowEnd) {
+      autoWindow.value = `${data.autoWindowStart}~${data.autoWindowEnd}`;
+    }
+    if (data.defaultCheckInTime) defaultTime.value = data.defaultCheckInTime;
+  } catch {
+    /* 后台接口不可用不影响账号列表 */
+  }
+});
 </script>
 
 <style scoped>
@@ -146,6 +238,82 @@ onMounted(load);
   padding: 9px 13px;
   font-size: 13px;
   border-radius: 11px;
+}
+.sched {
+  margin: 12px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.02);
+  overflow: hidden;
+}
+.sched-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 11px 13px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+}
+.sched-val {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+  font-weight: 500;
+}
+.caret {
+  transition: transform 0.2s;
+}
+.caret.open {
+  transform: rotate(180deg);
+}
+.sched-body {
+  padding: 0 13px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+.seg {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.seg-btn {
+  flex: 1;
+  min-width: 84px;
+  padding: 9px 8px;
+  font-size: 13px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.seg-btn.active {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: rgba(255, 208, 107, 0.1);
+}
+.sched-time {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.sched-time input[type='time'] {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+}
+.hint {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.5;
 }
 .btn.danger {
   color: #ffb3ac;

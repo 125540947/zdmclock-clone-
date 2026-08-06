@@ -106,7 +106,7 @@ export function tick() {
       if (!cronMatch(t.cron, now)) continue;
       if (lastFiredMinute[t.id] === minuteKey) continue; // 本分钟已触发，跳过
       lastFiredMinute[t.id] = minuteKey;
-      const job = runTask(t, db)
+      const job = runTask(t, db, { scheduled: true })
         .then((r) => {
           // 多账号部分成功（partial）视为完成（绿色），仅全部失败才标 error（红色）
           const ok = r.ok || r.partial;

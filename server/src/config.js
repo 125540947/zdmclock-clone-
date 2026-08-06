@@ -50,4 +50,13 @@ export const config = {
   // 单次签到失败重试：应对频率限制 / 网络抖动等瞬时错误（指数退避）。
   clockRetry: Number(process.env.CLOCK_RETRY || 2),
   clockRetryBaseMs: Number(process.env.CLOCK_RETRY_BASE_MS || 2000),
+  // 签到时间调度：
+  // - defaultCheckInTime：schedMode='default' 账号（沿用旧版"统一 09:00"）的签到时间
+  // - autoWindowStart/End：schedMode='auto' 账号由系统在该窗口内确定性分散分配一个固定时间
+  // - clockTaskCron：每日签到任务的触发 cron；设为每分钟轮询 '* * * * *'，
+  //   由调度器按各账号个人时间过滤执行（而非一次性全员签到）
+  defaultCheckInTime: process.env.DEFAULT_CHECKIN_TIME || '09:00',
+  autoWindowStart: process.env.AUTO_WINDOW_START || '08:00',
+  autoWindowEnd: process.env.AUTO_WINDOW_END || '10:59',
+  clockTaskCron: process.env.CLOCK_TASK_CRON || '* * * * *',
 };

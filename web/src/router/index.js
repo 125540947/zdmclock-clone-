@@ -6,6 +6,7 @@ import History from '../views/History.vue';
 import Tasks from '../views/Tasks.vue';
 import Manage from '../views/Manage.vue';
 import Admin from '../views/Admin.vue';
+import ClockDistribution from '../views/ClockDistribution.vue';
 import More from '../views/More.vue';
 import Placeholder from '../views/Placeholder.vue';
 // 新增真实页面
@@ -27,6 +28,7 @@ const routes = [
   { path: '/tasks', name: 'tasks', component: Tasks, meta: { title: '自动任务', icon: '⚙️' } },
   { path: '/manage', name: 'manage', component: Manage, meta: { title: '运行台', icon: '🛠️' } },
   { path: '/admin', name: 'admin', component: Admin, meta: { title: '管理后台', icon: '📊' } },
+  { path: '/admin/distribution', name: 'distribution', component: ClockDistribution, meta: { title: '签到分布', icon: '📈' } },
   { path: '/more', name: 'more', component: More, meta: { title: '全部模块', icon: '🧭' } },
 
   // 真实页面（原占位路由）

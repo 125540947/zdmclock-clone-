@@ -127,6 +127,55 @@ test('requireAuth=true 时未带 Token 的管理接口返回 401，带 Token 则
   config.requireAuth = false; // 还原，避免影响其它用例
 });
 
+test('POST /api/users manual 模式非法时间返回 400 invalid_time', async () => {
+  const { status, data } = await j('POST', '/api/users', {
+    nickname: '坏时间',
+    cookie: 'ck_test',
+    schedMode: 'manual',
+    checkInTime: '25:99'
+  });
+  assert.equal(status, 400);
+  assert.equal(data.error, 'invalid_time');
+});
+
+test('POST /api/users auto 模式返回 200 且分配了窗口内时间', async () => {
+  const { status, data } = await j('POST', '/api/users', {
+    nickname: '自动账号',
+    cookie: 'ck_auto',
+    schedMode: 'auto'
+  });
+  assert.equal(status, 200);
+  assert.equal(data.schedMode, 'auto');
+  assert.ok(/^([01]?\d|2[0-3]):[0-5]\d$/.test(data.checkInTime), 'auto 应固化一个合法时间');
+});
+
+test('PUT /api/users/:id 改 manual + 合法时间返回 200', async () => {
+  const created = await j('POST', '/api/users', { nickname: '待改', cookie: 'ck_tmp', schedMode: 'auto' });
+  const id = created.data.id;
+  const { status, data } = await j('PUT', '/api/users/' + id, { schedMode: 'manual', checkInTime: '07:15' });
+  assert.equal(status, 200);
+  assert.equal(data.schedMode, 'manual');
+  assert.equal(data.checkInTime, '07:15');
+});
+
+test('GET /api/admin/clock-distribution 返回时段桶与总数', async () => {
+  // 先建一个 manual 09:30 的账号，便于断言落在对应时段桶
+  const created = await j('POST', '/api/users', { nickname: '分布账号', cookie: 'ck_dist', schedMode: 'manual', checkInTime: '09:30' });
+  const id = created.data.id;
+  const { status, data } = await j('GET', '/api/admin/clock-distribution?mode=custom&start=09:00&end=10:00&bucketMinutes=30');
+  assert.equal(status, 200);
+  assert.equal(data.mode, 'custom');
+  assert.equal(data.bucketMinutes, 30);
+  assert.ok(Array.isArray(data.buckets));
+  assert.ok(data.totalUsers >= 1);
+  // 该账号（manual 09:30）应落在 09:30 桶（custom 区间 09:00~10:00 / 30 分钟 → 两个桶：09:00、09:30）
+  const slot = data.buckets.find((b) => b.accounts.some((a) => a.id === id));
+  assert.ok(slot, '应存在包含该账号的时段桶');
+  assert.equal(slot.slot, '09:30');
+  assert.ok(slot.accounts.some((a) => a.id === id && a.checkInTime === '09:30'));
+  assert.equal(slot.scheduledCount, slot.accounts.length);
+});
+
 test('关闭测试服务器', () => {
   server.close();
   assert.ok(true);

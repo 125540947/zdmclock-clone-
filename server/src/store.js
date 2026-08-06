@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
+import { resolvedCheckInTime, assignAutoCheckInTime } from './clockSchedule.js';
 
 const DB_FILE = path.join(config.dataDir, 'db.json');
 
@@ -11,7 +12,7 @@ function defaultData() {
     baoliao: [],
     gptDrafts: [],
     tasks: [
-      { id: 't_clock', type: 'clock', name: '每日签到', icon: '📅', enabled: true, cron: '0 9 * * *', lastRun: null, lastResult: null, status: 'idle' },
+      { id: 't_clock', type: 'clock', name: '每日签到', icon: '📅', enabled: true, cron: '* * * * *', lastRun: null, lastResult: null, status: 'idle' },
       { id: 't_comment', type: 'comment', name: '自动评论', icon: '💬', enabled: false, cron: '0 10 * * *', articleId: '', articleSource: 'manual', lastRun: null, lastResult: null, status: 'idle' },
       { id: 't_favorite', type: 'favorite', name: '自动收藏', icon: '⭐', enabled: false, cron: '0 11 * * *', articleId: '', articleSource: 'manual', lastRun: null, lastResult: null, status: 'idle' },
       { id: 't_point', type: 'point', name: '自动点赞', icon: '👍', enabled: false, cron: '0 12 * * *', articleId: '', articleSource: 'manual', lastRun: null, lastResult: null, status: 'idle' },
@@ -118,6 +119,28 @@ export function load() {
     cache.settings.push && typeof cache.settings.push === 'object'
       ? { ...d.settings.push, ...cache.settings.push }
       : { ...d.settings.push };
+  // 用户签到时间字段迁移：新增 schedMode / checkInTime。
+  // 旧账号（无 schedMode）默认设为 'auto'，并由系统在其窗口内确定性分配一个分散的固定时间，
+  // 直接解决"多账号同一秒扎堆签到"触发限流/漏签的问题。新账号在录入时即写入这两个字段。
+  let migrated = false;
+  cache.users.forEach((u) => {
+    if (!u.schedMode) {
+      u.schedMode = 'auto';
+      migrated = true;
+    }
+    if (u.schedMode === 'auto') {
+      // 固化系统分配的时间（确定性、稳定），便于后台展示与统计；缺省时按 userId 哈希重算
+      u.checkInTime = resolvedCheckInTime(u);
+    }
+  });
+  // t_clock 任务 cron 迁移：旧版 '0 9 * * *'（全员 09:00 一次性签到）改为每分钟轮询，
+  // 由调度器按各账号个人时间过滤执行，从而实现错峰。仅当仍是旧默认值时迁移，避免覆盖用户自定义。
+  const clockTask = cache.tasks.find((t) => t.id === 't_clock');
+  if (clockTask && clockTask.cron === '0 9 * * *') {
+    clockTask.cron = config.clockTaskCron;
+    migrated = true;
+  }
+  if (migrated) persist(); // 仅在实际发生迁移时落盘一次（启动期一次性）
   return cache;
 }
 

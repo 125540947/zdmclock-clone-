@@ -56,3 +56,20 @@ export async function refreshBaoliao(limit = 20) {
   const { data } = await api.post('/baoliao/refresh', { limit });
   return data;
 }
+
+// ===== 账号签到时间设置 =====
+export async function updateUser(id, payload) {
+  const { data } = await api.put(`/users/${id}`, payload);
+  return data;
+}
+
+// ===== 管理后台：签到时间分布统计 =====
+export async function getClockDistribution(params = {}) {
+  const qs = new URLSearchParams();
+  if (params.mode) qs.set('mode', params.mode);
+  if (params.bucketMinutes) qs.set('bucketMinutes', String(params.bucketMinutes));
+  if (params.start) qs.set('start', params.start);
+  if (params.end) qs.set('end', params.end);
+  const { data } = await api.get('/admin/clock-distribution' + (qs.toString() ? `?${qs}` : ''));
+  return data;
+}

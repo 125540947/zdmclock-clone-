@@ -1,9 +1,10 @@
 import { smzdm } from './smzdm/adapter.js';
 import { applyClock } from './clockCore.js';
-import { withWriteLock, persist, genId, mergeBaoliao } from './store.js';
+import { withWriteLock, persist, genId, mergeBaoliao, todayStr } from './store.js';
 import { normalizeArticleId } from './smzdm/articleId.js';
 import { generateReply } from './gptAdapter.js';
 import { config } from './config.js';
+import { resolvedCheckInTime, fmtHM } from './clockSchedule.js';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -230,9 +231,30 @@ export async function runTask(task, db, opts = {}) {
   if (task.type === 'gpt') return runGptBatch(task, db);
   if (task.type === 'fetch') return runFetch(task, db);
 
-  const users = resolveUsers(db, opts);
+  let users = resolveUsers(db, opts);
   if (!users.length) {
     return { ok: false, error: 'no_user', message: '请先添加 smzdm 账号' };
+  }
+
+  // 定时调度（scheduled）场景下的「每日签到」：仅对"当前分钟到达个人设定签到时间"
+  // 且今日尚未签到的账号执行，实现账号级错峰（手动"运行"不传该标志，仍对所有选中账号执行）。
+  if (opts.scheduled && task.type === 'clock') {
+    const nowHM = fmtHM(new Date().getHours(), new Date().getMinutes());
+    const today = todayStr();
+    const doneToday = new Set(
+      db.clockRecords.filter((r) => r.date === today).map((r) => r.userId)
+    );
+    const due = users.filter(
+      (u) => resolvedCheckInTime(u) === nowHM && !doneToday.has(u.id)
+    );
+    if (!due.length) {
+      return {
+        ok: true,
+        skipped: true,
+        message: `当前时段(${nowHM})无账号到达签到时间或未签到`
+      };
+    }
+    users = due;
   }
 
   // 逐账号执行并聚合（clock / comment / favorite / point）
