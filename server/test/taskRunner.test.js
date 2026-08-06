@@ -7,8 +7,12 @@ import path from 'node:path';
 
 process.env.DATA_DIR = path.join(os.tmpdir(), 'zdm-task-' + process.pid + '-' + Date.now());
 process.env.GPT_API_KEY = 'test-key'; // 使 config.gptEnabled=true，runGptBatch 真实路径可达
-const { runTask, collectArticleIds, resolveUsers } = await import('../src/taskRunner.js');
+process.env.CLOCK_STAGGER_MS = '0'; // 测试关闭错峰，保证批量用例快速且确定
+process.env.CLOCK_STAGGER_JITTER_MS = '0';
+const { runTask, collectArticleIds, resolveUsers, runClockForUser } = await import('../src/taskRunner.js');
 const { load } = await import('../src/store.js');
+const { config } = await import('../src/config.js');
+const { smzdm } = await import('../src/smzdm/adapter.js');
 
 const realFetch = globalThis.fetch;
 function mockFetchOnce(body) {
@@ -93,6 +97,75 @@ test('runTask 多账号签到全成功：ok=true 且聚合两人', async () => {
   assert.equal(r.partial, false);
   assert.match(r.message, /2 个账号/);
   assert.match(r.message, /2 成功/);
+});
+
+test('runClockForUser 瞬时失败按指数退避重试后成功', async () => {
+  const orig = smzdm.doClockIn;
+  let calls = 0;
+  smzdm.doClockIn = async () => {
+    calls += 1;
+    if (calls < 3) throw new Error('频率限制'); // 前两次瞬时失败
+    return { success: true, points: 7 };
+  };
+  const prevRetry = config.clockRetry;
+  const prevBase = config.clockRetryBaseMs;
+  config.clockRetry = 2; // 最多重试 2 次（共 3 次尝试）
+  config.clockRetryBaseMs = 0; // 测试不去等退避
+  try {
+    const db = { users: [{ id: 'u1', cookie: 'c' }], clockRecords: [] };
+    const r = await runClockForUser(db, db.users[0]);
+    assert.equal(r.ok, true);
+    assert.equal(calls, 3); // 重试补齐到成功
+    assert.match(r.message, /签到成功/);
+  } finally {
+    config.clockRetry = prevRetry;
+    config.clockRetryBaseMs = prevBase;
+    smzdm.doClockIn = orig;
+  }
+});
+
+test('runClockForUser 全部重试失败则 ok=false', async () => {
+  const orig = smzdm.doClockIn;
+  let calls = 0;
+  smzdm.doClockIn = async () => {
+    calls += 1;
+    throw new Error('网络超时');
+  };
+  const prevRetry = config.clockRetry;
+  const prevBase = config.clockRetryBaseMs;
+  config.clockRetry = 2;
+  config.clockRetryBaseMs = 0;
+  try {
+    const db = { users: [{ id: 'u1', cookie: 'c' }], clockRecords: [] };
+    const r = await runClockForUser(db, db.users[0]);
+    assert.equal(r.ok, false);
+    assert.equal(calls, 3); // 1 次 + 2 次重试
+    assert.match(r.message, /网络超时/);
+  } finally {
+    config.clockRetry = prevRetry;
+    config.clockRetryBaseMs = prevBase;
+    smzdm.doClockIn = orig;
+  }
+});
+
+test('runTask 多账号签到按错峰间隔分散执行', async () => {
+  // 临时开启错峰，验证相邻账号之间存在等待（避免同秒扎堆）
+  const prevStagger = config.clockStaggerMs;
+  const prevJitter = config.clockStaggerJitterMs;
+  config.clockStaggerMs = 150;
+  config.clockStaggerJitterMs = 0;
+  const db = { users: [{ id: 'u1', cookie: 'c' }, { id: 'u2', cookie: 'c' }, { id: 'u3', cookie: 'c' }], clockRecords: [] };
+  try {
+    const start = Date.now();
+    const r = await runTask({ type: 'clock', name: '签到' }, db, {});
+    const elapsed = Date.now() - start;
+    assert.equal(r.ok, true);
+    // 2 个间隔 × 150ms = 至少 300ms（取保守阈值 260ms 防抖动）
+    assert.ok(elapsed >= 260, `expected stagger delay, got ${elapsed}ms`);
+  } finally {
+    config.clockStaggerMs = prevStagger;
+    config.clockStaggerJitterMs = prevJitter;
+  }
 });
 
 test('还原全局 fetch', () => {

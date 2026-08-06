@@ -3,6 +3,9 @@ import { applyClock } from './clockCore.js';
 import { withWriteLock, persist, genId, mergeBaoliao } from './store.js';
 import { normalizeArticleId } from './smzdm/articleId.js';
 import { generateReply } from './gptAdapter.js';
+import { config } from './config.js';
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // 统一的任务执行逻辑：手动触发（POST /api/tasks/:id/run）与定时调度（scheduler）共用，
 // 避免逻辑重复。只负责「调用适配器执行动作」，不负责写库——
@@ -80,17 +83,39 @@ async function runEngagement(task, db, user, opts) {
   };
 }
 
-// 单账号签到（含幂等落库）：返回 { ok, message, duplicate }
-async function runClockForUser(db, user) {
-  const r = await smzdm.doClockIn(user.cookie);
-  if (!r.success) return { ok: false, message: `签到失败：${r.message}` };
-  const res = await withWriteLock(() => {
-    const c = applyClock(user, r, db);
-    if (!c.duplicate) persist();
-    return c;
-  });
-  if (res.duplicate) return { ok: true, duplicate: true, message: '今日已签到' };
-  return { ok: true, message: `签到成功，+${r.points} 金币` };
+// 单账号签到（含幂等落库）：返回 { ok, message, duplicate, record? }
+// 带失败重试：网络抖动 / 频率限制等瞬时错误按指数退避重试，减少漏签。
+// opts.maxRetries / opts.retryBaseMs 可在测试或特殊场景覆盖 config 默认值。
+export async function runClockForUser(db, user, opts = {}) {
+  const maxRetries = opts.maxRetries ?? config.clockRetry;
+  const retryBaseMs = opts.retryBaseMs ?? config.clockRetryBaseMs;
+  let lastMessage = '签到失败';
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (attempt > 0) {
+      // 指数退避：1x, 2x, 4x ... 避免重试瞬间再次撞限流
+      const backoff = retryBaseMs * Math.pow(2, attempt - 1);
+      await sleep(backoff);
+    }
+    try {
+      const r = await smzdm.doClockIn(user.cookie);
+      if (!r.success) {
+        lastMessage = `签到失败：${r.message}`;
+        // 业务失败（未登录/已签/频率限制等）交由重试循环；最后一次仍失败则上报
+        continue;
+      }
+      const res = await withWriteLock(() => {
+        const c = applyClock(user, r, db);
+        if (!c.duplicate) persist();
+        return c;
+      });
+      if (res.duplicate) return { ok: true, duplicate: true, message: '今日已签到' };
+      return { ok: true, message: `签到成功，+${r.points} 金币`, record: res.record };
+    } catch (e) {
+      lastMessage = `签到异常：${e.message}`;
+      // 网络/适配器异常，进入重试
+    }
+  }
+  return { ok: false, message: lastMessage };
 }
 
 // GPT 定时批量生成：从好价列表取内容 → 大模型生成评论草稿（可选自动发布为评论）
@@ -213,8 +238,15 @@ export async function runTask(task, db, opts = {}) {
   // 逐账号执行并聚合（clock / comment / favorite / point）
   const parts = [];
   let okCount = 0;
-  for (const user of users) {
+  for (let i = 0; i < users.length; i++) {
+    const user = users[i];
     const who = user.nickname || user.smzdmId || user.id;
+    // 错峰：从第 2 个账号起，加入固定间隔 + 随机抖动，避免多账号同秒集中请求
+    // smzdm 触发限流/风控导致漏签。单账号场景（i===0）无等待。
+    if (i > 0) {
+      const jitter = Math.floor(Math.random() * (config.clockStaggerJitterMs + 1));
+      await sleep(config.clockStaggerMs + jitter);
+    }
     try {
       const r =
         task.type === 'clock'

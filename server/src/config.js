@@ -43,4 +43,11 @@ export const config = {
   pushWebhook: process.env.PUSH_WEBHOOK || '',
   dataDir: path.resolve(__dirname, '..', process.env.DATA_DIR || './data'),
   webDist: path.resolve(__dirname, '..', process.env.WEB_DIST || '../web/dist'),
+  // 多账号签到错峰：第 2 个起每个账号额外等待「固定间隔 + 随机抖动」毫秒，
+  // 避免同一秒扎堆请求 smzdm 触发限流/风控导致漏签。设为 0 可关闭错峰。
+  clockStaggerMs: Number(process.env.CLOCK_STAGGER_MS || 800),
+  clockStaggerJitterMs: Number(process.env.CLOCK_STAGGER_JITTER_MS || 2000),
+  // 单次签到失败重试：应对频率限制 / 网络抖动等瞬时错误（指数退避）。
+  clockRetry: Number(process.env.CLOCK_RETRY || 2),
+  clockRetryBaseMs: Number(process.env.CLOCK_RETRY_BASE_MS || 2000),
 };
