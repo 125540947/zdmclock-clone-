@@ -16,6 +16,7 @@ import UserInfo from '../views/UserInfo.vue';
 import TaskCenter from '../views/TaskCenter.vue';
 import Baoliao from '../views/Baoliao.vue';
 import GptReply from '../views/GptReply.vue';
+import Notify from '../views/Notify.vue';
 
 const routes = [
   { path: '/', redirect: '/userclock' },
@@ -53,6 +54,7 @@ const routes = [
   },
   { path: '/baoliao', name: 'baoliao', component: Baoliao, meta: { title: '好价爆料', icon: '📣' } },
   { path: '/gptReply', name: 'gptReply', component: GptReply, meta: { title: 'GPT 回复', icon: '🤖' } },
+  { path: '/notify', name: 'notify', component: Notify, meta: { title: '推送通知', icon: '🔔' } },
 
   // 长尾变体重定向到就近真实页
   { path: '/commentArticle', redirect: '/comment' },

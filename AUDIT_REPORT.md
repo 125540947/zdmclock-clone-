@@ -164,3 +164,34 @@
 - `baoliao` 来源执行评论/收藏/点赞，是对**你自己发布的好价**操作；real 适配器接口路径仍为社区经验值（best-effort、未验证），需真实账号实测。
 - GPT 批量生成依赖服务端 `GPT_API_KEY`（及可选 `GPT_API_BASE`/`GPT_MODEL`）+ 前端「自动回复」启用，否则任务会失败（已在前端提示）。
 - `autoPost` 自动发布会真实对外发评论，请仅在自有账号、知悉风险下启用。
+
+---
+
+## 十、推送通知功能实施记录（第五轮，2026-08-06）
+
+> 用户选择补齐「③推送通知」：签到 / 任务执行结果主动推送到外部渠道。
+
+### 实现
+- **`server/src/notifier.js`（新建）**：轻量推送模块，best-effort（异常一律捕获，绝不阻塞主流程）。支持四种渠道：
+  - `serverchan`：Server酱 Turbo（`sctapi.ftqq.com/{key}.send`）；
+  - `bark`：iOS（`api.day.app/{key}/标题/内容`，base 可经 webhook 覆盖为自建）；
+  - `telegram`：Bot（`token` + `chatId`）；
+  - `webhook`：自定义 POST JSON（企业微信 / 钉钉 / 任意系统）。
+  - 导出 `resolvePushSettings(db)`（db 缺省回退到 env）、`sendPush(settings, payload)`、`notify(db, payload)`。
+- **`server/src/config.js`**：新增 `PUSH_CHANNEL / PUSH_TOKEN / PUSH_CHAT_ID / PUSH_WEBHOOK` 四个环境变量作为初始默认。
+- **`server/src/store.js`**：默认 `settings.push`（channel/token/chatId/webhook/enabled，由 env 自动播种），`load()` 合并补齐（兼容旧库）。
+- **`server/src/routes/notify.js`（新建）**：`GET /config`、`PUT /config`（校验 channel∈{none,serverchan,bark,telegram,webhook}）、`POST /test`（发测试推送验证）；均 `authRequired`。
+- **`server/src/index.js`**：注册 `app.use('/api/notify', notifyRoutes)`。
+- **业务接入**：`clock.js`(/do)、`tasks.js`(/:id/run)、`scheduler.js`(任务结果) 执行后均 `notify(...).catch(()=>{})` 推送成功/失败/异常（fire-and-forget）。
+- **前端 `web/src/views/Notify.vue`（新建）**：渠道切换 + 令牌/Chat ID/Webhook 条件输入 + 启用开关 + 保存 + 发送测试；`router` 加 `/notify`，`More.vue` 加入「推送通知」入口。
+- **`.env.example`**：补充推送段说明。
+
+### 验证
+- `node --check` 全量通过；`clockCore.test.js` 8 用例全绿。
+- notifier 冒烟：channel=none→`channel_none`、serverchan 空 token→`missing_token`、db 配置正确解析、env 回退正确（均不抛异常）。
+- 前端重建 `web/dist`（新 `index-BpTOrU8S.js` / `index-DkZTg-0_.css`）。
+
+### 注意事项
+- 推送为尽力而为：渠道拒绝 / 超时（10s）/ 网络异常都不会影响签到与任务主流程，仅静默跳过或在 UI 显示错误。
+- Server酱 / Bark / Telegram 为第三方服务，令牌由用户自填，本工具不做存储转发之外的处理。
+- 若用环境变量部署（`PUSH_CHANNEL`+凭据），首次运行即生效，UI 配置会持久化覆盖。

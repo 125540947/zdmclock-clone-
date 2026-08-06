@@ -20,7 +20,15 @@ function defaultData() {
     ],
     // GPT 自动回复配置（前端开关与提示词存这里，后端据此是否真正调用大模型）
     settings: {
-      gpt: { enabled: false, target: 'comment', tone: 'friendly', prompt: '' }
+      gpt: { enabled: false, target: 'comment', tone: 'friendly', prompt: '' },
+      // 推送通知配置（渠道 + 令牌）。env 的 PUSH_* 作为初始默认值，UI 可覆盖并持久化到 db
+      push: {
+        enabled: !!(config.pushChannel && config.pushChannel !== 'none' && (config.pushToken || config.pushWebhook || config.pushChatId)),
+        channel: config.pushChannel || 'serverchan',
+        token: config.pushToken || '',
+        chatId: config.pushChatId || '',
+        webhook: config.pushWebhook || ''
+      }
     },
     meta: { version: 1 }
   };
@@ -97,6 +105,11 @@ export function load() {
     cache.settings.gpt && typeof cache.settings.gpt === 'object'
       ? { ...d.settings.gpt, ...cache.settings.gpt }
       : { ...d.settings.gpt };
+  // settings.push 合并：保留已有配置，缺省补齐，避免旧库无 push 字段时报错
+  cache.settings.push =
+    cache.settings.push && typeof cache.settings.push === 'object'
+      ? { ...d.settings.push, ...cache.settings.push }
+      : { ...d.settings.push };
   return cache;
 }
 

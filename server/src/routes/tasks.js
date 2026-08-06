@@ -3,6 +3,7 @@ import { load, persist, todayStr } from '../store.js';
 import { runTask } from '../taskRunner.js';
 import { validateCron } from '../scheduler.js';
 import { authRequired } from '../auth.js';
+import { notify } from '../notifier.js';
 
 const router = Router();
 
@@ -71,13 +72,18 @@ router.post('/:id/run', authRequired, async (req, res) => {
   const { userId, count, articleId, articleSource } = req.body || {};
   try {
     const r = await runTask(t, db, { userId, count, articleId, articleSource });
-    if (!r.ok) return res.status(400).json({ error: r.error, message: r.message });
+    if (!r.ok) {
+      notify(db, { title: `❌ 任务失败 · ${t.name}`, message: r.message }).catch(() => {});
+      return res.status(400).json({ error: r.error, message: r.message });
+    }
     t.lastRun = todayStr();
     t.lastResult = r.result.message;
     t.status = 'done';
     persist();
+    notify(db, { title: `✅ 任务完成 · ${t.name}`, message: r.result.message }).catch(() => {});
     res.json({ ok: true, result: r.result });
   } catch (e) {
+    notify(db, { title: `❌ 任务异常 · ${t.name}`, message: e.message }).catch(() => {});
     t.lastResult = e.message;
     t.status = 'error';
     persist();

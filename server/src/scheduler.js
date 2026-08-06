@@ -1,5 +1,6 @@
 import { load, persist, withWriteLock, todayStr } from './store.js';
 import { runTask } from './taskRunner.js';
+import { notify } from './notifier.js';
 
 // 轻量定时调度器（零依赖）：
 // - 内置一个最小 cron 求值器，支持 * / */n / a-b / a,b
@@ -118,6 +119,11 @@ function tick() {
             }
             persist();
           });
+          // 推送通知（best-effort，失败不影响主流程）
+          notify(db, {
+            title: r.ok ? `✅ 任务完成 · ${t.name}` : `❌ 任务失败 · ${t.name}`,
+            message: r.ok ? r.result.message : r.message
+          }).catch(() => {});
         })
         .catch((e) => {
           withWriteLock(() => {
@@ -125,6 +131,7 @@ function tick() {
             t.status = 'error';
             persist();
           });
+          notify(db, { title: `❌ 任务异常 · ${t.name}`, message: e.message }).catch(() => {});
         });
     }
   } catch (e) {

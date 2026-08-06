@@ -3,6 +3,7 @@ import { load, persist, todayStr, localDateStr, withWriteLock } from '../store.j
 import { applyClock } from '../clockCore.js';
 import { smzdm } from '../smzdm/adapter.js';
 import { authRequired } from '../auth.js';
+import { notify } from '../notifier.js';
 
 const router = Router();
 
@@ -64,9 +65,13 @@ router.post('/do', authRequired, async (req, res) => {
   const user = userId ? db.users.find((u) => u.id === userId) : db.users[0];
   if (!user) return res.status(400).json({ error: 'no_user', message: '请先添加 smzdm 账号' });
 
+  const who = user.nickname || '账号';
   try {
     const r = await smzdm.doClockIn(user.cookie);
-    if (!r.success) return res.status(502).json({ error: 'clock_failed', message: r.message });
+    if (!r.success) {
+      notify(db, { title: '❌ 签到失败', message: `${who}：${r.message}` }).catch(() => {});
+      return res.status(502).json({ error: 'clock_failed', message: r.message });
+    }
     // 写锁内完成"幂等检查 + 落库 + 更新用户"，避免并发双重签到（N1 + R2）
     const result = await withWriteLock(() => {
       const res = applyClock(user, r, db);
@@ -74,13 +79,18 @@ router.post('/do', authRequired, async (req, res) => {
       persist();
       return res;
     });
-    if (result.duplicate) return res.status(409).json({ error: 'already', message: '今日已签到' });
+    if (result.duplicate) {
+      notify(db, { title: 'ℹ️ 今日已签到', message: who }).catch(() => {});
+      return res.status(409).json({ error: 'already', message: '今日已签到' });
+    }
+    notify(db, { title: '✅ 签到成功', message: `${who} ${r.message}` }).catch(() => {});
     res.json({
       ok: true,
       record: result.record,
       user: { id: user.id, streak: user.streak, points: user.points, total: user.totalClockIn }
     });
   } catch (e) {
+    notify(db, { title: '❌ 签到异常', message: `${who}：${e.message}` }).catch(() => {});
     res.status(502).json({ error: 'adapter_error', message: e.message });
   }
 });

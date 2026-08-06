@@ -34,6 +34,12 @@ export const config = {
   gptApiBase: (process.env.GPT_API_BASE || 'https://api.openai.com/v1').replace(/\/$/, ''),
   gptModel: process.env.GPT_MODEL || 'gpt-4o-mini',
   gptEnabled: !!process.env.GPT_API_KEY,
+  // 推送通知（可选）：渠道 + 凭据，作为初始默认；UI 配置会持久化覆盖（见 db.settings.push）
+  // channel: serverchan | bark | telegram | webhook；留空表示未配置
+  pushChannel: process.env.PUSH_CHANNEL || '',
+  pushToken: process.env.PUSH_TOKEN || '',
+  pushChatId: process.env.PUSH_CHAT_ID || '',
+  pushWebhook: process.env.PUSH_WEBHOOK || '',
   dataDir: path.resolve(__dirname, '..', process.env.DATA_DIR || './data'),
   webDist: path.resolve(__dirname, '..', process.env.WEB_DIST || '../web/dist'),
 };
