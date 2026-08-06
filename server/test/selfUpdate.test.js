@@ -7,6 +7,7 @@ import {
   checkUpdate,
   runUpdate,
   scheduleRestart,
+  shouldReexec,
   updateSupported
 } from '../src/selfUpdate.js';
 
@@ -146,5 +147,30 @@ test('scheduleRestart：NODE_ENV=test 时不真正重启进程', () => {
   } finally {
     if (prev === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = prev;
+  }
+});
+
+test('shouldReexec：决策矩阵（测试环境/ supervisor 托管）', () => {
+  const prev = { ...process.env };
+  try {
+    process.env.NODE_ENV = 'test';
+    assert.equal(shouldReexec(), false, '测试环境不重启');
+
+    process.env.NODE_ENV = 'production';
+    delete process.env.SELF_UPDATE_NO_REEXEC;
+    assert.equal(shouldReexec(), true, '生产 + 未设标志 → 自行 re-exec');
+
+    process.env.SELF_UPDATE_NO_REEXEC = '1';
+    assert.equal(shouldReexec(), false, 'SELF_UPDATE_NO_REEXEC=1 → 交 supervisor');
+    process.env.SELF_UPDATE_NO_REEXEC = 'true';
+    assert.equal(shouldReexec(), false);
+    process.env.SELF_UPDATE_NO_REEXEC = 'yes';
+    assert.equal(shouldReexec(), false);
+    process.env.SELF_UPDATE_NO_REEXEC = '0';
+    assert.equal(shouldReexec(), true, '=0 视为未托管');
+  } finally {
+    process.env.NODE_ENV = prev.NODE_ENV;
+    if (prev.SELF_UPDATE_NO_REEXEC === undefined) delete process.env.SELF_UPDATE_NO_REEXEC;
+    else process.env.SELF_UPDATE_NO_REEXEC = prev.SELF_UPDATE_NO_REEXEC;
   }
 });

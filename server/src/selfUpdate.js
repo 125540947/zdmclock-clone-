@@ -217,10 +217,25 @@ export async function runUpdate({ restart = true, runner = run } = {}) {
   };
 }
 
+// 是否应由应用自身 re-exec 重启（纯决策，便于测试）。
+//  - 测试环境（NODE_ENV=test）不重启，避免误杀测试进程。
+//  - 若由 supervisor（systemd / pm2 / docker）托管，设 SELF_UPDATE_NO_REEXEC=1 后返回 false，
+//    改为直接退出、交给 supervisor 拉起，避免孤儿进程 / 双进程，并让崩溃可被自动恢复（缓解 H1）。
+export function shouldReexec() {
+  if (process.env.NODE_ENV === 'test') return false;
+  const supervised = ['1', 'true', 'yes'].includes(
+    String(process.env.SELF_UPDATE_NO_REEXEC || '').toLowerCase()
+  );
+  return !supervised;
+}
+
 // 自重启：re-exec 当前进程（detached），由新进程接管端口，旧进程退出。
-// 测试环境（NODE_ENV=test）不真正重启，避免误杀测试进程。
 export function scheduleRestart(delayMs = 900) {
-  if (process.env.NODE_ENV === 'test') return;
+  if (!shouldReexec()) {
+    // 交给 supervisor 重启：仅退出，不自己派生子进程。
+    setTimeout(() => process.exit(0), delayMs);
+    return;
+  }
   setTimeout(() => {
     try {
       const child = spawn(process.argv[0], process.argv.slice(1), {
