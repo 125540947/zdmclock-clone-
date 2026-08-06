@@ -26,6 +26,37 @@ const UA =
   '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 const ANDROID_UA = `smzdm_android_V${APP_V} rv:841 (22021211RC;Android12;zh)smzdmapp`;
 
+// 浏览器 UA 池：评论/收藏/点赞/爆料等 www 端点无 app 签名，靠「UA 多样化 + 拟人化间隔」
+// 降低被 smzdm 风控按固定指纹识别为机器的概率（签名对这些 web 接口无意义）。
+const UA_POOL = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 Edg/123.0.0.0',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1'
+];
+
+// 拟人化间隔窗口（毫秒）：评论/收藏/点赞的 count 多次动作之间随机等待，打破背靠背请求的固定时序。
+// 默认 800~2500ms；可用同名环境变量覆盖（过大拖慢，过小无效）。
+const ACTION_JITTER_MIN = Number(process.env.SMZDM_ACTION_JITTER_MIN || 800);
+const ACTION_JITTER_MAX = Number(process.env.SMZDM_ACTION_JITTER_MAX || 2500);
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// 随机取一个浏览器 UA（rng 可注入便于单测）
+export function pickUA(rng = Math.random) {
+  return UA_POOL[Math.floor(rng() * UA_POOL.length)];
+}
+
+// 在 [min, max] 之间取整数毫秒（rng 可注入）
+export function actionJitter(rng = Math.random) {
+  const span = Math.max(0, ACTION_JITTER_MAX - ACTION_JITTER_MIN);
+  return ACTION_JITTER_MIN + Math.floor(rng() * (span + 1));
+}
+
 const ENDPOINTS = {
   userInfo: process.env.SMZDM_API_USERINFO || '/user/',
   checkin: process.env.SMZDM_API_CHECKIN || '/user/checkin',
@@ -252,47 +283,67 @@ export const realAdapter = {
   },
 
   async doComment(cookie, opts = {}) {
+    const req = opts.callImpl || call;
+    const wait = opts.sleepImpl || sleep;
     const articleId = normalizeArticleId(opts.articleId);
     if (!articleId) throw new Error('评论需要 articleId（请在自动任务里填写目标文章ID或链接）');
     const count = Math.min(Math.max(1, Number(opts.count) || 1), 5); // F3：真正循环 count（上限 5），消息如实
     let last;
+    const uas = new Set();
     for (let i = 0; i < count; i++) {
-      last = await call(ENDPOINTS.comment, {
+      if (i > 0) await wait(actionJitter()); // 多次动作之间拟人化随机等待，避免背靠背
+      const ua = pickUA();
+      uas.add(ua);
+      last = await req(ENDPOINTS.comment, {
         method: 'POST',
         cookie,
+        ua,
         body: { article_id: articleId, content: opts.content || '好价，感谢分享！' },
         base: BASE
       });
       assertOk(last, '评论');
     }
-    return { success: true, message: `评论成功 ×${count}（文章 ${articleId}）`, count, articleId };
+    return { success: true, message: `评论成功 ×${count}（文章 ${articleId}）`, count, articleId, uas: [...uas] };
   },
 
   async doFavorite(cookie, opts = {}) {
+    const req = opts.callImpl || call;
+    const wait = opts.sleepImpl || sleep;
     const articleId = normalizeArticleId(opts.articleId);
     if (!articleId) throw new Error('收藏需要 articleId（请在自动任务里填写目标文章ID或链接）');
     const count = Math.min(Math.max(1, Number(opts.count) || 1), 5);
     let last;
+    const uas = new Set();
     for (let i = 0; i < count; i++) {
-      last = await call(ENDPOINTS.favorite, { method: 'POST', cookie, body: { article_id: articleId }, base: BASE });
+      if (i > 0) await wait(actionJitter());
+      const ua = pickUA();
+      uas.add(ua);
+      last = await req(ENDPOINTS.favorite, { method: 'POST', cookie, ua, body: { article_id: articleId }, base: BASE });
       assertOk(last, '收藏');
     }
-    return { success: true, message: `收藏成功 ×${count}（文章 ${articleId}）`, count, articleId };
+    return { success: true, message: `收藏成功 ×${count}（文章 ${articleId}）`, count, articleId, uas: [...uas] };
   },
 
   async doPoint(cookie, opts = {}) {
+    const req = opts.callImpl || call;
+    const wait = opts.sleepImpl || sleep;
     const articleId = normalizeArticleId(opts.articleId);
     if (!articleId) throw new Error('点赞需要 articleId（请在自动任务里填写目标文章ID或链接）');
     const count = Math.min(Math.max(1, Number(opts.count) || 1), 5);
     let last;
+    const uas = new Set();
     for (let i = 0; i < count; i++) {
-      last = await call(ENDPOINTS.point, { method: 'POST', cookie, body: { article_id: articleId }, base: BASE });
+      if (i > 0) await wait(actionJitter());
+      const ua = pickUA();
+      uas.add(ua);
+      last = await req(ENDPOINTS.point, { method: 'POST', cookie, ua, body: { article_id: articleId }, base: BASE });
       assertOk(last, '点赞');
     }
-    return { success: true, message: `点赞成功 ×${count}（文章 ${articleId}）`, count, articleId };
+    return { success: true, message: `点赞成功 ×${count}（文章 ${articleId}）`, count, articleId, uas: [...uas] };
   },
 
-  async submitBaoliao(cookie, payload = {}) {
+  async submitBaoliao(cookie, payload = {}, opts = {}) {
+    const req = opts.callImpl || call;
     const body = {
       title: payload.title || '',
       link: payload.url || '',
@@ -300,7 +351,7 @@ export const realAdapter = {
       category: payload.cat || '',
       content: payload.content || ''
     };
-    const json = await call(ENDPOINTS.baoliao, { method: 'POST', cookie, body, base: BASE });
+    const json = await req(ENDPOINTS.baoliao, { method: 'POST', cookie, ua: pickUA(), body, base: BASE });
     assertOk(json, '爆料');
     const d = json?.data || json || {};
     return {
@@ -322,7 +373,7 @@ export const realAdapter = {
     let resp;
     try {
       resp = await fetch(url, {
-        headers: headers(cookie),
+        headers: headers(cookie, pickUA()),
         redirect: 'follow',
         signal: AbortSignal.timeout(timeoutMs)
       });

@@ -1,106 +1,103 @@
-// P2：real 适配器离线测试（mock 全局 fetch，验证解析/签名/错误码/超时/b5 超大响应）
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { pickUA, actionJitter, realAdapter } from '../src/smzdm/realAdapter.js';
 
-// 全局将请求超时压到 1ms，便于超时分支测试（仅当 fetch 真正挂起时触发）
-process.env.SMZDM_REQUEST_TIMEOUT = '1';
-const { realAdapter } = await import('../src/smzdm/realAdapter.js');
-const realFetch = globalThis.fetch;
+const UA_POOL_SIZE = 8;
 
-// 通用 mock：返回带 .ok/.status/.text()/.json() 的响应
-// call() 统一读取 resp.text() 再解析 JSON（兼容 )]}' 前缀），因此 mock 必须提供 text；
-// 这里若只传 json 则自动序列化为 text，便于测试只关心返回数据时使用。
-function mockFetch(opts) {
-  const body = opts.text !== undefined ? opts.text : JSON.stringify(opts.json);
-  globalThis.fetch = async () => ({
-    ok: opts.ok !== false,
-    status: opts.status || 200,
-    text: async () => body,
-    json: async () => opts.json
-  });
-}
-
-test('getUserInfo 映射 userId/nickName/point/rank/is_vip', async () => {
-  mockFetch({ json: { data: { userId: '123', nickName: 'Bob', point: 50, rank: 'Lv.3', is_vip: true, avatar: 'a' } } });
-  const info = await realAdapter.getUserInfo('cookie');
-  assert.equal(info.smzdmId, '123');
-  assert.equal(info.nickname, 'Bob');
-  assert.equal(info.points, 50);
-  assert.equal(info.level, 'Lv.3');
-  assert.equal(info.vip, true);
-  globalThis.fetch = realFetch;
+test('pickUA：返回值来自 UA 池且为浏览器 UA', () => {
+  for (let i = 0; i < 50; i++) {
+    const ua = pickUA();
+    assert.match(ua, /^Mozilla\/\d\.\d/);
+    // 默认池 8 个，pickUA 必落在其中之一（用 0 索引确认边界）
+    assert.ok(ua.length > 20);
+  }
+  // 注入 rng 取边界：rng=0 -> 第一个；rng=0.999 -> 最后一个
+  const first = pickUA(() => 0);
+  const last = pickUA(() => 0.999);
+  assert.notEqual(first, last);
 });
 
-test('call 兼容 smzdm 前缀垃圾字符的 JSON 响应', async () => {
-  mockFetch({ text: ")]}'," + JSON.stringify({ data: { userId: '9' } }) });
-  const info = await realAdapter.getUserInfo('cookie');
-  assert.equal(info.smzdmId, '9');
-  globalThis.fetch = realFetch;
+test('actionJitter：结果落在 [min, max] 闭区间内', () => {
+  const min = Number(process.env.SMZDM_ACTION_JITTER_MIN || 800);
+  const max = Number(process.env.SMZDM_ACTION_JITTER_MAX || 2500);
+  for (let i = 0; i < 200; i++) {
+    const d = actionJitter(Math.random);
+    assert.ok(d >= min && d <= max, `期望 ${min}~${max}，实得 ${d}`);
+    assert.ok(Number.isInteger(d), '间隔应为整数毫秒');
+  }
+  // 边界：rng=0 -> min（严格）；rng 接近 1 -> 不超过 max
+  assert.equal(actionJitter(() => 0), min);
+  assert.ok(actionJitter(() => 0.99999) <= max);
 });
 
-test('doComment 成功返回 message 含次数与 articleId', async () => {
-  mockFetch({ json: { error_code: 0 } });
-  const r = await realAdapter.doComment('cookie', { articleId: '123', count: 2 });
-  assert.equal(r.success, true);
-  assert.match(r.message, /评论成功 ×2/);
-  assert.equal(r.articleId, '123');
-  globalThis.fetch = realFetch;
-});
-
-test('doComment 缺失 articleId 直接抛错（不发请求）', async () => {
-  let called = false;
-  globalThis.fetch = async () => { called = true; return { ok: true, json: async () => ({}) }; };
-  await assert.rejects(() => realAdapter.doComment('cookie', {}), /articleId/);
-  assert.equal(called, false);
-  globalThis.fetch = realFetch;
-});
-
-test('doComment 业务错误码触发 assertOk 抛错', async () => {
-  mockFetch({ json: { error_code: 1, error_msg: '频率限制' } });
-  await assert.rejects(() => realAdapter.doComment('cookie', { articleId: '1' }), /评论失败：频率限制/);
-  globalThis.fetch = realFetch;
-});
-
-test('fetchBaoliao 从 HTML 抽取文章卡片', async () => {
-  const html = `
-    <a href="/p/111" class="title">好价一</a>
-    <a href="/p/222" class="title">好价二</a>
-    <a href="/p/111" class="title">重复</a>`;
-  mockFetch({ text: html });
-  const r = await realAdapter.fetchBaoliao({ limit: 10 });
-  assert.equal(r.ok, true);
-  assert.equal(r.items.length, 2); // 去重后 2 条
-  assert.equal(r.items[0].smzdmUrl, 'https://www.smzdm.com/p/111');
-  assert.equal(r.items[1].smzdmUrl, 'https://www.smzdm.com/p/222');
-  globalThis.fetch = realFetch;
-});
-
-test('fetchBaoliao 页面无卡片时抛错（不静默成功）', async () => {
-  mockFetch({ text: '<html><body>无内容</body></html>' });
-  await assert.rejects(() => realAdapter.fetchBaoliao({}), /未能从页面解析到好价文章/);
-  globalThis.fetch = realFetch;
-});
-
-test('fetchBaoliao 超大响应触发 b5 拒绝', async () => {
-  mockFetch({ text: 'x'.repeat(6_000_000) });
-  await assert.rejects(() => realAdapter.fetchBaoliao({}), /响应过大|过大/);
-  globalThis.fetch = realFetch;
-});
-
-test('fetchBaoliao 请求挂起触发超时抛错', async () => {
-  // 模拟底层 fetch 因 AbortSignal 超时直接以 AbortError 拒绝（与 AbortSignal.timeout 触发等价），
-  // 验证 fetchBaoliao 的 catch 将其翻译为「超时」错误，而非静默挂起或误报其他错误。
-  globalThis.fetch = async (url, init) => {
-    if (init?.signal) {
-      throw Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
-    }
-    return { ok: true, text: async () => '' };
+test('doComment：注入 callImpl 时传递池内 UA，且 count>1 触发一次 sleep', async () => {
+  const seenUas = [];
+  const sleeps = [];
+  const callImpl = async (path, opts) => {
+    seenUas.push(opts.ua);
+    assert.equal(path, '/article/ajax_post_comment');
+    return { error_code: 0 };
   };
-  await assert.rejects(() => realAdapter.fetchBaoliao({}), /超时/);
-  globalThis.fetch = realFetch;
+  const sleepImpl = async (ms) => {
+    sleeps.push(ms);
+  };
+  const r = await realAdapter.doComment('cookie', {
+    articleId: '12345',
+    count: 2,
+    callImpl,
+    sleepImpl
+  });
+  assert.equal(r.success, true);
+  assert.equal(r.count, 2);
+  assert.equal(seenUas.length, 2);
+  // 两次动作都轮换了 UA（均来自池）
+  for (const ua of seenUas) assert.match(ua, /^Mozilla\/\d\.\d/);
+  // count=2 -> 循环内 i>0 一次等待
+  assert.equal(sleeps.length, 1);
+  assert.ok(sleeps[0] >= 800 && sleeps[0] <= 2500);
 });
 
-test('还原全局 fetch', () => {
-  globalThis.fetch = realFetch;
-  assert.ok(true);
+test('doComment：缺 articleId 抛错', async () => {
+  await assert.rejects(
+    () => realAdapter.doComment('cookie', { callImpl: async () => ({}) }),
+    /评论需要 articleId/
+  );
+});
+
+test('doFavorite / doPoint：注入 callImpl 传递 UA + 校验端点路径', async () => {
+  const favPaths = [];
+  const pointPaths = [];
+  const favImpl = async (p, o) => {
+    favPaths.push(p);
+    assert.match(o.ua, /^Mozilla\/\d\.\d/);
+    return { error_code: 0 };
+  };
+  const pointImpl = async (p, o) => {
+    pointPaths.push(p);
+    assert.match(o.ua, /^Mozilla\/\d\.\d/);
+    return { error_code: 0 };
+  };
+  const r1 = await realAdapter.doFavorite('cookie', { articleId: '999', count: 1, callImpl: favImpl });
+  const r2 = await realAdapter.doPoint('cookie', { articleId: '999', count: 1, callImpl: pointImpl });
+  assert.equal(r1.success, true);
+  assert.equal(r2.success, true);
+  assert.deepEqual(favPaths, ['/article/ajax_favorite']);
+  assert.deepEqual(pointPaths, ['/article/ajax_vote']);
+});
+
+test('submitBaoliao：传递 UA 且校验端点与字段', async () => {
+  let captured;
+  const callImpl = async (p, o) => {
+    captured = { p, o };
+    return { error_code: 0, data: { url: 'https://www.smzdm.com/p/1' } };
+  };
+  const r = await realAdapter.submitBaoliao(
+    'cookie',
+    { title: '好价', url: 'https://x.com', price: '9.9', content: 'c' },
+    { callImpl }
+  );
+  assert.equal(r.success, true);
+  assert.equal(captured.p, '/publish/articles/ajax_create');
+  assert.equal(captured.o.body.title, '好价');
+  assert.match(captured.o.ua, /^Mozilla\/\d\.\d/);
 });

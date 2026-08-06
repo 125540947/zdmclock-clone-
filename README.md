@@ -374,6 +374,10 @@ SMZDM_COOKIE="你的Cookie" node tools/verifyRealMode.mjs
   CLOCK_STAGGER_JITTER_MS=2000  # 叠加随机抖动
   CATCHUP_GRACE_MIN=180         # 错过签到后多久内仍补签
   ```
+- **遗留 web 端点（评论/收藏/点赞/爆料）拟人化**：这些 `www.smzdm.com` 端点无 app 签名（签名对它无意义），
+  已做两层加固以降低被按固定指纹识别为机器的概率——① **UA 轮换**（8 个真实浏览器 UA 池随机取用）；
+  ② **动作拟人化间隔**（`count` 多次动作之间随机等待 `SMZDM_ACTION_JITTER_MIN`~`SMZDM_ACTION_JITTER_MAX`，默认 800~2500ms）。
+  好价抓取 `fetchBaoliao` 同样轮换 UA。
 
 ### 第 6 步：Cookie 失效守护
 
@@ -384,7 +388,7 @@ SMZDM_COOKIE="你的Cookie" node tools/verifyRealMode.mjs
 ### 风险提示
 
 - 所有 real 端点/签名来自社区逆向（best-effort），smzdm 改版可能失效——请用 `verifyRealMode.mjs` 定期复核。
-- 评论 / 收藏 / 点赞 / 爆料为**原站遗留任务**，其 real 端点已实现（`www.smzdm.com` + Cookie，无 app 签名），`verifyRealMode.mjs` 已对其做安全可达性探测；因无签名防护更易触发风控，建议优先用上表“内置真实任务”。
+- 评论 / 收藏 / 点赞 / 爆料为**原站遗留任务**，其 real 端点已实现（`www.smzdm.com` + Cookie，无 app 签名），`verifyRealMode.mjs` 已对其做安全可达性探测；已加 **UA 轮换 + 拟人化间隔** 加固，但仍建议优先用上表“内置真实任务”（带 app 签名）。
 
 ---
 
