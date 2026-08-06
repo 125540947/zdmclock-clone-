@@ -73,3 +73,13 @@ export async function getClockDistribution(params = {}) {
   const { data } = await api.get('/admin/clock-distribution' + (qs.toString() ? `?${qs}` : ''));
   return data;
 }
+
+// ===== 管理后台：风控（反检测/反封号）设置 =====
+export async function getRiskSettings() {
+  const { data } = await api.get('/admin/risk-settings');
+  return data;
+}
+export async function saveRiskSettings(settings) {
+  const { data } = await api.put('/admin/risk-settings', { settings });
+  return data;
+}

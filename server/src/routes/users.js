@@ -3,6 +3,7 @@ import { load, persist, genId, withWriteLock } from '../store.js';
 import { smzdm } from '../smzdm/adapter.js';
 import { authRequired, maskCookie } from '../auth.js';
 import { resolvedCheckInTime } from '../clockSchedule.js';
+import { resetRisk } from '../riskControl.js';
 
 const router = Router();
 
@@ -52,6 +53,7 @@ router.post('/', authRequired, async (req, res) => {
     smzdmId: clean(smzdmId) || info.smzdmId || '',
     nickname: clean(nickname) || info.nickname || '未命名账号',
     cookie,
+    cookieExpired: false, // 新录入账号默认有效
     points: info.points || 0,
     level: info.level || '',
     vip: !!info.vip,
@@ -100,6 +102,8 @@ router.put('/:id', authRequired, async (req, res) => {
   }
   if (cookie) {
     u.cookie = cookie;
+    u.cookieExpired = false; // 重新录入 Cookie：解除失效标记并重置该账号风控状态
+    resetRisk(u.id);
     try {
       const info = await smzdm.getUserInfo(cookie);
       u.points = info.points || u.points;

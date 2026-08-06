@@ -18,6 +18,50 @@ export function fmtHM(h, mi) {
   return `${String(h).padStart(2, '0')}:${String(mi).padStart(2, '0')}`;
 }
 
+// 计算任意时区下的"墙上时间"对象，供 cron 求值与"当前分钟/今天"判定使用。
+// 返回对象实现与 Date 相同的 getMinutes/getHours/getDate/getMonth/getDay 语义，
+// 并额外提供 date(YYYY-MM-DD 字符串)，用于在指定时区下判定"今天"。
+// tz 为 'local' / 空 / 'UTC' 时直接基于传入的 Date（即进程本地/UTC），保持历史行为；
+// 指定具体 IANA 时区（如 'Asia/Shanghai'）时按该时区折算墙钟。
+const WEEKDAY_MAP = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+export function zonedWallClock(date, tz) {
+  if (!tz || tz === 'local' || tz === 'UTC') {
+    return {
+      date: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`,
+      getMinutes: () => date.getMinutes(),
+      getHours: () => date.getHours(),
+      getDate: () => date.getDate(),
+      getMonth: () => date.getMonth(),
+      getDay: () => date.getDay()
+    };
+  }
+  const dtf = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    weekday: 'short'
+  });
+  const p = {};
+  for (const part of dtf.formatToParts(date)) p[part.type] = part.value;
+  const minute = Number(p.minute);
+  const hour = Number(p.hour) % 24; // 个别环境午夜会返回 24，归一成 0
+  const day = Number(p.day);
+  const month = Number(p.month) - 1;
+  return {
+    date: `${p.year}-${p.month}-${p.day}`,
+    getMinutes: () => minute,
+    getHours: () => hour,
+    getDate: () => day,
+    getMonth: () => month,
+    getDay: () => WEEKDAY_MAP[p.weekday] ?? date.getDay()
+  };
+}
+
 // 窗口 [start, end] 转为相对分钟的起止与跨度（含端点）。
 export function windowMinutes(start, end) {
   const a = parseHM(start) || { h: 8, mi: 0 };

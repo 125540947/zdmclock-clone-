@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 const { cronMatch, validateCron } = await import('../src/scheduler.js');
+const { zonedWallClock } = await import('../src/clockSchedule.js');
 
 // 固定锚点：2026-08-06 是星期四（getDay() === 4）
 const ANCHOR = new Date(2026, 7, 6, 9, 30, 0); // 本地时区 2026-08-06 09:30
@@ -68,4 +69,25 @@ test('cronMatch 月末/跨月维度（非 2 月 31 日）', () => {
 test('cronMatch 段数错误直接不命中', () => {
   assert.equal(cronMatch('* * *', ANCHOR), false);
   assert.equal(cronMatch('', ANCHOR), false);
+});
+
+test('zonedWallClock 将 UTC 瞬间折算为指定时区墙钟', () => {
+  // 2026-08-06T01:30:00Z 在 Asia/Shanghai(UTC+8) 应为当天 09:30 周四
+  const inst = new Date(Date.UTC(2026, 7, 6, 1, 30, 0));
+  const z = zonedWallClock(inst, 'Asia/Shanghai');
+  assert.equal(z.getHours(), 9);
+  assert.equal(z.getMinutes(), 30);
+  assert.equal(z.date, '2026-08-06');
+  assert.equal(z.getDay(), 4);
+  // 'local' 时退化为传入 Date 的原生取值（保持历史行为）
+  const zl = zonedWallClock(inst, 'local');
+  assert.equal(typeof zl.getHours(), 'number');
+  assert.equal(zl.date, '2026-08-06');
+});
+
+test('cronMatch 接受 zonedWallClock 对象按墙钟求值', () => {
+  const inst = new Date(Date.UTC(2026, 7, 6, 1, 30, 0));
+  const z = zonedWallClock(inst, 'Asia/Shanghai'); // 09:30 周四
+  assert.equal(cronMatch('30 9 * * *', z), true);
+  assert.equal(cronMatch('0 10 * * *', z), false);
 });

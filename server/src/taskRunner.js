@@ -1,10 +1,18 @@
 import { smzdm } from './smzdm/adapter.js';
-import { applyClock } from './clockCore.js';
-import { withWriteLock, persist, genId, mergeBaoliao, todayStr } from './store.js';
+import { applyClock, localYesterdayStr } from './clockCore.js';
+import { withWriteLock, persist, genId, mergeBaoliao, todayStr, todayStrTZ, yesterdayStrTZ } from './store.js';
 import { normalizeArticleId } from './smzdm/articleId.js';
 import { generateReply } from './gptAdapter.js';
 import { config } from './config.js';
-import { resolvedCheckInTime, fmtHM } from './clockSchedule.js';
+import { resolvedCheckInTime, fmtHM, parseHM, zonedWallClock } from './clockSchedule.js';
+import {
+  resolveRisk,
+  jitterDelay,
+  recordSuccess,
+  recordFailure,
+  isCircuitOpen,
+  isAuthExpiredError
+} from './riskControl.js';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -84,18 +92,41 @@ async function runEngagement(task, db, user, opts) {
   };
 }
 
-// 单账号签到（含幂等落库）：返回 { ok, message, duplicate, record? }
+// 单账号签到（含幂等落库）：返回 { ok, message, duplicate, record?, authExpired?, circuitOpen? }
 // 带失败重试：网络抖动 / 频率限制等瞬时错误按指数退避重试，减少漏签。
-// opts.maxRetries / opts.retryBaseMs 可在测试或特殊场景覆盖 config 默认值。
+// 集成风控对抗包：人类化随机等待、登录失效识别、失败熔断与自适应降频。
+// opts.maxRetries / opts.retryBaseMs 可在测试或特殊场景覆盖 config 默认值；
+// opts.risk 可整体覆盖生效风控配置（测试用）；opts.today/opts.yesterday 用于时区感知判定。
 export async function runClockForUser(db, user, opts = {}) {
+  const risk = opts.risk || resolveRisk(db);
   const maxRetries = opts.maxRetries ?? config.clockRetry;
   const retryBaseMs = opts.retryBaseMs ?? config.clockRetryBaseMs;
+
+  // 登录已失效：直接跳过，不浪费请求也不冒险反复撞（需重新录入 Cookie 解除）
+  if (user.cookieExpired) {
+    return { ok: false, authExpired: true, message: '登录已失效，请重新录入 Cookie 后重试' };
+  }
+  // 风控熔断：连续失败冷却期内跳过自动签到，降低被风控 / 封号概率
+  if (risk.enabled && isCircuitOpen(user.id)) {
+    return { ok: false, circuitOpen: true, message: '已触发熔断冷却（连续失败），暂跳过自动签到' };
+  }
+
+  // 时区感知的"今天 / 昨天"，保证记录日期与连续天数判定都基于用户所在时区
+  const useTZ = config.tz && config.tz !== 'local';
+  const today = opts.today || (useTZ ? todayStrTZ(config.tz) : todayStr());
+  const yesterday = opts.yesterday || (useTZ ? yesterdayStrTZ(config.tz) : localYesterdayStr());
+
   let lastMessage = '签到失败';
+  let lastAuthExpired = false;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (attempt > 0) {
       // 指数退避：1x, 2x, 4x ... 避免重试瞬间再次撞限流
       const backoff = retryBaseMs * Math.pow(2, attempt - 1);
       await sleep(backoff);
+    }
+    // 风控：每次尝试前的"人类化随机等待"，打破固定周期（仅 real 适配器真正有意义）
+    if (risk.enabled && risk.preDelayMaxMs > risk.preDelayMinMs) {
+      await sleep(jitterDelay(risk.preDelayMinMs, risk.preDelayMaxMs - risk.preDelayMinMs));
     }
     try {
       const r = await smzdm.doClockIn(user.cookie);
@@ -105,16 +136,39 @@ export async function runClockForUser(db, user, opts = {}) {
         continue;
       }
       const res = await withWriteLock(() => {
-        const c = applyClock(user, r, db);
-        if (!c.duplicate) persist();
+        const c = applyClock(user, r, db, { today, yesterday });
+        if (!c.duplicate) {
+          user.cookieExpired = false; // 成功说明 Cookie 仍有效，清除失效标记
+          persist();
+        }
         return c;
       });
+      if (risk.enabled) recordSuccess(user.id);
       if (res.duplicate) return { ok: true, duplicate: true, message: '今日已签到' };
       return { ok: true, message: `签到成功，+${r.points} 金币`, record: res.record };
     } catch (e) {
       lastMessage = `签到异常：${e.message}`;
-      // 网络/适配器异常，进入重试
+      // 登录 / Cookie 失效异常单独标记，便于熔断外再做"停止盲目重试 + 告警"
+      if (isAuthExpiredError(e)) lastAuthExpired = true;
     }
+  }
+  // 全部失败：记录失败用于自适应 / 熔断
+  if (risk.enabled) recordFailure(user.id, risk);
+  // 登录失效：标记 + 持久化，前端展示并停止后续盲目重试
+  if (lastAuthExpired) {
+    await withWriteLock(() => {
+      user.cookieExpired = true;
+      persist();
+    });
+    return { ok: false, authExpired: true, message: `登录失效，请重新录入 Cookie：${lastMessage}` };
+  }
+  // 熔断已触发：明确提示冷却信息
+  if (risk.enabled && isCircuitOpen(user.id)) {
+    return {
+      ok: false,
+      circuitOpen: true,
+      message: `连续失败触发熔断冷却（约 ${Math.round(risk.circuitCooldownMs / 60000)} 分钟）：${lastMessage}`
+    };
   }
   return { ok: false, message: lastMessage };
 }
@@ -236,22 +290,37 @@ export async function runTask(task, db, opts = {}) {
     return { ok: false, error: 'no_user', message: '请先添加 smzdm 账号' };
   }
 
-  // 定时调度（scheduled）场景下的「每日签到」：仅对"当前分钟到达个人设定签到时间"
-  // 且今日尚未签到的账号执行，实现账号级错峰（手动"运行"不传该标志，仍对所有选中账号执行）。
+  // 定时调度（scheduled）场景下的「每日签到」：按用户所在时区，仅对"个人签到时间已过（含恰好到达）
+  // 且仍在补签宽限窗内、今日尚未签到"的账号执行，实现账号级错峰 + 宕机/休眠后补签。
+  // 手动"运行"不传该标志，仍对所有选中账号执行。
+  let schedToday; // 定时模式下传给 runClockForUser 的时区"今天"
+  let schedYesterday; // 定时模式下传给 runClockForUser 的时区"昨天"
   if (opts.scheduled && task.type === 'clock') {
-    const nowHM = fmtHM(new Date().getHours(), new Date().getMinutes());
-    const today = todayStr();
+    const z = zonedWallClock(new Date(), config.tz);
+    const nowHM = fmtHM(z.getHours(), z.getMinutes());
+    const nowMin = z.getHours() * 60 + z.getMinutes();
+    schedToday = z.date;
+    const useTZ = config.tz && config.tz !== 'local';
+    schedYesterday = useTZ ? yesterdayStrTZ(config.tz) : localYesterdayStr();
     const doneToday = new Set(
-      db.clockRecords.filter((r) => r.date === today).map((r) => r.userId)
+      db.clockRecords.filter((r) => r.date === schedToday).map((r) => r.userId)
     );
-    const due = users.filter(
-      (u) => resolvedCheckInTime(u) === nowHM && !doneToday.has(u.id)
-    );
+    const due = users.filter((u) => {
+      if (doneToday.has(u.id)) return false; // 今日已签，跳过
+      const hm = resolvedCheckInTime(u);
+      const p = parseHM(hm);
+      if (!p) return false;
+      const umin = p.h * 60 + p.mi;
+      // 已过个人时间：在补签宽限窗内则补签（diff=0 即恰好到达当前分钟，也走此分支统一处理）；
+      // 未来时间不提前签。
+      if (umin <= nowMin) return nowMin - umin <= config.catchupGraceMin;
+      return false;
+    });
     if (!due.length) {
       return {
         ok: true,
         skipped: true,
-        message: `当前时段(${nowHM})无账号到达签到时间或未签到`
+        message: `当前无账号需签到（时区 ${config.tz}，时段 ${nowHM}）`
       };
     }
     users = due;
@@ -272,7 +341,7 @@ export async function runTask(task, db, opts = {}) {
     try {
       const r =
         task.type === 'clock'
-          ? await runClockForUser(db, user)
+          ? await runClockForUser(db, user, opts.scheduled ? { today: schedToday, yesterday: schedYesterday } : {})
           : await runEngagement(task, db, user, opts);
       if (r.ok) okCount += 1;
       parts.push(`${who}：${r.message}`);

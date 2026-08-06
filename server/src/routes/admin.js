@@ -1,8 +1,9 @@
 import { Router } from 'express';
-import { load, todayStr } from '../store.js';
+import { load, todayStr, withWriteLock, persist } from '../store.js';
 import { config } from '../config.js';
 import { authRequired } from '../auth.js';
 import { resolvedCheckInTime, parseHM, fmtHM, windowMinutes } from '../clockSchedule.js';
+import { resolveRisk } from '../riskControl.js';
 
 const router = Router();
 
@@ -119,6 +120,34 @@ router.get('/clock-distribution', authRequired, (req, res) => {
     defaultCheckInTime: config.defaultCheckInTime,
     buckets
   });
+});
+
+// 风控（反检测 / 反封号）生效配置：env 默认值被 db.settings.risk 持久化覆盖
+router.get('/risk-settings', authRequired, (req, res) => {
+  const db = load();
+  res.json({ settings: resolveRisk(db), tz: config.tz, catchupGraceMin: config.catchupGraceMin });
+});
+
+// 更新风控配置（持久化到 db.settings.risk）。仅接受已知数值字段，非法值回退默认。
+router.put('/risk-settings', authRequired, async (req, res) => {
+  const db = load();
+  const b = (req.body && req.body.settings) || {};
+  const num = (v, d) => (Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : d);
+  const cur = db.settings.risk || {};
+  const next = {
+    enabled: b.enabled !== undefined ? !!b.enabled : !!cur.enabled,
+    preDelayMinMs: num(b.preDelayMinMs, cur.preDelayMinMs ?? config.riskPreDelayMinMs),
+    preDelayMaxMs: num(b.preDelayMaxMs, cur.preDelayMaxMs ?? config.riskPreDelayMaxMs),
+    circuitFailures: num(b.circuitFailures, cur.circuitFailures ?? config.riskCircuitFailures),
+    circuitCooldownMs: num(b.circuitCooldownMs, cur.circuitCooldownMs ?? config.riskCircuitCooldownMs),
+    adaptiveStepMs: num(b.adaptiveStepMs, cur.adaptiveStepMs ?? config.riskAdaptiveStepMs),
+    maxExtraMs: num(b.maxExtraMs, cur.maxExtraMs ?? config.riskMaxExtraMs)
+  };
+  // 防御：最小等待窗口不能大于最大等待窗口
+  if (next.preDelayMinMs > next.preDelayMaxMs) next.preDelayMinMs = next.preDelayMaxMs;
+  db.settings.risk = next;
+  await withWriteLock(() => persist());
+  res.json({ ok: true, settings: resolveRisk(db) });
 });
 
 export default router;

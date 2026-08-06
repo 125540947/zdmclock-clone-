@@ -16,6 +16,7 @@
             <div class="nm">
               {{ u.nickname }}
               <span v-if="u.vip" class="tag on">VIP</span>
+              <span v-if="u.cookieExpired" class="tag danger">🍪 Cookie 失效</span>
             </div>
             <div class="sub">{{ u.smzdmId || '未识别' }} · {{ u.level || '—' }}</div>
           </div>

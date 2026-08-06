@@ -13,8 +13,8 @@ export function localYesterdayStr() {
   return localDateStr(y);
 }
 
-export function applyClock(user, result, db) {
-  const today = todayStr();
+export function applyClock(user, result, db, opts = {}) {
+  const today = opts.today || todayStr();
   if (db.clockRecords.some((r) => r.userId === user.id && r.date === today)) {
     return { duplicate: true };
   }
@@ -26,7 +26,7 @@ export function applyClock(user, result, db) {
     createdAt: new Date().toISOString()
   };
   db.clockRecords.push(record);
-  const ys = localYesterdayStr();
+  const ys = opts.yesterday || localYesterdayStr();
   user.streak = db.clockRecords.some((x) => x.userId === user.id && x.date === ys)
     ? (user.streak || 0) + 1
     : 1;

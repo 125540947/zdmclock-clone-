@@ -1,6 +1,8 @@
 import { load, persist, withWriteLock, todayStr } from './store.js';
 import { runTask } from './taskRunner.js';
 import { notify } from './notifier.js';
+import { config } from './config.js';
+import { zonedWallClock } from './clockSchedule.js';
 
 // 轻量定时调度器（零依赖）：
 // - 内置一个最小 cron 求值器，支持 * / */n / a-b / a,b
@@ -100,10 +102,12 @@ export function tick() {
     const now = new Date();
     const minuteKey = Math.floor(now.getTime() / 60000);
     const today = todayStr();
+    // 按配置时区折算"墙上时间"用于 cron 求值，避免容器 UTC 导致任务在错误时刻触发
+    const z = zonedWallClock(now, config.tz);
     const jobs = [];
     for (const t of db.tasks) {
       if (!t.enabled || !t.cron) continue;
-      if (!cronMatch(t.cron, now)) continue;
+      if (!cronMatch(t.cron, z)) continue;
       if (lastFiredMinute[t.id] === minuteKey) continue; // 本分钟已触发，跳过
       lastFiredMinute[t.id] = minuteKey;
       const job = runTask(t, db, { scheduled: true })
@@ -154,6 +158,9 @@ export function startScheduler() {
   stopScheduler();
   timer = setInterval(tick, 30_000);
   schedulerRunning = true;
+  // 启动即补签一次：覆盖"服务宕机/休眠/刚部署"期间错过的签到（within 宽限窗）
+  // best-effort，异常已被 tick 内部捕获，不影响主流程。
+  tick().catch(() => {});
 }
 
 export function stopScheduler() {

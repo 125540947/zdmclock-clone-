@@ -59,4 +59,21 @@ export const config = {
   autoWindowStart: process.env.AUTO_WINDOW_START || '08:00',
   autoWindowEnd: process.env.AUTO_WINDOW_END || '10:59',
   clockTaskCron: process.env.CLOCK_TASK_CRON || '* * * * *',
+  // 时区：调度"今天/当前分钟"以此判定，解决容器 UTC 导致签到时间整体偏移的问题。
+  // 默认 'local' 沿用进程本地时区（与历史行为一致）；生产部署请设 ZDM_TZ=Asia/Shanghai。
+  tz: process.env.ZDM_TZ || 'local',
+  // 补签宽限：个人签到时间已过、但距现在不超过该分钟数时，仍补签一次，
+  // 覆盖"服务宕机/休眠/刚部署"期间错过的签到（避免永久漏签）。设 0 关闭补签。
+  catchupGraceMin: Number(process.env.CATCHUP_GRACE_MIN || 180),
+  // 风控（反检测/反封号）保守模式：默认开启，降低被 smzdm 风控识别/限流/封号概率。
+  riskEnabled: parseBool(process.env.RISK_ENABLED, true),
+  // 每次签到尝试前的"人类化随机等待"窗口（毫秒）：打破固定周期，避免请求过于机械。
+  riskPreDelayMinMs: Number(process.env.RISK_PRE_DELAY_MIN_MS || 200),
+  riskPreDelayMaxMs: Number(process.env.RISK_PRE_DELAY_MAX_MS || 1500),
+  // 同一账号连续失败达到阈值后"熔断"冷却，期间跳过其自动签到，避免反复撞限流/风控被封。
+  riskCircuitFailures: Number(process.env.RISK_CIRCUIT_FAILURES || 5),
+  riskCircuitCooldownMs: Number(process.env.RISK_CIRCUIT_COOLDOWN_MIN || 30) * 60000,
+  // 自适应降频：连续失败越多，下次额外等待越长（温和降频），封顶 maxExtraMs。
+  riskAdaptiveStepMs: Number(process.env.RISK_ADAPTIVE_STEP_MS || 2000),
+  riskMaxExtraMs: Number(process.env.RISK_MAX_EXTRA_MS || 60000),
 };

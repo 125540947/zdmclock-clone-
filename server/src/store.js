@@ -132,6 +132,8 @@ export function load() {
       // 固化系统分配的时间（确定性、稳定），便于后台展示与统计；缺省时按 userId 哈希重算
       u.checkInTime = resolvedCheckInTime(u);
     }
+    // 登录失效标记：旧库缺省补 false（风控包会按需置 true 并持久化）
+    if (u.cookieExpired === undefined) u.cookieExpired = false;
   });
   // t_clock 任务 cron 迁移：旧版 '0 9 * * *'（全员 09:00 一次性签到）改为每分钟轮询，
   // 由调度器按各账号个人时间过滤执行，从而实现错峰。仅当仍是旧默认值时迁移，避免覆盖用户自定义。
@@ -201,4 +203,30 @@ export function localDateStr(d = new Date()) {
 
 export function todayStr(d = new Date()) {
   return localDateStr(d);
+}
+
+// 时区感知的"今天"：按指定 IANA 时区折算墙钟日期，解决容器 UTC 导致签到日期/时间整体偏移。
+export function todayStrTZ(tz, d = new Date()) {
+  if (!tz || tz === 'local' || tz === 'UTC') return localDateStr(d);
+  const dtf = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+  const p = {};
+  for (const part of dtf.formatToParts(d)) p[part.type] = part.value;
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+// 时区感知"昨天"：在指定时区下，today 的前一天（用于连续签到天数判定）。
+export function yesterdayStrTZ(tz, d = new Date()) {
+  // 取该时区 today 的"正午"瞬间，回退 1 天后再折算，规避 DST/跨日边界误差
+  const noon = new Date(d);
+  noon.setHours(12, 0, 0, 0);
+  const today = todayStrTZ(tz, noon);
+  const [y, m, day] = today.split('-').map(Number);
+  const dt = new Date(y, m - 1, day);
+  dt.setDate(dt.getDate() - 1);
+  return localDateStr(dt);
 }

@@ -15,6 +15,9 @@ const { config } = await import('../src/config.js');
 const { smzdm } = await import('../src/smzdm/adapter.js');
 const { resolvedCheckInTime } = await import('../src/clockSchedule.js');
 
+// 本文件不涉及风控断言：关闭"人类化随机等待"以保持用例快速且确定性
+config.riskEnabled = false;
+
 const realFetch = globalThis.fetch;
 function mockFetchOnce(body) {
   globalThis.fetch = async () => ({ ok: true, json: async () => body });
@@ -114,7 +117,7 @@ test('runClockForUser 瞬时失败按指数退避重试后成功', async () => {
   config.clockRetryBaseMs = 0; // 测试不去等退避
   try {
     const db = { users: [{ id: 'u1', cookie: 'c' }], clockRecords: [] };
-    const r = await runClockForUser(db, db.users[0]);
+    const r = await runClockForUser(db, db.users[0], { risk: { enabled: false } });
     assert.equal(r.ok, true);
     assert.equal(calls, 3); // 重试补齐到成功
     assert.match(r.message, /签到成功/);
@@ -138,7 +141,7 @@ test('runClockForUser 全部重试失败则 ok=false', async () => {
   config.clockRetryBaseMs = 0;
   try {
     const db = { users: [{ id: 'u1', cookie: 'c' }], clockRecords: [] };
-    const r = await runClockForUser(db, db.users[0]);
+    const r = await runClockForUser(db, db.users[0], { risk: { enabled: false } });
     assert.equal(r.ok, false);
     assert.equal(calls, 3); // 1 次 + 2 次重试
     assert.match(r.message, /网络超时/);
@@ -169,8 +172,8 @@ test('runTask 多账号签到按错峰间隔分散执行', async () => {
   }
 });
 
-test('runTask 定时(scheduled)模式仅执行"当前时段到达个人时间且未签"的账号', async () => {
-  // 固定当前时间为 09:30，使 manual 设 09:30 的账号命中，其它时段账号被过滤
+test('runTask 定时(scheduled)模式：已过个人时间(宽限窗内)补签，未来时间不签', async () => {
+  // 固定当前时间为 09:30；过去且未超宽限窗的用户应补签，未来时间不签
   const RealDate = Date;
   const fixed = new RealDate(2026, 7, 6, 9, 30, 0);
   const FakeDate = class extends RealDate {
@@ -182,25 +185,62 @@ test('runTask 定时(scheduled)模式仅执行"当前时段到达个人时间且
   const prevJitter = config.clockStaggerJitterMs;
   config.clockStaggerMs = 0;
   config.clockStaggerJitterMs = 0;
+  config.tz = 'local'; // 用进程本地时区，避免机器时区影响"今天/当前分钟"断言
   try {
     const db = {
       users: [
-        { id: 'hit', cookie: 'c', schedMode: 'manual', checkInTime: '09:30' },
-        { id: 'other', cookie: 'c', schedMode: 'manual', checkInTime: '08:00' },
-        { id: 'default', cookie: 'c', schedMode: 'default' }
+        { id: 'hit', cookie: 'c', schedMode: 'manual', checkInTime: '09:30' }, // 恰好到达 → 签
+        { id: 'past', cookie: 'c', schedMode: 'manual', checkInTime: '08:00' }, // 已过且在窗内 → 补签
+        { id: 'def', cookie: 'c', schedMode: 'default' }, // 默认 09:00 已过 → 补签
+        { id: 'future', cookie: 'c', schedMode: 'manual', checkInTime: '11:00' } // 未来 → 不签
       ],
       clockRecords: []
     };
     const r = await runTask({ type: 'clock', name: '签到' }, db, { scheduled: true });
     assert.equal(r.ok, true);
-    assert.equal(r.skipped, undefined); // 有命中账号，不是 skipped
-    // 仅 hit 被签到（other/default 不在 09:30 时段）
-    assert.equal(db.clockRecords.length, 1);
-    assert.equal(db.clockRecords[0].userId, 'hit');
+    assert.equal(r.skipped, undefined);
+    assert.equal(db.clockRecords.length, 3); // hit/past/def 签，future 不签
+    const signed = new Set(db.clockRecords.map((x) => x.userId));
+    assert.ok(signed.has('hit') && signed.has('past') && signed.has('def'));
+    assert.ok(!signed.has('future'));
   } finally {
     globalThis.Date = RealDate;
     config.clockStaggerMs = prevStagger;
     config.clockStaggerJitterMs = prevJitter;
+    config.tz = 'local';
+  }
+});
+
+test('runTask 定时(scheduled)模式：超出补签宽限窗的过期账号不签', async () => {
+  // 固定 12:00；某账号时间 09:00，距现在 180 分钟，超过默认宽限窗(180)即不补签
+  const RealDate = Date;
+  const fixed = new RealDate(2026, 7, 6, 12, 0, 0);
+  const FakeDate = class extends RealDate {
+    constructor(...a) { if (a.length) return new RealDate(...a); return new RealDate(fixed); }
+    static now() { return fixed.getTime(); }
+  };
+  globalThis.Date = FakeDate;
+  const prevStagger = config.clockStaggerMs;
+  config.clockStaggerMs = 0;
+  config.clockStaggerJitterMs = 0;
+  config.tz = 'local';
+  const prevGrace = config.catchupGraceMin;
+  config.catchupGraceMin = 120; // 12:00 - 09:00 = 180 分钟，远超 120 宽限窗 → 不补签
+  try {
+    const db = {
+      users: [{ id: 'old', cookie: 'c', schedMode: 'manual', checkInTime: '09:00' }],
+      clockRecords: []
+    };
+    const r = await runTask({ type: 'clock', name: '签到' }, db, { scheduled: true });
+    assert.equal(r.ok, true);
+    assert.equal(r.skipped, true); // 过期超窗，当天不再补签
+    assert.equal(db.clockRecords.length, 0);
+  } finally {
+    globalThis.Date = RealDate;
+    config.clockStaggerMs = prevStagger;
+    config.clockStaggerJitterMs = 0;
+    config.tz = 'local';
+    config.catchupGraceMin = prevGrace;
   }
 });
 
@@ -260,6 +300,36 @@ test('runTask 定时(scheduled)模式跳过今日已签账号', async () => {
 test('resolvedCheckInTime 与 runTask 过滤一致（手动时间映射）', () => {
   const u = { id: 'x', schedMode: 'manual', checkInTime: '13:45' };
   assert.equal(resolvedCheckInTime(u), '13:45');
+});
+
+test('runClockForUser 检测到登录失效：标记 cookieExpired 并跳过后续请求', async () => {
+  const orig = smzdm.doClockIn;
+  let calls = 0;
+  smzdm.doClockIn = async () => {
+    calls += 1;
+    throw new Error('用户未登录，请先登录');
+  };
+  const prevRetry = config.clockRetry;
+  const prevBase = config.clockRetryBaseMs;
+  config.clockRetry = 0; // 关闭重试，加速并精确断言单次尝试
+  config.clockRetryBaseMs = 0;
+  const db = { users: [{ id: 'u1', cookie: 'c', cookieExpired: false }], clockRecords: [] };
+  try {
+    const r = await runClockForUser(db, db.users[0], { risk: { enabled: false } });
+    assert.equal(r.ok, false);
+    assert.equal(r.authExpired, true);
+    assert.equal(calls, 1);
+    assert.equal(db.users[0].cookieExpired, true); // 已标记，避免盲目重试
+    // 再次调用：应直接跳过，不再请求适配器
+    const r2 = await runClockForUser(db, db.users[0], { risk: { enabled: false } });
+    assert.equal(r2.authExpired, true);
+    assert.equal(r2.ok, false);
+    assert.equal(calls, 1); // 未再次调用
+  } finally {
+    config.clockRetry = prevRetry;
+    config.clockRetryBaseMs = prevBase;
+    smzdm.doClockIn = orig;
+  }
 });
 
 test('还原全局 fetch', () => {
