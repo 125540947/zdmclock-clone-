@@ -1,12 +1,13 @@
 import { Router } from 'express';
-import { load, persist, genId, mergeBaoliao } from '../store.js';
+import { load, persist, genId, mergeBaoliao, withWriteLock } from '../store.js';
 import { smzdm } from '../smzdm/adapter.js';
 import { authRequired } from '../auth.js';
 
 const router = Router();
 
 // 列表（可选 ?userId= 过滤；不传则返回全部）
-router.get('/', (req, res) => {
+// 注意：读接口同样加 authRequired，保证 REQUIRE_AUTH=true 时不会泄露好价数据（与写接口一致）
+router.get('/', authRequired, (req, res) => {
   const db = load();
   const { userId } = req.query;
   let list = db.baoliao.slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
@@ -38,7 +39,7 @@ router.post('/refresh', authRequired, async (req, res) => {
 });
 
 // 新增爆料草稿
-router.post('/', authRequired, (req, res) => {
+router.post('/', authRequired, async (req, res) => {
   const { title, url, price, cat, content, userId } = req.body || {};
   if (!title || !title.trim()) return res.status(400).json({ error: 'invalid', message: '标题不能为空' });
   const db = load();
@@ -47,45 +48,51 @@ router.post('/', authRequired, (req, res) => {
     id: genId('bl'),
     userId: userId || null,
     title: String(title).trim(),
-    url: url || '',
-    price: price || '',
-    cat: cat || '',
-    content: content || '',
+    url: url ? String(url) : '',
+    price: price ? String(price) : '',
+    cat: cat ? String(cat) : '',
+    content: content ? String(content) : '',
     status: 'draft', // draft | submitted | failed
     smzdmUrl: '',
     lastResult: '',
     createdAt: now,
     updatedAt: now
   };
-  db.baoliao.unshift(item);
-  persist();
+  await withWriteLock(() => {
+    db.baoliao.unshift(item);
+    persist();
+  });
   res.json({ ok: true, item });
 });
 
 // 更新（标题/价格/分类/状态等）
-router.put('/:id', authRequired, (req, res) => {
+router.put('/:id', authRequired, async (req, res) => {
   const db = load();
   const item = db.baoliao.find((x) => x.id === req.params.id);
   if (!item) return res.status(404).json({ error: 'not_found' });
   const { title, url, price, cat, content, status } = req.body || {};
   if (title !== undefined) item.title = String(title).trim();
-  if (url !== undefined) item.url = url;
-  if (price !== undefined) item.price = price;
-  if (cat !== undefined) item.cat = cat;
-  if (content !== undefined) item.content = content;
-  if (status !== undefined) item.status = status;
+  if (url !== undefined) item.url = String(url);
+  if (price !== undefined) item.price = String(price);
+  if (cat !== undefined) item.cat = String(cat);
+  if (content !== undefined) item.content = String(content);
+  if (status !== undefined) item.status = String(status);
   item.updatedAt = new Date().toISOString();
-  persist();
+  await withWriteLock(() => {
+    persist();
+  });
   res.json({ ok: true, item });
 });
 
 // 删除
-router.delete('/:id', authRequired, (req, res) => {
+router.delete('/:id', authRequired, async (req, res) => {
   const db = load();
   const idx = db.baoliao.findIndex((x) => x.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'not_found' });
-  db.baoliao.splice(idx, 1);
-  persist();
+  await withWriteLock(() => {
+    db.baoliao.splice(idx, 1);
+    persist();
+  });
   res.json({ ok: true });
 });
 
@@ -100,7 +107,7 @@ router.post('/:id/submit', authRequired, async (req, res) => {
     item.status = 'failed';
     item.lastResult = '请先添加 smzdm 账号并录入 Cookie';
     item.updatedAt = new Date().toISOString();
-    persist();
+    await withWriteLock(() => persist());
     return res.status(400).json({ error: 'no_user', message: '请先添加 smzdm 账号' });
   }
   try {
@@ -116,13 +123,13 @@ router.post('/:id/submit', authRequired, async (req, res) => {
     item.lastResult = r.message || '提交成功';
     item.submittedAt = new Date().toISOString();
     item.updatedAt = item.submittedAt;
-    persist();
+    await withWriteLock(() => persist());
     res.json({ ok: true, result: r, item });
   } catch (e) {
     item.status = 'failed';
     item.lastResult = e.message;
     item.updatedAt = new Date().toISOString();
-    persist();
+    await withWriteLock(() => persist());
     res.status(502).json({ error: 'adapter_error', message: e.message });
   }
 });

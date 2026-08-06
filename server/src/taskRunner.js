@@ -145,6 +145,8 @@ async function runGptBatch(task, db) {
           }
         }
         db.gptDrafts.unshift(draft);
+        // R5：限制草稿上限，避免长期运行后 db.json 无限膨胀
+        if (db.gptDrafts.length > 200) db.gptDrafts.length = 200;
         drafts.push(draft);
         gen += 1;
       } catch (e) {

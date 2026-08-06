@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { load, persist, genId } from '../store.js';
+import { load, persist, genId, withWriteLock } from '../store.js';
 import { smzdm } from '../smzdm/adapter.js';
 import { authRequired, maskCookie } from '../auth.js';
 
@@ -39,7 +39,7 @@ router.post('/', authRequired, async (req, res) => {
     createdAt: new Date().toISOString()
   };
   db.users.push(user);
-  persist();
+  await withWriteLock(() => persist());
   res.json({ ...user, cookie: maskCookie(user.cookie) });
 });
 
@@ -71,17 +71,19 @@ router.put('/:id', authRequired, async (req, res) => {
       /* ignore */
     }
   }
-  persist();
+  await withWriteLock(() => persist());
   res.json({ ...u, cookie: maskCookie(u.cookie) });
 });
 
 // 删除账号
-router.delete('/:id', authRequired, (req, res) => {
+router.delete('/:id', authRequired, async (req, res) => {
   const db = load();
   const i = db.users.findIndex((x) => x.id === req.params.id);
   if (i < 0) return res.status(404).json({ error: 'not_found' });
-  db.users.splice(i, 1);
-  persist();
+  await withWriteLock(() => {
+    db.users.splice(i, 1);
+    persist();
+  });
   res.json({ ok: true });
 });
 
@@ -109,7 +111,7 @@ router.post('/:id/refresh', authRequired, async (req, res) => {
     u.level = info.level || u.level;
     u.vip = !!info.vip;
     u.smzdmId = u.smzdmId || info.smzdmId || '';
-    persist();
+    await withWriteLock(() => persist());
     res.json({ ok: true, info });
   } catch (e) {
     res.status(502).json({ error: 'adapter_error', message: e.message });

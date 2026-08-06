@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { load, persist, todayStr } from '../store.js';
+import { load, persist, todayStr, withWriteLock } from '../store.js';
 import { runTask } from '../taskRunner.js';
 import { validateCron } from '../scheduler.js';
 import { authRequired } from '../auth.js';
@@ -8,13 +8,13 @@ import { notify } from '../notifier.js';
 const router = Router();
 
 // 任务列表
-router.get('/', (req, res) => {
+router.get('/', authRequired, (req, res) => {
   const db = load();
   res.json({ list: db.tasks });
 });
 
 // 更新任务（启用/停用/名称/cron）
-router.put('/:id', authRequired, (req, res) => {
+router.put('/:id', authRequired, async (req, res) => {
   const db = load();
   const t = db.tasks.find((x) => x.id === req.params.id);
   if (!t) return res.status(404).json({ error: 'not_found' });
@@ -54,13 +54,14 @@ router.put('/:id', authRequired, (req, res) => {
   if (autoPost !== undefined) t.autoPost = !!autoPost;
   if (limit !== undefined) {
     const lim = Number(limit);
-    if (!Number.isFinite(lim) || lim < 1 || lim > 10) {
-      return res.status(400).json({ error: 'invalid_limit', message: 'limit 需为 1~10 的整数' });
+    // 兼容两类任务：GPT 批量生成（运行时再钳制到 10）与好价抓取（允许 1~50）
+    if (!Number.isFinite(lim) || lim < 1 || lim > 50) {
+      return res.status(400).json({ error: 'invalid_limit', message: 'limit 需为 1~50 的整数' });
     }
     t.limit = Math.floor(lim);
   }
   if (name !== undefined) t.name = name;
-  persist();
+  await withWriteLock(() => persist());
   res.json(t);
 });
 

@@ -228,3 +228,53 @@
 - 多账号下 comment/favorite/point 会对**每个账号**就同一批文章执行动作（你的自有账号，知悉风险）；gpt 自动发布仅用首个账号 Cookie。
 - `fetchBaoliao` 是社区经验值、未验证：smzdm 改版可能解析为空（明确报错，不静默成功）；高频抓取可能触发风控，建议 limit 适中、cron 低频。
 - 仍存在的占位模块 `shops` / `updateTSFP` / `test` 未实现（原 zdmclock 残留路由）。
+
+---
+
+## 十二、全量代码系统性自我审计（第七轮，2026-08-06）
+
+> 用户要求：对**当前项目全部代码**做系统性自我审计，三维度（可行性 / 安全性 / 运行性），
+> 结构化输出（按文件/模块、问题、风险等级、修复建议），据报告修复，并留存可再查询/跟踪记录。
+> 本轮新增 7 项修复（含 1 个会导致接口永远 502 的可行性 bug），并补充可跟踪索引。
+
+### 12.1 审计方法
+- 逐文件通读 `server/src` 全部 22 个模块 + `web/src` 关键视图/路由/API 客户端。
+- 交叉校验 import/export、接口返回形状（前后端契约）、鉴权一致性、并发写路径。
+- `node --check` 全量语法校验；`clockCore.test.js` 单元校验；起临时 HTTP 服务做端到端冒烟（auth 开/关两态）。
+
+### 12.2 发现与修复总览（可跟踪表）
+
+| 编号 | 维度 | 文件/模块 | 发现 | 等级 | 状态 | 验证 |
+|---|---|---|---|---|---|---|
+| A1 | 可行性 | `routes/baoliao.js` | `POST /refresh` 调用 `withWriteLock` 但未 import → 运行时 ReferenceError → 该接口**永远 502** | 高 | **已修复** | refresh 现返回 200（fetched/added） |
+| A2 | 可行性 | `routes/tasks.js` | `PUT /:id` 的 `limit` 校验仅允许 1–10，但 `t_fetch` 合法范围 1–50（store/前端均 1–50）→ 保存抓取条数 11–50 恒 400 | 中 | **已修复** | limit=30 通过，limit=60 拒 400 |
+| A3 | 可行性 | `web/src/views/Baoliao.vue` | 读 `data.users`，但后端 `GET /users` 返回 `data.list` → "提交所用账号"下拉永远为空，提交到 smzdm 失效 | 中 | **已修复** | 改为 `data.list`（其余视图本就一致） |
+| A4 | 安全 | `routes/tasks.js` `routes/baoliao.js` | 读接口 `GET /tasks`、`GET /baoliao` 缺 `authRequired`，与写接口及 `clock`/`admin/stats` 不一致 → 开启鉴权后仍泄露 | 中 | **已修复** | REQUIRE_AUTH=true 时两接口均 401 |
+| A5 | 运行 | `routes/users.js` `routes/baoliao.js` `routes/tasks.js` | 直接 `persist()` 绕过 `withWriteLock` 写链，与 clock/scheduler 的串行化不一致 | 低 | **已修复（主要路径）** | 已包裹写锁；gpt/notify PUT 仍直写（见 R8） |
+| A6 | 安全 | `.gitignore` | 仅忽略 `server/data/*.json`，但 `store.js` 运行时生成 `db.json.tmp`、`db.json.corrupt-*`（可能含 Cookie 备份）→ 误提交泄露 | 低 | **已修复** | check-ignore 现覆盖整个 data 目录 |
+| A7 | 运行 | `store.js` `taskRunner.js` | `db.baoliao` / `db.gptDrafts` 无上限，长期运行 db.json 无限膨胀 | 低 | **已修复** | baoliao≤500、gptDrafts≤200 截断 |
+| R8 | 运行 | `routes/gpt.js` `routes/notify.js` | `PUT /config` 仍直接 `persist()`（未包裹写锁）；低风险（共享缓存模型下不丢数据），一致性待收口 | 低 | 建议（未改） | — |
+| R9 | 安全 | `routes/auth.js` | `/auth/login` 无速率限制/防爆破（默认密码 admin123）；个人单机可接受，公网需加 | 低 | 建议（未改） | — |
+| R10 | 安全 | `store.js`/`data*/db.json` | Cookie 明文落盘（沿用 S3 结论）；已 gitignore + 部署指南，字段级加密为可选增强 | 低 | 建议（未改） | — |
+
+### 12.3 关键修复说明
+
+- **A1（高·可行性）**：`baoliao.js` 顶部 import 补 `withWriteLock`；`POST /refresh` 的 `await withWriteLock(...)` 现可正常执行，否则每次刷新好价都触发 ReferenceError 并被 try/catch 包成 502。此 bug 之前的冒烟只走了 `taskRunner.runFetch`（已 import 写锁），未覆盖路由层，故漏检。
+- **A2（中·接口契约）**：`t_fetch` 的 `limit` 上限与 store 归一化（Math.min(50,…)）、前端 `saveLimit`（1–50）不一致；`tasks.js` 的 PUT 校验原为 1–10（仅适配 gpt）。放宽到 1–50，gpt 仍由 store/taskRunner 二次钳制到 10，互不冲突。
+- **A3（中·前后端契约）**：除 `Baoliao.vue` 外，所有视图均用 `data.list`；该处误用 `data.users` 导致"提交账号"选择为空、提交按钮永远提示"请先选择账号"。改为 `data.list` 即恢复。
+- **A4（中·安全一致性）**：`GET /tasks`、`GET /baoliao` 补 `authRequired`。`REQUIRE_AUTH=false`（默认）时零影响；开启后读接口与写接口同受保护，符合最小暴露面。
+- **A5/A7（运行）**：users/baoliao/tasks 的变更路径统一经 `withWriteLock` 落盘；好价与 GPT 草稿加长度上限，避免 db.json 长期膨胀。
+- **A6（安全·防泄露）**：`.gitignore` 由 `server/data/*.json` 改为整体忽略 `server/data/`、`server/data_demo/`、`server/data_test/`，覆盖 `db.json.tmp`、`db.json.corrupt-*` 等运行时产物。
+
+### 12.4 验证
+- `node --check` 全量通过；`clockCore.test.js` 8 用例全绿。
+- 临时 HTTP 冒烟（mock 适配器，已删）：
+  - 默认（REQUIRE_AUTH=false）：refresh→200(fetched3/added3)；limit=30→200；limit=60→400；GET /baoliao→200。
+  - REQUIRE_AUTH=true：上述所有接口（含 GET 读）均 401。
+- **前端 `web/dist` 已按本次改动重建**（含 A3 的 `data.list` 修复），生产静态托管即生效。
+
+### 12.5 残余建议（主动留白）
+- R8：gpt/notify 配置写仍直落 `persist()`，建议后续统一包裹写锁（低风险）。
+- R9：登录加防爆破（速率限制/失败计数），仅公网部署时需要。
+- R10：Cookie 静态加密（字段级 AES）为可选增强，当前靠 gitignore + 文件权限。
+- 占位模块 `shops` / `updateTSFP` / `test` 仍为空壳（原 zdmclock 残留），不影响功能。

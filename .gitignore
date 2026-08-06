@@ -7,9 +7,11 @@ dist-ssr
 .hermes
 .env
 .env.generated
-server/data/*.json
-server/data_demo/*.json
-server/data_test/*.json
+# 运行时数据目录整体忽略：含 db.json 以及 store.js 运行时生成的 db.json.tmp、
+# db.json.corrupt-* 等备份（可能含 Cookie / 推送令牌等敏感信息），切勿入库
+server/data/
+server/data_demo/
+server/data_test/
 # web/dist 预构建产物保留入库，使克隆后 `npm start` 无需先 build 即可运行
 !web/dist
 .DS_Store

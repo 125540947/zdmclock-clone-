@@ -118,7 +118,7 @@ function safeUrl(u) {
 async function loadAccounts() {
   try {
     const { data } = await api.get('/users');
-    accounts.value = data.users || [];
+    accounts.value = data.list || [];
     if (accounts.value.length && !submitUserId.value) submitUserId.value = accounts.value[0].id;
   } catch {
     accounts.value = [];
