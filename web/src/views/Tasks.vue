@@ -54,49 +54,78 @@
             </div>
             <span class="hint-sm">定时从 smzdm 公开好价列表抓取并写入爆料箱（自动去重），供评论/收藏/点赞与 GPT 生成取用</span>
           </div>
+          <div v-else-if="t.builtin && !t.needsEndpoint" class="art">
+            <span class="badge ok">✓ 内置青龙脚本（社区逆向端点，无需抓包）</span>
+            <span class="hint-sm">该任务已内置真实端点与签名，开启后自动运行</span>
+          </div>
           <div v-else-if="t.needsEndpoint" class="art">
-            <span v-if="!t.configured" class="badge warn">⚠ 待抓包：未配置真实接口，运行会提示待抓包</span>
-            <span v-else class="badge ok">✓ 已配置接口</span>
-            <button class="btn ghost sm" @click="toggleConfig(t)">
-              {{ expandedId === t.id ? '收起' : '配置接口' }}
-            </button>
-            <div v-if="expandedId === t.id" class="ep-form">
-              <p class="hint-sm">
-                从 smzdm App 抓包得到该任务的真实请求，填入下方。系统不会内置任何伪造端点；
-                仅当你提供真实 URL/参数后才真正发起请求。资产字段映射用于把响应中的金币/碎银/经验/等级提取进资产账本。
-              </p>
-              <label class="lbl">接口 URL（完整 http(s) 或 /path）</label>
-              <input class="input sm full" v-model="form.endpoint" placeholder="如 https://user-api.smzdm.com/xxx/lottery" />
-              <label class="lbl">方法</label>
-              <select class="input sm" v-model="form.method">
-                <option value="POST">POST</option>
-                <option value="GET">GET</option>
-              </select>
-              <label class="lbl">请求体（JSON 或 key=value，支持 {{uid}} {{smzdmId}} 占位符）</label>
-              <textarea class="input sm full area" v-model="form.body" placeholder='{"act":"lottery"}' rows="3"></textarea>
-              <label class="lbl">资产字段映射（响应 JSON 路径，如 data.gold）</label>
-              <div class="af-grid">
-                <input class="input sm" v-model="form.gold" placeholder="金币路径" />
-                <input class="input sm" v-model="form.silver" placeholder="碎银路径" />
-                <input class="input sm" v-model="form.exp" placeholder="经验路径" />
-                <input class="input sm" v-model="form.level" placeholder="等级路径" />
-                <input class="input sm" v-model="form.message" placeholder="结果文案路径" />
+            <template v-if="isReal(t.type)">
+              <span class="badge ok">✓ 内置青龙脚本（社区逆向端点）</span>
+              <button class="btn ghost sm" @click="toggleConfig(t)">
+                {{ expandedId === t.id ? '收起' : '配置参数' }}
+              </button>
+              <div v-if="expandedId === t.id" class="ep-form">
+                <p class="hint-sm">
+                  该任务已内置真实端点与签名，无需抓包。仅需填写动态参数：
+                  转盘/抽奖填 <code>active_id</code>，众测填 <code>crowd_id</code>；
+                  也可填 <code>topicUrl</code>（专题页链接）让其自动抓取活动ID。
+                </p>
+                <label class="lbl">参数(JSON)</label>
+                <textarea
+                  class="input sm full area"
+                  v-model="form.paramsText"
+                  rows="3"
+                  placeholder='{"activeId":"xxx"} 或 {"topicUrl":"https://m.smzdm.com/topic/..."}'
+                ></textarea>
+                <div class="ep-actions">
+                  <button class="btn primary sm" :disabled="saving" @click="saveConfig(t)">保存参数</button>
+                </div>
               </div>
-              <label class="lbl">备注</label>
-              <input class="input sm full" v-model="form.note" placeholder="便于回忆该接口来源/版本" />
-              <div class="ep-row">
-                <button class="btn ghost sm" type="button" @click="loadTemplate(t)">加载推荐模板</button>
-                <label class="ck"><input type="checkbox" v-model="form.jsonp" /> JSONP 响应</label>
-                <label class="ck"><input type="checkbox" v-model="form.robotToken" /> 需 robot token</label>
+            </template>
+            <template v-else>
+              <span v-if="!t.configured" class="badge warn">⚠ 待抓包：未配置真实接口，运行会提示待抓包</span>
+              <span v-else class="badge ok">✓ 已配置接口</span>
+              <button class="btn ghost sm" @click="toggleConfig(t)">
+                {{ expandedId === t.id ? '收起' : '配置接口' }}
+              </button>
+              <div v-if="expandedId === t.id" class="ep-form">
+                <p class="hint-sm">
+                  从 smzdm App 抓包得到该任务的真实请求，填入下方。系统不会内置任何伪造端点；
+                  仅当你提供真实 URL/参数后才真正发起请求。资产字段映射用于把响应中的金币/碎银/经验/等级提取进资产账本。
+                </p>
+                <label class="lbl">接口 URL（完整 http(s) 或 /path）</label>
+                <input class="input sm full" v-model="form.endpoint" placeholder="如 https://user-api.smzdm.com/xxx/lottery" />
+                <label class="lbl">方法</label>
+                <select class="input sm" v-model="form.method">
+                  <option value="POST">POST</option>
+                  <option value="GET">GET</option>
+                </select>
+                <label class="lbl">请求体（JSON 或 key=value，支持 {{uid}} {{smzdmId}} 占位符）</label>
+                <textarea class="input sm full area" v-model="form.body" placeholder='{"act":"lottery"}' rows="3"></textarea>
+                <label class="lbl">资产字段映射（响应 JSON 路径，如 data.gold）</label>
+                <div class="af-grid">
+                  <input class="input sm" v-model="form.gold" placeholder="金币路径" />
+                  <input class="input sm" v-model="form.silver" placeholder="碎银路径" />
+                  <input class="input sm" v-model="form.exp" placeholder="经验路径" />
+                  <input class="input sm" v-model="form.level" placeholder="等级路径" />
+                  <input class="input sm" v-model="form.message" placeholder="结果文案路径" />
+                </div>
+                <label class="lbl">备注</label>
+                <input class="input sm full" v-model="form.note" placeholder="便于回忆该接口来源/版本" />
+                <div class="ep-row">
+                  <button class="btn ghost sm" type="button" @click="loadTemplate(t)">加载推荐模板</button>
+                  <label class="ck"><input type="checkbox" v-model="form.jsonp" /> JSONP 响应</label>
+                  <label class="ck"><input type="checkbox" v-model="form.robotToken" /> 需 robot token</label>
+                </div>
+                <label class="lbl">Referer（JSONP 抽奖常需 m.smzdm.com）</label>
+                <input class="input sm full" v-model="form.referer" placeholder="如 https://m.smzdm.com/" />
+                <label class="lbl">自定义请求头（JSON，可选，如 x-requested-with）</label>
+                <textarea class="input sm full area" v-model="form.headersText" rows="2" placeholder='{"x-requested-with":"com.smzdm.client.android"}'></textarea>
+                <div class="ep-actions">
+                  <button class="btn primary sm" :disabled="saving" @click="saveConfig(t)">保存接口</button>
+                </div>
               </div>
-              <label class="lbl">Referer（JSONP 抽奖常需 m.smzdm.com）</label>
-              <input class="input sm full" v-model="form.referer" placeholder="如 https://m.smzdm.com/" />
-              <label class="lbl">自定义请求头（JSON，可选，如 x-requested-with）</label>
-              <textarea class="input sm full area" v-model="form.headersText" rows="2" placeholder='{"x-requested-with":"com.smzdm.client.android"}'></textarea>
-              <div class="ep-actions">
-                <button class="btn primary sm" :disabled="saving" @click="saveConfig(t)">保存接口</button>
-              </div>
-            </div>
+            </template>
           </div>
         </div>
         <div class="task-actions">
@@ -171,16 +200,23 @@ const form = ref({
   jsonp: false,
   robotToken: false,
   referer: '',
-  headersText: ''
+  headersText: '',
+  paramsText: ''
 });
 const saving = ref(false);
+
+// 内置真实任务（端点/签名已移植自青龙社区，用户仅需填动态参数）；与"待抓包"占位任务区分
+const realTypes = ['lottery', 'turntable', 'crowdtest', 'dailyTasks'];
+function isReal(type) {
+  return realTypes.includes(type);
+}
 
 // 抓包导入相关
 const captures = ref([]);
 const scanning = ref(false);
 const applying = ref(false);
 const capHint = ref('');
-const customTypeOptions = ['lottery', 'turntable', 'crowdtest', 'follow', 'share'];
+const customTypeOptions = ['lottery', 'turntable', 'crowdtest', 'follow', 'share', 'dailyTasks'];
 
 function showToast(m, t = 'ok') {
   toast.value = m;
@@ -260,13 +296,19 @@ function toggleConfig(t) {
     jsonp: !!ep.jsonp,
     robotToken: !!ep.robotToken,
     referer: ep.referer || '',
-    headersText: ep.headers ? JSON.stringify(ep.headers) : ''
+    headersText: ep.headers ? JSON.stringify(ep.headers) : '',
+    paramsText: ep.params ? JSON.stringify(ep.params) : ''
   };
   expandedId.value = t.id;
 }
 
 // 加载推荐模板（社区逆向的真实端点形态）：对应类型有则用，否则用每日任务领奖模板
 function loadTemplate(t) {
+  // 内置真实任务端点已写死在后端，无需模板；引导用户填参数
+  if (isReal(t.type)) {
+    showToast('该任务已内置真实端点，请在上方"配置参数"里填 active_id / crowd_id / topicUrl', 'err');
+    return;
+  }
   const tpl = templates.value[t.type] || templates.value.taskReceive;
   if (!tpl) {
     showToast('暂无推荐模板', 'err');
@@ -315,7 +357,8 @@ async function saveConfig(t) {
       jsonp: form.value.jsonp,
       robotToken: form.value.robotToken,
       referer: form.value.referer.trim() || undefined,
-      headers
+      headers,
+      params: form.value.paramsText.trim() ? form.value.paramsText.trim() : undefined
     };
     const { data } = await saveTaskEndpoint(t.type, payload);
     endpoints.value = data.endpoints || {};

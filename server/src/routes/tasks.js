@@ -7,7 +7,7 @@ import { runTask } from '../taskRunner.js';
 import { validateCron } from '../scheduler.js';
 import { authRequired } from '../auth.js';
 import { notify } from '../notifier.js';
-import { CUSTOM_TYPES, CUSTOM_TASK_DEFS, TASK_TEMPLATES } from '../taskMatrix.js';
+import { CUSTOM_TYPES, CUSTOM_TASK_DEFS, TASK_TEMPLATES, REAL_STRATEGY_TYPES } from '../taskMatrix.js';
 
 const router = Router();
 
@@ -18,10 +18,21 @@ const CAPTURES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..
 router.get('/', authRequired, (req, res) => {
   const db = load();
   const endpoints = (db.settings && db.settings.taskEndpoints) || {};
-  const list = db.tasks.map((t) => ({
-    ...t,
-    configured: t.needsEndpoint ? !!endpoints[t.type] : true
-  }));
+  const list = db.tasks.map((t) => {
+    let configured = true;
+    if (t.needsEndpoint) {
+      if (REAL_STRATEGY_TYPES.has(t.type)) {
+        // 内置真实任务：dailyTasks 无需参数即视为已就绪；其余需动态参数（active_id/crowd_id/topicUrl）
+        configured =
+          t.type === 'dailyTasks'
+            ? true
+            : !!(endpoints[t.type] && endpoints[t.type].params && (endpoints[t.type].params.activeId || endpoints[t.type].params.crowdId || endpoints[t.type].params.topicUrl));
+      } else {
+        configured = !!endpoints[t.type];
+      }
+    }
+    return { ...t, configured, builtin: !!t.builtin };
+  });
   res.json({ list });
 });
 
@@ -41,39 +52,77 @@ router.get('/templates', authRequired, (req, res) => {
 });
 
 // 保存某任务类型的接口配置（抓包得到的真实 URL/参数/资产字段映射）。
-// endpoint 传空即清空（回到"待抓包"）。仅允许 CUSTOM_TYPES。
-// 额外持久化 jsonp / robotToken / referer / headers / tokenField 等抓包接口特有标志。
+// endpoint 传空即清空（回到"待抓包"），但内置真实任务（REAL_STRATEGY_TYPES）允许仅存 params。
+// 仅允许 CUSTOM_TYPES。额外持久化 jsonp / robotToken / referer / headers / tokenField / params。
 router.put('/endpoints', authRequired, async (req, res) => {
   const db = load();
-  const { type, endpoint, method, body, assetFields, note, jsonp, robotToken, referer, headers, tokenField } = req.body || {};
+  const { type, endpoint, method, body, assetFields, note, jsonp, robotToken, referer, headers, tokenField, params } = req.body || {};
   if (!CUSTOM_TYPES.includes(type)) {
     return res.status(400).json({ error: 'invalid_type', message: '仅自定义端点任务可配置接口' });
   }
   if (!db.settings.taskEndpoints) db.settings.taskEndpoints = {};
-  if (endpoint === '' || endpoint == null) {
-    delete db.settings.taskEndpoints[type]; // 清空 → 待抓包
-  } else {
-    // 仅允许白名单键作为资产字段映射，避免任意字段污染账本
-    const af = {};
-    if (assetFields && typeof assetFields === 'object') {
-      for (const k of ['gold', 'silver', 'exp', 'level', 'message']) {
-        if (assetFields[k] != null && typeof assetFields[k] === 'string') af[k] = assetFields[k].slice(0, 80);
+
+  // 解析内置任务用的动态参数（active_id / crowd_id / topicUrl 等），支持 JSON 字符串或对象
+  let parsedParams = undefined;
+  if (params != null) {
+    if (typeof params === 'string') {
+      const trimmed = params.trim();
+      if (trimmed) {
+        try {
+          parsedParams = JSON.parse(trimmed);
+        } catch {
+          return res.status(400).json({ error: 'invalid_params', message: 'params 不是合法 JSON' });
+        }
       }
+    } else if (typeof params === 'object' && !Array.isArray(params)) {
+      parsedParams = params;
+    } else {
+      return res.status(400).json({ error: 'invalid_params', message: 'params 需为 JSON 对象' });
     }
-    const cfg = {
-      endpoint: String(endpoint).slice(0, 2000),
-      method: String(method || 'POST').toUpperCase() === 'GET' ? 'GET' : 'POST',
-      body: body ?? null,
-      assetFields: af,
-      note: typeof note === 'string' ? note.slice(0, 500) : ''
-    };
-    if (jsonp) cfg.jsonp = true;
-    if (robotToken) cfg.robotToken = true;
-    if (tokenField && typeof tokenField === 'string') cfg.tokenField = tokenField.slice(0, 40);
-    if (referer && typeof referer === 'string') cfg.referer = referer.slice(0, 500);
-    if (headers && typeof headers === 'object') cfg.headers = headers;
-    db.settings.taskEndpoints[type] = cfg;
   }
+  if (parsedParams && Object.keys(parsedParams).length > 12) {
+    return res.status(400).json({ error: 'invalid_params', message: 'params 字段过多' });
+  }
+
+  const isReal = REAL_STRATEGY_TYPES.has(type);
+  const epEmpty = endpoint === '' || endpoint == null;
+
+  // 非内置类型必须提供 endpoint；内置类型允许仅存 params（运行时走内置 handler，无需 endpoint）
+  if (epEmpty && !isReal) {
+    delete db.settings.taskEndpoints[type];
+    await withWriteLock(() => persist());
+    return res.json({ ok: true, endpoints: db.settings.taskEndpoints });
+  }
+
+  const prev = db.settings.taskEndpoints[type] || {};
+  if (epEmpty) {
+    // 内置类型：仅更新 params，保留既有 endpoint（若有）
+    db.settings.taskEndpoints[type] = { ...prev, params: parsedParams || prev.params || {} };
+    await withWriteLock(() => persist());
+    return res.json({ ok: true, endpoints: db.settings.taskEndpoints });
+  }
+
+  // 通用端点配置（含资产字段映射等）
+  const af = {};
+  if (assetFields && typeof assetFields === 'object') {
+    for (const k of ['gold', 'silver', 'exp', 'level', 'message']) {
+      if (assetFields[k] != null && typeof assetFields[k] === 'string') af[k] = assetFields[k].slice(0, 80);
+    }
+  }
+  const cfg = {
+    endpoint: String(endpoint).slice(0, 2000),
+    method: String(method || 'POST').toUpperCase() === 'GET' ? 'GET' : 'POST',
+    body: body ?? null,
+    assetFields: af,
+    note: typeof note === 'string' ? note.slice(0, 500) : ''
+  };
+  if (jsonp) cfg.jsonp = true;
+  if (robotToken) cfg.robotToken = true;
+  if (tokenField && typeof tokenField === 'string') cfg.tokenField = tokenField.slice(0, 40);
+  if (referer && typeof referer === 'string') cfg.referer = referer.slice(0, 500);
+  if (headers && typeof headers === 'object') cfg.headers = headers;
+  if (parsedParams) cfg.params = parsedParams;
+  db.settings.taskEndpoints[type] = cfg;
   await withWriteLock(() => persist());
   res.json({ ok: true, endpoints: db.settings.taskEndpoints });
 });

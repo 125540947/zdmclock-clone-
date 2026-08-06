@@ -9,14 +9,21 @@
 // 资产仪表盘（模块 B）直接读取该账本，无需各自维护数据。
 
 import { smzdm } from './smzdm/adapter.js';
+import { REAL_STRATEGIES, REAL_STRATEGY_TYPES, extractReward } from './smzdm/tasks_real.js';
 
-// 自定义端点任务的元数据（前端据此渲染"待抓包"徽标与配置表单）
+// 供 routes/tasks.js 等直接从 taskMatrix 引用真实策略集合
+export { REAL_STRATEGIES, REAL_STRATEGY_TYPES };
+
+// 自定义端点任务的元数据（前端据此渲染徽标与配置表单）
+// builtin:true 表示端点/签名/多步流程已内置（移植自青龙社区逆向），用户仅需填动态参数；
+// 非 builtin 的 follow/share 仍需从 App 抓包（社区暂无稳定逆向端点）。
 export const CUSTOM_TASK_DEFS = [
-  { type: 'lottery', name: '每日抽奖', icon: '🎰', desc: 'smzdm App 内的金币/实物抽奖，需抓包 lottery 类接口' },
-  { type: 'turntable', name: '转盘抽奖', icon: '🎡', desc: '转盘/小金蛋类抽奖，需抓包 turntable 类接口' },
-  { type: 'crowdtest', name: '众测申请', icon: '🧪', desc: '众测名额申请，需抓包 crowdtest 类接口' },
-  { type: 'follow', name: '自动关注', icon: '➕', desc: '关注指定作者/话题，需抓包 follow 类接口与关注目标' },
-  { type: 'share', name: '自动分享', icon: '🔗', desc: '分享内容领奖励，需抓包 share 类接口' }
+  { type: 'lottery', name: '每日抽奖', icon: '🎰', builtin: true, desc: '已内置青龙社区逆向端点（jsonp_draw），填写 active_id 即可运行，无需抓包' },
+  { type: 'turntable', name: '转盘抽奖', icon: '🎡', builtin: true, desc: '已内置青龙社区逆向端点（jsonp_draw），填写 active_id 即可运行，无需抓包' },
+  { type: 'crowdtest', name: '众测申请', icon: '🧪', builtin: true, desc: '已内置青龙社区逆向端点（ajax_participate），填写 crowd_id 或专题页URL即可' },
+  { type: 'follow', name: '自动关注', icon: '➕', desc: '关注指定作者/话题；社区暂无稳定逆向端点，需抓包 follow 接口' },
+  { type: 'share', name: '自动分享', icon: '🔗', desc: '分享内容领奖励；社区暂无稳定逆向端点，需抓包 share 接口' },
+  { type: 'dailyTasks', name: '每日任务', icon: '📋', builtin: true, desc: '已内置：自动领取每日任务奖励（list_v2 → activity_task_receive）' }
 ];
 
 export const CUSTOM_TYPES = CUSTOM_TASK_DEFS.map((d) => d.type);
@@ -119,6 +126,48 @@ export function getTaskEndpoint(db, type) {
 //   { ok:false, pendingCapture:true, message }  —— 未配置接口（待抓包）
 //   { ok:false, error, message }                —— 执行失败（由调用方决定重试/记录）
 export async function runCustomEndpointTask(task, db, user) {
+  // 内置真实策略（移植自青龙社区逆向）：优先走这里，用户只需填动态参数（active_id/crowd_id 等）
+  const strategy = REAL_STRATEGIES[task.type];
+  if (strategy) {
+    const def = getTaskEndpoint(db, task.type) || {};
+    const params = def && def.params && typeof def.params === 'object' ? def.params : {};
+    if (strategy.needsParam && !params[strategy.needsParam] && !params.topicUrl) {
+      return {
+        ok: false,
+        pendingCapture: true,
+        error: 'need_param',
+        message: `待配置：${task.name} 需要填写参数 ${strategy.paramHint}（在「自动任务」页该任务的"配置参数"里填）`
+      };
+    }
+    // mock 适配器无 requestRaw：即便内置也不允许在 mock 模式下"假跑"
+    if (typeof smzdm.requestRaw !== 'function') {
+      return {
+        ok: false,
+        pendingCapture: true,
+        error: 'pending_capture',
+        message: `${task.name} 需在 SMZDM_ADAPTER=real 模式下运行（当前为 mock，不发起真实请求）`
+      };
+    }
+    try {
+      const r = await strategy.handler(user.cookie, params);
+      const reward = extractReward(r.message || '');
+      return {
+        ok: true,
+        success: true,
+        message: r.message,
+        goldDelta: reward.gold,
+        silverDelta: reward.silver,
+        expDelta: reward.exp,
+        levelAfter: null,
+        explicit: { gold: reward.gold, silver: reward.silver, exp: reward.exp },
+        result: { success: true, message: r.message }
+      };
+    } catch (e) {
+      return { ok: false, error: 'exec', message: `${task.name}执行失败：${e.message}` };
+    }
+  }
+
+  // 其余自定义端点任务（follow/share 等）：沿用通用端点配置（需用户从 App 抓包填入 URL/参数）
   const def = getTaskEndpoint(db, task.type);
   if (!def || !def.endpoint) {
     return {

@@ -27,7 +27,9 @@ function defaultData() {
       { id: 't_turntable', type: 'turntable', name: '转盘抽奖', icon: '🎡', enabled: false, cron: '5 9 * * *', needsEndpoint: true, lastRun: null, lastResult: null, status: 'idle' },
       { id: 't_crowdtest', type: 'crowdtest', name: '众测申请', icon: '🧪', enabled: false, cron: '10 9 * * *', needsEndpoint: true, lastRun: null, lastResult: null, status: 'idle' },
       { id: 't_follow', type: 'follow', name: '自动关注', icon: '➕', enabled: false, cron: '15 9 * * *', needsEndpoint: true, lastRun: null, lastResult: null, status: 'idle' },
-      { id: 't_share', type: 'share', name: '自动分享', icon: '🔗', enabled: false, cron: '20 9 * * *', needsEndpoint: true, lastRun: null, lastResult: null, status: 'idle' }
+      { id: 't_share', type: 'share', name: '自动分享', icon: '🔗', enabled: false, cron: '20 9 * * *', needsEndpoint: true, lastRun: null, lastResult: null, status: 'idle' },
+      // 每日任务（内置青龙社区逆向端点：list_v2 → activity_task_receive 批量领奖），无需抓包
+      { id: 't_dailytasks', type: 'dailyTasks', name: '每日任务', icon: '📋', enabled: false, cron: '30 9 * * *', builtin: true, lastRun: null, lastResult: null, status: 'idle' }
     ],
     // 资产账本：模块 A（任务执行）落账，模块 B（资产仪表盘）读取。
     // 每次资产相关动作记录一条 {goldDelta,silverDelta,expDelta,...} 事件，供日收益曲线/任务贡献统计。

@@ -49,7 +49,7 @@ function headers(cookie, ua = UA) {
 
 // 统一请求：表单提交（x-www-form-urlencoded），解析 JSON（兼容 )]}' 前缀）
 // 扩展：raw（返回原始文本，供 JSONP 类接口）、referer / extraHeaders（抓包接口常需特定来源与头）
-async function call(path, { method = 'GET', cookie, body, ua = UA, base = API_BASE, raw = false, referer, extraHeaders } = {}) {
+export async function call(path, { method = 'GET', cookie, body, ua = UA, base = API_BASE, raw = false, referer, extraHeaders } = {}) {
   const url = path.startsWith('http') ? path : base + path;
   const timeoutMs = Number(process.env.SMZDM_REQUEST_TIMEOUT || 10000);
   const init = {
@@ -103,6 +103,43 @@ function assertOk(json, where) {
 
 function md5Sign(str) {
   return crypto.createHash('md5').update(str).digest('hex').toUpperCase();
+}
+
+// 社区统一签名（青龙脚本 signFormData 等价实现）：
+// 合并公共参数(weixin/basic_v/f/v/time) + 业务参数 → 过滤空值 → 按 key 字母排序 →
+// key=value 拼接 → 追加 &key=SIGN_KEY → md5().toUpperCase()。time 用毫秒时间戳。
+export function signFormData(data = {}) {
+  const newData = {
+    weixin: 1,
+    basic_v: 0,
+    f: 'android',
+    v: APP_V,
+    time: `${Math.round(Date.now() / 1000) * 1000}`,
+    ...data
+  };
+  const keys = Object.keys(newData)
+    .filter((k) => newData[k] !== '' && newData[k] != null)
+    .sort();
+  const signData = keys.map((k) => `${k}=${String(newData[k]).replace(/\s+/g, '')}`).join('&');
+  const sign = crypto.createHash('md5').update(`${signData}&key=${SIGN_KEY}`).digest('hex').toUpperCase();
+  return { ...newData, sign };
+}
+
+// 带社区统一签名的请求（POST 表单 / GET 查询），供 task / checkin 家族端点使用
+export async function appRequest(path, { cookie, data = {}, method = 'POST', base = API_BASE, ua = ANDROID_UA } = {}) {
+  const signed = signFormData(data);
+  if (method === 'GET') {
+    const url = (path.startsWith('http') ? path : base + path) + '?' + new URLSearchParams(signed).toString();
+    return call(url, { method: 'GET', cookie, ua, base });
+  }
+  return call(path, { method, cookie, ua, base, body: signed });
+}
+
+function removeTags(s) {
+  return String(s || '')
+    .replace(/<[^<]+?>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 // normalizeArticleId 已抽到 ./articleId.js 供 taskRunner 共用，这里 re-export 保持兼容
@@ -173,13 +210,45 @@ export const realAdapter = {
     const level = d.rank ?? d.rank_name ?? null;
     const points = Number(d.add_point ?? d.addPoint ?? gold); // 本次 awarded（优先）否则用余额
     const continuity = Number(d.daily_num ?? d.continue_sign_days ?? 0);
+    // 签约外奖励（青龙脚本常规动作）：all_reward / extra_reward，失败静默跳过不阻断签到
+    let extraMsg = '';
+    try {
+      const ex = await doCheckinExtras(cookie);
+      if (ex.rewards.length) extraMsg = '；额外：' + ex.rewards.join('；');
+    } catch {
+      /* 额外奖励非关键，忽略异常 */
+    }
     return {
       success: true,
       points,
       balances: { gold, silver, exp, level },
       continuity,
-      message: `签到成功，金币 ${gold} / 碎银 ${silver} / 经验 ${exp}`
+      message: `签到成功，金币 ${gold} / 碎银 ${silver} / 经验 ${exp}${extraMsg}`
     };
+  },
+
+  // 签到额外奖励（青龙脚本签约动作）：领取 all_reward 与 extra_reward。
+  // 采用与 checkin 相同的显式签名串（含 sk + token，不含 basic_v），与社区 smzdm.py 一致。
+  async doCheckinExtras(cookie) {
+    let token;
+    try {
+      token = await getRobotToken(cookie);
+    } catch {
+      return { rewards: [] };
+    }
+    const ts = Date.now();
+    const sign = md5Sign(`f=android&sk=${APP_SK}&time=${ts}&token=${token}&v=${APP_V}&weixin=1&key=${SIGN_KEY}`);
+    const body = { f: 'android', v: APP_V, sk: APP_SK, weixin: 1, time: ts, token, sign };
+    const rewards = [];
+    for (const ep of ['/checkin/all_reward', '/checkin/extra_reward']) {
+      try {
+        const j = await call(ep, { method: 'POST', cookie, ua: ANDROID_UA, body });
+        if (Number(j?.error_code) === 0) rewards.push(removeTags(j?.data?.reward_msg || '领取成功'));
+      } catch {
+        /* 单个额外奖励失败不影响整体 */
+      }
+    }
+    return { rewards };
   },
 
   async doComment(cookie, opts = {}) {

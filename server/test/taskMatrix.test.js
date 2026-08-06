@@ -46,11 +46,34 @@ test('extractAsset 按映射提取增量', () => {
   assert.equal(r.message, 'ok');
 });
 
-test('CUSTOM_TYPES 含 5 个补全任务', () => {
+test('CUSTOM_TYPES 含 6 个补全任务（含内置 dailyTasks）', () => {
   assert.deepEqual(
     [...CUSTOM_TYPES].sort(),
-    ['crowdtest', 'follow', 'lottery', 'share', 'turntable'].sort()
+    ['crowdtest', 'dailyTasks', 'follow', 'lottery', 'share', 'turntable'].sort()
   );
+});
+
+test('内置真实策略：turntable 缺动态参数 → need_param 待配置', async () => {
+  const db = { settings: { taskEndpoints: {} } };
+  const r = await runCustomEndpointTask({ type: 'turntable', name: '转盘抽奖' }, db, { id: 'u1', cookie: 'c' });
+  assert.equal(r.ok, false);
+  assert.equal(r.pendingCapture, true);
+  assert.equal(r.error, 'need_param');
+});
+
+test('内置真实策略：dailyTasks 在 mock 模式下仍标 pendingCapture（不假跑）', async () => {
+  const db = { settings: { taskEndpoints: {} } };
+  const r = await runCustomEndpointTask({ type: 'dailyTasks', name: '每日任务' }, db, { id: 'u1', cookie: 'c' });
+  assert.equal(r.ok, false);
+  assert.equal(r.pendingCapture, true);
+});
+
+test('内置真实策略：turntable 已填 params 后跳过 need_param（mock 下仅因无 requestRaw 而待配置）', async () => {
+  const db = { settings: { taskEndpoints: { turntable: { params: { activeId: 'abc123' } } } } };
+  const r = await runCustomEndpointTask({ type: 'turntable', name: '转盘抽奖' }, db, { id: 'u1', cookie: 'c' });
+  // 不再报 need_param；mock 下因 requestRaw 不存在而 pendingCapture（真实模式会真正请求）
+  assert.notEqual(r.error, 'need_param');
+  assert.equal(r.pendingCapture, true);
 });
 
 test('parseJsonp 剥离函数外壳', () => {
