@@ -16,8 +16,22 @@
 //
 // 退出码：全部 PASS/SKIP → 0；存在 FAIL → 1；参数错误 → 2。
 
-import { realAdapter, signFormData, appRequest } from '../src/smzdm/realAdapter.js';
+import { realAdapter, signFormData, appRequest, call } from '../src/smzdm/realAdapter.js';
 import { discoverActiveIds, getTestingActivityId } from '../src/smzdm/tasks_real.js';
+
+// 安全可达性探测：原站遗留端点（评论/收藏/点赞/爆料）走 www.smzdm.com + Cookie（无 app 签名）。
+// 以「空 article_id / 空标题」POST，仅验证：URL 正确、方法正确、返回 JSON 结构（而非 404/HTML）。
+// 不会真正发表评论/收藏/点赞/爆料（缺有效 article_id 时 smzdm 返回错误 JSON，不落库）。
+const WWW = 'https://www.smzdm.com';
+async function probeReachability(name, path, body = { article_id: '' }) {
+  await probe(name, 'endpoint', async () => {
+    const r = await call(path, { method: 'POST', cookie, body, base: WWW });
+    if (typeof r !== 'object' || r === null) throw new Error('返回非 JSON（端点可能已变更或需登录态）');
+    const ec = r.error_code ?? r.errorCode ?? r.code ?? '';
+    const msg = r.error_msg ?? r.error_reason ?? r.msg ?? '';
+    return `接口可达（空参数返回错误码=${ec || 'n/a'} ${msg ? '· ' + msg.slice(0, 24) : ''}），端点存活且返回 JSON`;
+  });
+}
 
 const argv = process.argv.slice(2);
 const withCheckin = argv.includes('--with-checkin');
@@ -96,6 +110,12 @@ await probe('众测 全民众测 activity_id', 'endpoint', async () => {
   return `activity_id=${aid}`;
 });
 
+// 6b) 原站遗留端点（评论/收藏/点赞/爆料）：安全可达性探测（空参数 POST，不真正发表）
+await probeReachability('评论 ajax_post_comment', '/article/ajax_post_comment');
+await probeReachability('收藏 ajax_favorite', '/article/ajax_favorite');
+await probeReachability('点赞 ajax_vote', '/article/ajax_vote');
+await probeReachability('爆料 ajax_create', '/publish/articles/ajax_create', { title: '', link: '', price: '', category: '', content: '' });
+
 // 7) 签到（写操作）：默认跳过，避免重复签到
 if (withCheckin) {
   await probe('签到 /checkin（实签）', 'MUTATING', async () => {
@@ -127,9 +147,10 @@ for (const r of results) {
 
 // 写操作端点提示
 console.log('\n注：以下为「写操作」端点，本验证不主动调用以免消耗（仅验证其前置可达性）：');
-console.log('  · 转盘抽奖 jsonp_draw       —— 由 #5 的 active_id 发现保障；真正抽奖在定时任务中执行');
-console.log('  · 每日任务领奖 activity_task_receive —— 由 #4 的 list_v2 保障');
-console.log('  · 众测能量领取 / 商品申请     —— 由 #6 的 activity_id 发现保障');
+console.log('  · 转盘抽奖 jsonp_draw       —— 由「转盘 active_id 自动发现」保障；真正抽奖在定时任务中执行');
+console.log('  · 每日任务领奖 activity_task_receive —— 由「每日任务 list_v2」保障');
+console.log('  · 众测能量领取 / 商品申请     —— 由「众测 activity_id 自动发现」保障');
+console.log('  · 评论/收藏/点赞/爆料         —— 已做「安全可达性探测」（空参数 POST 验证端点存活，不真正发表）');
 console.log('  若这些前置探测 PASS，则实际运行通常不会因端点失效而失败。\n');
 
 const failed = results.filter((r) => r.status === 'FAIL');

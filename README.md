@@ -280,7 +280,7 @@ docker compose up -d --build
 - **自动发现类**（签到 / 每日任务 / 转盘 / 抽奖 / 全民众测）：启用 + 设 cron 即跑，参数留空。
 - **参数类**（关注 / 分享）：在「参数(JSON)」填目标，如 `{"target":"某用户名","type":"user"}`、`{"articleId":"12345678"}`。
 
-> ⚠️ **原站遗留任务（评论 / 收藏 / 点赞）**：其 real 端点（`realAdapter` 的 `doComment`/`doFavorite`/`doPoint`）仍是社区推测值（`BASE=www.smzdm.com`，路径为推测），启用前需自行抓包验证，否则可能触发风控。建议优先用上表“内置真实任务”，规避这部分不确定性。
+> ⚠️ **原站遗留任务（评论 / 收藏 / 点赞 / 爆料）**：其 real 端点（`realAdapter` 的 `doComment`/`doFavorite`/`doPoint`/`submitBaoliao`）已实现，走 `BASE=www.smzdm.com` + Cookie 鉴权（无 app 签名），路径与社区逆向一致。它们同属 best-effort（smzdm 改版可能失效），现已纳入 `verifyRealMode.mjs` 的**安全可达性探测**（空参数 POST 验端点存活，不真正发表）。启用前请先跑自检确认端点仍通；与「内置真实任务」相比，这部分签名防护较弱（无 app 签名），更易触发风控，建议优先用上表任务。
 
 ---
 
@@ -382,7 +382,7 @@ SMZDM_COOKIE="你的Cookie" node tools/verifyRealMode.mjs
 ### 风险提示
 
 - 所有 real 端点/签名来自社区逆向（best-effort），smzdm 改版可能失效——请用 `verifyRealMode.mjs` 定期复核。
-- 评论 / 收藏 / 点赞为**原站遗留任务**，其 real 端点仍是社区推测值，启用前需自行抓包验证，否则可能触发风控；建议优先用上表“内置真实任务”。
+- 评论 / 收藏 / 点赞 / 爆料为**原站遗留任务**，其 real 端点已实现（`www.smzdm.com` + Cookie，无 app 签名），`verifyRealMode.mjs` 已对其做安全可达性探测；因无签名防护更易触发风控，建议优先用上表“内置真实任务”。
 
 ---
 
