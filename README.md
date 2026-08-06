@@ -261,9 +261,24 @@ docker compose up -d --build
    ```
 5. **复核 `.env` 安全项**（见上方 1）：`REQUIRE_AUTH=true`、强 `ADMIN_PASSWORD`、固定强 `API_TOKEN`、按需设 `CORS_ORIGIN`。
 
-### 真实适配器端点状态
-- ✅ **已验证可用**：`doClockIn`（`robot/token → checkin` 真实签到链路；签名算法已修正 `error_code` 字符串比较 bug）。
-- ⚠️ **待你抓包验证（可能失效）**：`getUserInfo`（`/user/`）、`doComment` / `doFavorite` / `doPoint` 的 `BASE` 为 `www.smzdm.com`、路径为社区推测值，大概率需按真实接口修正。启用对应自动任务前请先手动验证，避免触发风控。
+### 内置真实任务清单（移植自青龙社区逆向）
+
+`SMZDM_ADAPTER=real` 后，下列任务的端点、签名、多步流程已内置，无需抓包（端点/签名均为社区逆向 best-effort 值，smzdm 改版可能失效，请用 `verifyRealMode.mjs` 复核）：
+
+| 任务 | 内置端点 | 是否需参数 | 自动发现情况 |
+|---|---|---|---|
+| 签到 | `robot/token → checkin` | 否 | — |
+| 每日任务 | `task/list_v2 → activity_task_receive` | 否 | — |
+| 转盘抽奖 | `jsonp_draw`（web 接口） | 否（可填 `activeId`/`topicUrl` 覆盖） | 运行时从内置稳定专题页抽 `hashId` 作 `active_id` |
+| 每日抽奖 | 同上（复用 `doTurntable`） | 否 | 同上 |
+| 全民众测 | `ajax_get_activity_id → activity_info → task_receive` | 否（可填 `crowd_id` 申请具体商品） | 自动发现全民众测活动，无需 `crowd_id` |
+| 自动关注 | `dingyue-api.smzdm.com`（app 签名） | **是**：`target`+`type` | 关注谁需你指定（无法自动发现） |
+| 自动分享 | `user-api` 分享三连（app 签名） | **是**：`articleId` | 分享哪篇需你指定 |
+
+- **自动发现类**（签到 / 每日任务 / 转盘 / 抽奖 / 全民众测）：启用 + 设 cron 即跑，参数留空。
+- **参数类**（关注 / 分享）：在「参数(JSON)」填目标，如 `{"target":"某用户名","type":"user"}`、`{"articleId":"12345678"}`。
+
+> ⚠️ **原站遗留任务（评论 / 收藏 / 点赞）**：其 real 端点（`realAdapter` 的 `doComment`/`doFavorite`/`doPoint`）仍是社区推测值（`BASE=www.smzdm.com`，路径为推测），启用前需自行抓包验证，否则可能触发风控。建议优先用上表“内置真实任务”，规避这部分不确定性。
 
 ---
 
@@ -286,6 +301,89 @@ docker compose up -d --build
 
 ---
 
+## 真实模式启用指南（内置任务开箱即跑 · 图文）
+
+`SMZDM_ADAPTER=real` 后，上面「内置真实任务清单」里的任务可直接启用——**无需抓包、无需填参数**（仅 `关注`/`分享` 需填目标）。下面是从零到跑通的分步流程。
+
+### 整体流程
+
+```
+① 开真实模式       ② 录入 Cookie      ③ 部署前自检        ④ 启用内置任务      ⑤ 调度+风控       ⑥ Cookie 守护
+.env: real   →   粘贴登录态 Cookie  →  verifyRealMode  →  自动发现类免参跑  →  cron 触发   →  每6h探活+失效告警
+                                          (只读探测)       关注/分享填目标
+```
+
+### 第 1 步：开启真实模式
+
+编辑仓库根 `.env`（从 `.env.example` 复制而来），将：
+
+```ini
+SMZDM_ADAPTER=mock     # 改为 ↓
+SMZDM_ADAPTER=real
+```
+
+重启服务（`npm start` 或容器重建）。超时 `SMZDM_REQUEST_TIMEOUT`（默认 10000ms）一般无需改。
+
+### 第 2 步：录入你的 smzdm Cookie
+
+1. 浏览器登录 smzdm → 打开开发者工具（F12）→ **网络/Application** 任一请求头里复制完整的 `Cookie` 值。
+2. 前端「**录入账号**」页（`/addCookies`）粘贴保存；或 `POST /api/users`。
+3. 多账号可录多个——调度器会**错峰**执行（见第 5 步风控），降低触发限流概率。
+
+> ⚠️ Cookie 等同于你的登录态凭据，本地明文存于 `server/data*/db.json`（已被 `.gitignore` 排除），切勿提交或分享。
+
+### 第 3 步：部署前自检（强烈建议）
+
+real 端点/签名是社区逆向值，smzdm 改版可能失效。**上线前先用自己的 Cookie 跑一次只读诊断**，逐项报 ✅/❌：
+
+```bash
+cd server
+SMZDM_COOKIE="你的Cookie" node tools/verifyRealMode.mjs
+# 加 --with-checkin 才真正签一次到（端到端验证签到链路，每日一次低风险）
+```
+
+探测项：签名算法、Cookie 有效性、`user-api` 可达、`task/list_v2` 结构、转盘 `active_id` 自动发现、众测 `activity_id` 自动发现。**不调用任何消耗抽奖/领奖的写接口**。任一 ❌ 先修再上线。
+
+### 第 4 步：启用内置任务（开箱即跑）
+
+到「**自动任务**」页（`/tasks`），把下表任务**启用**并设 **cron**：
+
+| 任务 | 是否需要参数 | 参数示例 | 说明 |
+|---|---|---|---|
+| 签到 | 否 | — | 真实签到，响应含权威余额（金/碎银/经验） |
+| 每日任务 | 否 | — | 自动领每日任务奖励 |
+| 转盘抽奖 | 否（可覆盖） | `{"activeId":"xxx"}` 或 `{"topicUrl":"https://m.smzdm.com/topic/..."}` | 内置双转盘专题页，运行时自动抽 `active_id` |
+| 每日抽奖 | 否 | 同上 | 复用转盘逻辑 |
+| 全民众测 | 否（可覆盖） | `{"crowdId":"xxx"}` | 默认自动发现活动并领能量值，填 `crowd_id` 则申请具体商品 |
+| 自动关注 | **是** | `{"target":"某用户名","type":"user"}`（`user`/`tag`/`brand`） | 关注谁需你指定 |
+| 自动分享 | **是** | `{"articleId":"12345678"}` | 分享哪篇需你指定（文章数字 ID） |
+
+- **自动发现类**（签到/每日任务/转盘/抽奖/全民众测）：点启用 + 设 cron 即可，**参数留空**。
+- **参数类**（关注/分享）：在「参数(JSON)」文本框填上表示例；填了才标记「已就绪」。
+
+### 第 5 步：调度与风控
+
+- **cron 写法**：`0 9 * * *`（每天 9:00）、`*/30 * * * *`（每 30 分钟）。调度器每 30s 轮询，命中即执行。
+- **错峰风控**（避免同秒扎堆触发 smzdm 限流）：多账号默认错峰，可调 `.env`：
+  ```ini
+  CLOCK_STAGGER_MS=800          # 每个账号额外固定等待
+  CLOCK_STAGGER_JITTER_MS=2000  # 叠加随机抖动
+  CATCHUP_GRACE_MIN=180         # 错过签到后多久内仍补签
+  ```
+
+### 第 6 步：Cookie 失效守护
+
+- 调度器每 `COOKIE_HEALTH_INTERVAL_MIN`（默认 **360 分钟**）自动探活一次（仅 real 模式）。
+- 也随时可在「**我的账号**」页点 **🍪 检测** 手动复核；失效账号显示红色「🍪 Cookie 失效」徽标。
+- 失效时经「**推送通知**」渠道（Server酱/Bark/Telegram/Webhook，先在「推送通知」页配置）告警，**仅在「有效→失效」迁移时告警一次**（自愈后清零，不刷屏）。
+
+### 风险提示
+
+- 所有 real 端点/签名来自社区逆向（best-effort），smzdm 改版可能失效——请用 `verifyRealMode.mjs` 定期复核。
+- 评论 / 收藏 / 点赞为**原站遗留任务**，其 real 端点仍是社区推测值，启用前需自行抓包验证，否则可能触发风控；建议优先用上表“内置真实任务”。
+
+---
+
 ## 页面状态
 
 - **已完整实现（真实页面）**：
@@ -293,7 +391,7 @@ docker compose up -d --build
   - 录入账号 `addCookies`、我的账号 `users`、签到记录 `history`、自动任务 `tasks`、运行台 `manage`、管理后台 `admin`
   - 自动评论 `comment` / 自动收藏 `favorite` / 自动点赞 `point`（统一 `TaskCenter` 组件）、好价爆料 `baoliao`、GPT 自动回复 `gptReply`
 - **长尾变体重定向**：`comment*`、`favorite*`、`point*`、`adminPannel` 等已重定向到就近真实页。
-- **占位承接**：`shops` / `updateTSFP` / `test` 等无独立功能对应的路由在「全部模块」页以占位页承接。
+- **已清理的占位页**：原站残留的 `shops` / `updateTSFP` / `test` 三个空壳页已从「全部模块」入口移除（不再渲染）；`/p/:name` 路由与 `Placeholder.vue` 仅作为无害兜底保留。
 
 ---
 
