@@ -166,6 +166,8 @@ SMZDM_COOKIE="你的Cookie" node tools/verifyRealMode.mjs
 
 ## 部署
 
+> 部署与上线全流程（三种方式 + 真实模式启用 + 公网安全加固 + 资产仪表盘图文）已整合到 **[DEPLOY.md](./DEPLOY.md)**，建议上线前通读。
+
 ### 方式一：一键部署脚本 `deploy.sh`（推荐，交互式）
 
 `deploy.sh` 是一个**交互式一键部署脚本**，会先自动检测你的环境，再让你选部署方式，并自动补齐缺失的依赖：
@@ -390,6 +392,7 @@ SMZDM_COOKIE="你的Cookie" node tools/verifyRealMode.mjs
   - 每日签到 `userclock`（目标页）、签到中心 `clock`、连续签到 `userclock2`、积分总览 `userclock3`、账号资料 `userinfo`
   - 录入账号 `addCookies`、我的账号 `users`、签到记录 `history`、自动任务 `tasks`、运行台 `manage`、管理后台 `admin`
   - 自动评论 `comment` / 自动收藏 `favorite` / 自动点赞 `point`（统一 `TaskCenter` 组件）、好价爆料 `baoliao`、GPT 自动回复 `gptReply`
+  - **资产仪表盘** `assets`（A/B 协同核心：当前资产 / 日收益曲线 / 任务贡献 / 资产账本，SVG 渲染）
 - **长尾变体重定向**：`comment*`、`favorite*`、`point*`、`adminPannel` 等已重定向到就近真实页。
 - **已清理的占位页**：原站残留的 `shops` / `updateTSFP` / `test` 三个空壳页已从「全部模块」入口移除（不再渲染）；`/p/:name` 路由与 `Placeholder.vue` 仅作为无害兜底保留。
 
