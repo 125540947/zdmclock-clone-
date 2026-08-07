@@ -9,6 +9,28 @@
       <button class="btn ghost" :disabled="checking" @click="checkAll">🍪 检测</button>
     </header>
 
+    <section class="card grab rise" style="animation-delay: 0.03s">
+      <div class="grab-head">
+        <span>🍪 自动抓 Cookie（油猴一键推送）</span>
+        <span class="tag on">推荐</span>
+      </div>
+      <p class="hint">
+        在 smzdm 网页登录后，点一下页面上的「🍪 推送到 zdmclock」按钮，自动把登录态推送到本服务
+        （按账号去重更新，不重复建号）。比手动去 DevTools 复制 Cookie 更省事，且能读取 HttpOnly 的会话
+        Cookie、不碰你的 smzdm 密码。
+      </p>
+      <ol class="steps">
+        <li>浏览器装 <a href="https://www.tampermonkey.net/" target="_blank" rel="noreferrer">Tampermonkey</a> 插件</li>
+        <li>点下方「复制脚本」或「下载 .user.js」，新建一个用户脚本粘贴 / 安装</li>
+        <li>油猴菜单「⚙ zdmclock 设置」里填：服务地址（http://你的IP:3000）+ API_TOKEN</li>
+        <li>打开 smzdm 任意页面，点「🍪 推送到 zdmclock」即可</li>
+      </ol>
+      <div class="grab-actions">
+        <button class="btn ghost sm" :disabled="loadingScript" @click="copyScript">📋 复制脚本</button>
+        <button class="btn ghost sm" :disabled="loadingScript" @click="downloadScript">⬇ 下载 .user.js</button>
+      </div>
+    </section>
+
     <section v-if="users.length" class="card rise" style="animation-delay: 0.05s">
       <div v-for="u in users" :key="u.id" class="acc">
         <div class="acc-top">
@@ -104,7 +126,7 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue';
 import VerifyChart from '../components/VerifyChart.vue';
-import api, { updateUser, getClockDistribution, checkCookies, verifyReal } from '../api/client.js';
+import api, { updateUser, getClockDistribution, checkCookies, verifyReal, getCookieGrabberScript } from '../api/client.js';
 
 const users = ref([]);
 const busy = ref('');
@@ -122,6 +144,8 @@ const schedModes = [
 ];
 const autoWindow = ref('08:00~10:59');
 const defaultTime = ref('09:00');
+const scriptText = ref('');
+const loadingScript = ref(false);
 
 function showToast(m, t = 'ok') {
   toast.value = m;
@@ -238,6 +262,42 @@ onMounted(async () => {
     /* 后台接口不可用不影响账号列表 */
   }
 });
+
+// ===== 油猴抓取脚本：复制 / 下载 =====
+async function ensureScript() {
+  if (scriptText.value) return;
+  loadingScript.value = true;
+  try {
+    scriptText.value = await getCookieGrabberScript();
+  } catch (e) {
+    showToast(e.response?.data?.message || '脚本加载失败', 'err');
+  } finally {
+    loadingScript.value = false;
+  }
+}
+async function copyScript() {
+  await ensureScript();
+  if (!scriptText.value) return;
+  try {
+    await navigator.clipboard.writeText(scriptText.value);
+    showToast('脚本已复制，去 Tampermonkey 新建脚本粘贴即可');
+  } catch {
+    showToast('复制失败，请手动选择文本复制', 'err');
+  }
+}
+async function downloadScript() {
+  await ensureScript();
+  if (!scriptText.value) return;
+  const blob = new Blob([scriptText.value], { type: 'text/javascript' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'cookie-grabber.user.js';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(a.href);
+  showToast('已下载 cookie-grabber.user.js');
+}
 </script>
 
 <style scoped>
@@ -381,6 +441,31 @@ onMounted(async () => {
 .btn.danger {
   color: #ffb3ac;
   border-color: rgba(255, 90, 77, 0.4);
+}
+.grab {
+  padding: 16px 14px 14px;
+}
+.grab-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.grab .steps {
+  margin: 10px 0 12px;
+  padding-left: 20px;
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.9;
+}
+.grab .steps a {
+  color: var(--primary);
+}
+.grab-actions {
+  display: flex;
+  gap: 8px;
 }
 .toast {
   position: fixed;

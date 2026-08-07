@@ -1,9 +1,18 @@
 import { Router } from 'express';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { load, persist, genId, withWriteLock } from '../store.js';
 import { smzdm } from '../smzdm/adapter.js';
 import { authRequired, maskCookie } from '../auth.js';
 import { resolvedCheckInTime } from '../clockSchedule.js';
 import { resetRisk } from '../riskControl.js';
+
+// 油猴抓取脚本在仓库 tools/ 下，供前端「复制/下载」用。
+const SCRIPT_PATH = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../../../tools/cookie-grabber.user.js'
+);
 
 const router = Router();
 
@@ -70,6 +79,67 @@ router.post('/', authRequired, async (req, res) => {
   db.users.push(user);
   await withWriteLock(() => persist());
   res.json({ ...user, cookie: maskCookie(user.cookie) });
+});
+
+// 自动抓取导入（油猴脚本等自动工具调用）：按 smzdmId upsert。
+// 与 POST / 的区别：同名账号（同一 smzdmId）只更新 cookie，不重复建号。
+router.post('/import', authRequired, async (req, res) => {
+  const { cookie, nickname } = req.body || {};
+  if (typeof cookie !== 'string' || !cookie.trim()) {
+    return res.status(400).json({ error: 'missing_cookie', message: 'cookie 必填且为字符串' });
+  }
+  const db = load();
+  let info = {};
+  try {
+    info = await smzdm.getUserInfo(cookie);
+  } catch {
+    /* mock 不抛；real 未连通时忽略，仍允许导入 */
+  }
+  const smzdmId = (info && info.smzdmId) || '';
+  const existed = smzdmId ? !!db.users.find((x) => x.smzdmId === smzdmId) : false;
+  const clean = (v, max = 64) => (typeof v === 'string' ? v.slice(0, max) : '');
+  let user;
+  if (!existed) {
+    user = {
+      id: genId('u'),
+      smzdmId,
+      nickname: clean(nickname) || info.nickname || '未命名账号',
+      cookie,
+      cookieExpired: false,
+      points: info.points || 0,
+      level: info.level || '',
+      vip: !!info.vip,
+      streak: 0,
+      totalClockIn: 0,
+      schedMode: 'auto',
+      checkInTime: '',
+      createdAt: new Date().toISOString()
+    };
+    user.checkInTime = resolvedCheckInTime(user);
+    db.users.push(user);
+  } else {
+    user = db.users.find((x) => x.smzdmId === smzdmId);
+    user.cookie = cookie;
+    user.cookieExpired = false;
+    user.nickname = clean(nickname) || user.nickname || info.nickname || '未命名账号';
+    resetRisk(user.id);
+    user.points = info.points || user.points;
+    user.level = info.level || user.level;
+    user.vip = !!info.vip;
+    user.smzdmId = user.smzdmId || smzdmId;
+  }
+  await withWriteLock(() => persist());
+  res.json({ ...user, cookie: maskCookie(user.cookie), imported: true, upserted: existed });
+});
+
+// 返回油猴抓取脚本源码（前端「复制/下载」用）
+router.get('/import-script', authRequired, (req, res) => {
+  try {
+    const code = fs.readFileSync(SCRIPT_PATH, 'utf8');
+    res.type('text/plain').send(code);
+  } catch {
+    res.status(404).json({ error: 'not_found', message: '脚本文件不存在（请确认 tools/cookie-grabber.user.js）' });
+  }
 });
 
 // 账号详情

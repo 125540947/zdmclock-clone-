@@ -176,6 +176,41 @@ test('GET /api/admin/clock-distribution 返回时段桶与总数', async () => {
   assert.equal(slot.scheduledCount, slot.accounts.length);
 });
 
+test('POST /api/users/import 缺 cookie 返回 400', async () => {
+  config.requireAuth = true;
+  const { status } = await j('POST', '/api/users/import', { nickname: 'x' }, {
+    Authorization: 'Bearer ' + config.apiToken
+  });
+  assert.equal(status, 400);
+  config.requireAuth = false;
+});
+
+test('POST /api/users/import 新建 → 再次同 cookie 走 upsert（不重复建号）', async () => {
+  config.requireAuth = true;
+  const headers = { Authorization: 'Bearer ' + config.apiToken };
+  const first = await j('POST', '/api/users/import', { cookie: 'ck_import_same' }, headers);
+  assert.equal(first.status, 200);
+  assert.equal(first.data.imported, true);
+  assert.equal(first.data.upserted, false, '首次应为新建');
+  const id1 = first.data.id;
+  const second = await j('POST', '/api/users/import', { cookie: 'ck_import_same' }, headers);
+  assert.equal(second.status, 200);
+  assert.equal(second.data.upserted, true, '同 cookie 应为更新');
+  assert.equal(second.data.id, id1, '不应新建第二个账号');
+  config.requireAuth = false;
+});
+
+test('GET /api/users/import-script 返回油猴脚本源码（text/plain）', async () => {
+  config.requireAuth = true;
+  const res = await fetch(base + '/api/users/import-script', {
+    headers: { Authorization: 'Bearer ' + config.apiToken }
+  });
+  const text = await res.text();
+  assert.equal(res.status, 200);
+  assert.ok(text.includes('UserScript'), '应返回油猴脚本内容');
+  config.requireAuth = false;
+});
+
 test('关闭测试服务器', () => {
   server.close();
   assert.ok(true);

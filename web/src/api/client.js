@@ -148,6 +148,12 @@ export async function verifyReal(userId, withCheckin = false) {
   return data;
 }
 
+// ===== 油猴抓取脚本源码（前端「复制/下载」用）=====
+export async function getCookieGrabberScript() {
+  const { data } = await api.get('/users/import-script', { responseType: 'text' });
+  return data;
+}
+
 // ===== 系统更新（从 Git 仓库拉取最新代码，需独立管理员 Token）=====
 export async function getUpdateStatus() {
   const { data } = await api.get('/update/status', {
