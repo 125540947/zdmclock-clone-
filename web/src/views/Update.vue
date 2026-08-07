@@ -39,6 +39,10 @@
           <template v-else>检查失败：{{ checkResult.error }}</template>
         </div>
 
+        <div v-if="state.untrackedFiles && state.untrackedFiles.length" class="note">
+          ℹ 工作区有 {{ state.untrackedFiles.length }} 个未跟踪文件（如日志/产物），不影响 ff-only 更新。
+        </div>
+
         <div class="acts">
           <button class="btn ghost sm" :disabled="checking || !state.supported" @click="check">
             {{ checking ? '检查中…' : '检查更新' }}
@@ -69,7 +73,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import api, { getUpdateStatus, checkUpdateRepo, applyUpdateRepo } from '../api/client.js';
 
 const state = ref({
@@ -79,9 +83,11 @@ const state = ref({
   commitMsg: '',
   dirty: false,
   dirtyFiles: [],
+  untrackedFiles: [],
   supported: false,
   isRepo: false,
-  hasRemote: false
+  hasRemote: false,
+  apply: null
 });
 const loading = ref(false);
 const checking = ref(false);
@@ -92,6 +98,7 @@ const willRestart = ref(false);
 const applyError = ref('');
 const toast = ref('');
 const toastType = ref('ok');
+let pollTimer = null;
 
 const channelLabel = computed(() => (state.value.channel === 'docker' ? 'Docker' : '原生 Node'));
 const channelClass = computed(() => (state.value.channel === 'docker' ? 'docker' : 'native'));
@@ -107,7 +114,8 @@ const canApply = computed(
     state.value.supported &&
     !state.value.dirty &&
     !applying.value &&
-    !willRestart.value
+    !willRestart.value &&
+    !(state.value.apply && state.value.apply.status === 'running')
 );
 
 function showToast(m, t = 'ok') {
@@ -150,31 +158,61 @@ async function check() {
   }
 }
 
-async function apply() {
-  applying.value = true;
-  applyLog.value = ['▶ 开始更新…'];
-  applyError.value = '';
-  willRestart.value = false;
+// 轮询后台更新进度：apply 接口立即返回 202，真正的更新在后端异步跑，前端定时拉 /status。
+function stopPoll() {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+async function pollApply() {
   try {
-    const d = await applyUpdateRepo();
-    applyLog.value = d.log || [];
-    if (d.ok && d.willRestart) {
+    const d = await getUpdateStatus();
+    state.value = d;
+    const ap = d.apply;
+    if (!ap) {
+      stopPoll();
+      return;
+    }
+    applyLog.value = ap.log || [];
+    if (ap.status === 'running') return; // 继续轮询
+    // 任务结束
+    stopPoll();
+    applying.value = false;
+    const r = ap.result || {};
+    if (ap.status === 'failed') {
+      applyError.value = r.error || '更新失败';
+    } else if (r.restarting) {
       willRestart.value = true;
       // 服务即将自重启，稍后刷新页面以加载新版本
       setTimeout(() => location.reload(), 4000);
-    } else if (!d.ok) {
-      applyError.value = d.error || '更新失败';
+    } else if (!r.ok) {
+      applyError.value = r.error || '更新失败';
     } else {
       showToast('已是最新，无需更新');
     }
+  } catch {
+    // 服务可能正在重启中，轮询会自然恢复，这里不报错打断流程
+  }
+}
+
+async function apply() {
+  applying.value = true;
+  applyLog.value = ['▶ 已提交更新任务，后台执行中（不阻塞页面）…'];
+  applyError.value = '';
+  willRestart.value = false;
+  try {
+    await applyUpdateRepo(); // 返回 202 accepted，随后轮询进度（修复 M1）
+    pollTimer = setInterval(pollApply, 1500);
   } catch (e) {
-    applyError.value = errText(e);
-  } finally {
     applying.value = false;
+    applyError.value = errText(e);
   }
 }
 
 onMounted(load);
+onUnmounted(stopPoll);
 </script>
 
 <style scoped>

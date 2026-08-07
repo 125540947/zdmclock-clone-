@@ -79,9 +79,15 @@ export async function getRepoState({ cwd, runner = run } = {}) {
   s.commitShort = s.commit.slice(0, 7);
   s.commitMsg = mR.stdout.trim();
   s.hasRemote = rR.ok && !!rR.stdout.trim();
-  const lines = stR.stdout.split('\n').map((x) => x.trim()).filter(Boolean);
-  s.dirty = lines.length > 0;
-  s.dirtyFiles = lines;
+  // 注意：git pull --ff-only 不会因"未跟踪文件（??）"而失败，只有被追踪文件的修改才会
+  // 阻碍 fast-forward。因此这里只把"被追踪文件的修改"视为脏，避免本地产物 / 临时文件
+  // （如 .env.generated、*.log、data/ 下未忽略文件）误拒自动更新（修复 M3）。
+  const all = stR.stdout.split('\n').map((x) => x.trim()).filter(Boolean);
+  const untracked = all.filter((l) => l.startsWith('??'));
+  const tracked = all.filter((l) => !l.startsWith('??'));
+  s.dirty = tracked.length > 0;
+  s.dirtyFiles = tracked;
+  s.untrackedFiles = untracked;
   return s;
 }
 
@@ -120,9 +126,13 @@ export async function checkUpdate(state, runner = run) {
 }
 
 // 执行更新：ff-only 拉取 → 按变更文件决定是否 npm install / build → 可选自重启。
-export async function runUpdate({ restart = true, runner = run } = {}) {
+// onLog(line)：可选回调，用于把进度实时推给调用方（如 HTTP 轮询），避免长任务无反馈。
+export async function runUpdate({ restart = true, onLog, runner = run } = {}) {
   const log = [];
-  const push = (line) => log.push(line);
+  const push = (line) => {
+    log.push(line);
+    if (typeof onLog === 'function') onLog(line);
+  };
 
   const state = await getRepoState({ runner });
   if (!state.isRepo) {

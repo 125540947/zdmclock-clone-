@@ -22,11 +22,12 @@
 ## 1. 部署步骤（推荐：scp 传仓库，无需 GitHub）
 
 > ⚠️ **不要再复制粘贴文档里那一长串多行脚本**——换行极易在终端里丢失导致命令错乱（你已踩过坑）。
-> 改为 **scp 把整个仓库传到 VPS**，然后 `bash deploy-vps.sh` 一条命令跑完。脚本会自动装 Node 22、构建、起 systemd。
+> 改为 **scp 把整个仓库传到 VPS**，然后 `bash deploy.sh` 一条命令跑完。脚本会自动装 Node 22、构建、起 systemd。
+> `deploy.sh` 已彻底重写为**非交互、自举**脚本（不再有 `read` 交互等待，也不会误把 `/root` 当部署目录）；`deploy-vps.sh` 现在是它的薄包装别名，两者等价。
 
 ### 1.0 退出卡住的旧脚本
 
-你刚才卡在 `bash ./deploy.sh` 的 `read` 交互等待，先按 **`Ctrl + C`** 退出它（不要回车选 Docker，那会因没装 docker 失败）。
+若 VPS 上仍残留旧的 `deploy.sh`（交互式）卡在等待输入，先按 **`Ctrl + C`** 退出它，然后用本仓库最新提交里的 `deploy.sh` 重新部署（见下）。
 
 ### 1.1 在你自己的机器上，把仓库 scp 到 VPS（保留 .git，排除大目录）
 
@@ -39,7 +40,7 @@ ssh root@124.222.218.174 "mkdir -p /opt/zdmclock"
 scp -r -o StrictHostKeyChecking=no \
   "$REPO"/.git \
   "$REPO"/server "$REPO"/web "$REPO"/package.json "$REPO"/package-lock.json \
-  "$REPO"/deploy-vps.sh "$REPO"/.env.example \
+  "$REPO"/deploy.sh "$REPO"/deploy-vps.sh "$REPO"/.env.example \
   root@124.222.218.174:/opt/zdmclock/
 ```
 
@@ -49,8 +50,8 @@ scp -r -o StrictHostKeyChecking=no \
 
 ```bash
 ssh root@124.222.218.174
-bash /opt/zdmclock/deploy-vps.sh            # IP:PORT 访问（无 TLS）
-# 有域名想免费 HTTPS： bash /opt/zdmclock/deploy-vps.sh --tls your.domain.com
+bash /opt/zdmclock/deploy.sh            # IP:PORT 访问（无 TLS）
+# 有域名想免费 HTTPS： bash /opt/zdmclock/deploy.sh --tls your.domain.com
 ```
 
 脚本会依次：装 Node 22 LTS（缺失才装）→ 建非 root 用户 → 装依赖/构建（已有则跳过）→

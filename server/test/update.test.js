@@ -89,22 +89,76 @@ test('POST /api/update/check 返回落后提交数', async () => {
   assert.equal(data.remoteCommit, 'def789');
 });
 
-test('POST /api/update/apply 成功时返回 willRestart 并触发重启', async () => {
+test('M1：POST /api/update/apply 立即返回 202 并在后台执行，status 可轮询进度', async () => {
   let restarted = 0;
+  // runUpdate 故意延迟 20ms，模拟真实构建耗时，验证接口不阻塞、且并发会被 409 拦截。
   const fakeSelf = {
     getRepoState: async () => supportedState,
     checkUpdate: async () => ({ ok: true, behind: 0, ahead: 0 }),
-    runUpdate: async () => ({ ok: true, log: ['done'], restarting: true, channel: 'native', commitShort: 'def789' }),
+    runUpdate: async ({ onLog } = {}) => {
+      await new Promise((r) => setTimeout(r, 20));
+      if (typeof onLog === 'function') onLog('done');
+      return { ok: true, log: ['done'], restarting: true, channel: 'native', commitShort: 'def789' };
+    },
     scheduleRestart: () => {
       restarted++;
     },
     updateSupported: (s) => s.isRepo && s.hasRemote && s.channel === 'native'
   };
-  const { status, data } = await j(makeApp(fakeSelf), 'POST', '/api/update/apply');
-  assert.equal(status, 200);
-  assert.equal(data.ok, true);
-  assert.equal(data.willRestart, true);
-  assert.equal(restarted, 1);
+  const app = express();
+  app.use(express.json());
+  app.use('/api/update', createUpdateRouter(fakeSelf));
+  const server = app.listen(0);
+  await new Promise((r) => server.once('listening', r));
+  const base = 'http://localhost:' + server.address().port;
+  const H = { 'Content-Type': 'application/json', Authorization: 'Bearer test-api-token' };
+
+  const post = await fetch(base + '/api/update/apply', { method: 'POST', headers: H });
+  assert.equal(post.status, 202, '应立刻返回 202 accepted，不阻塞构建');
+  const pd = await post.json();
+  assert.equal(pd.accepted, true);
+
+  // 并发第二次应被 409 拦截（busy 防护）
+  const post2 = await fetch(base + '/api/update/apply', { method: 'POST', headers: H });
+  assert.equal(post2.status, 409, '并发更新应被拒');
+
+  // 等后台完成（含触发重启）
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(restarted, 1, '后台完成后触发重启');
+
+  const st = await fetch(base + '/api/update/status', { headers: H });
+  const sd = await st.json();
+  assert.equal(sd.apply.status, 'done', 'status 应暴露后台任务最终状态');
+  assert.ok(sd.apply.log.includes('done'));
+  server.close();
+});
+
+test('POST /api/update/apply 后台失败时 status 为 failed（不误报成功）', async () => {
+  const fakeSelf = {
+    getRepoState: async () => supportedState,
+    checkUpdate: async () => ({ ok: true, behind: 0 }),
+    runUpdate: async () => {
+      await new Promise((r) => setTimeout(r, 10));
+      return { ok: false, log: ['pull failed'], error: 'git pull 失败' };
+    },
+    scheduleRestart: () => {},
+    updateSupported: (s) => s.isRepo && s.hasRemote
+  };
+  const app = express();
+  app.use(express.json());
+  app.use('/api/update', createUpdateRouter(fakeSelf));
+  const server = app.listen(0);
+  await new Promise((r) => server.once('listening', r));
+  const base = 'http://localhost:' + server.address().port;
+  const H = { 'Content-Type': 'application/json', Authorization: 'Bearer test-api-token' };
+  const post = await fetch(base + '/api/update/apply', { method: 'POST', headers: H });
+  assert.equal(post.status, 202);
+  await new Promise((r) => setTimeout(r, 40));
+  const st = await fetch(base + '/api/update/status', { headers: H });
+  const sd = await st.json();
+  assert.equal(sd.apply.status, 'failed');
+  assert.equal(sd.apply.result.error, 'git pull 失败');
+  server.close();
 });
 
 test('GET /api/update/status 在 unsupported 时 supported=false', async () => {

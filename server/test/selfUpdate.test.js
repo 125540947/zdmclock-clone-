@@ -61,6 +61,23 @@ test('getRepoState：解析分支/提交/远程/是否脏', async () => {
   assert.equal(r.channel, 'native');
 });
 
+test('M3：未跟踪文件(??)不视为脏，脏仅针对被追踪修改', async () => {
+  const r = await getRepoState({
+    runner: baseRunner({ _status: '?? temp.log\n?? .env.generated\n M server/src/x.js' })
+  });
+  assert.equal(r.dirty, true, '被追踪修改 M 应判脏');
+  assert.equal(r.dirtyFiles.length, 1);
+  assert.equal(r.untrackedFiles.length, 2, '未跟踪文件应单独列出、不影响更新');
+});
+
+test('M3：仅有未跟踪文件时 dirty=false（不会误拒更新）', async () => {
+  const r = await getRepoState({
+    runner: baseRunner({ _status: '?? temp.log\n?? data/local.json' })
+  });
+  assert.equal(r.dirty, false);
+  assert.equal(r.untrackedFiles.length, 2);
+});
+
 test('getRepoState：非仓库时给出错误', async () => {
   const r = await getRepoState({
     runner: async (cmd, args) =>

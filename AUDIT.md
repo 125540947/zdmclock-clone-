@@ -42,20 +42,20 @@
 
 ## 🟠 中风险（P1）
 
-### M1. `POST /apply` 同步阻塞到构建完成，客户端易超时
+### M1. `POST /apply` 同步阻塞到构建完成，客户端易超时 ✅ 已修复
 - **位置**：`server/src/routes/update.js` L40-53；前端 `Update.vue` `apply()`。
 - **问题**：`runUpdate` 内含 `npm install`/`npm run build`（各 5 分钟超时），整段 `await` 后才响应。浏览器/网关 2 分钟超时后客户端报错，但服务端实际已完成并重启 → "看到失败实为已更新"，困惑。
-- **修复建议**：改为异步（立即 `202` + `jobId`），后台执行，前端轮询 `/status` 或 SSE 推送 `log`；按钮置灰直到 `busy=false`。
+- **修复**：改为异步——`POST /apply` 立即返回 `202 {accepted:true}`，更新在后台执行；`runUpdate` 新增 `onLog` 实时推送日志；`GET /status` 暴露 `apply:{status,log,result}`，前端每 1.5s 轮询展示进度与最终结果。并发申请返回 `409 busy` 防护。按钮置灰直到 `busy=false`。后端 2 个用例、前端 2 个用例覆盖。
 
 ### M2. 自动更新无备份/快照
 - **位置**：`server/src/selfUpdate.js` `runUpdate` / `runUpdateCheck`。
 - **问题**：拉取即覆盖工作区，破坏性变更无法一键回退（见 H1）。
 - **修复建议**：更新前记录旧 commit（或 `cp` 快照 `web/dist`/`node_modules`），文档给出 `git revert` 步骤。
 
-### M3. 脏工作区判定过严（含未跟踪文件则拒绝）
+### M3. 脏工作区判定过严（含未跟踪文件则拒绝） ✅ 已修复
 - **位置**：`server/src/selfUpdate.js` `getRepoState`（L82-84）+ `runUpdate`（L146）。
 - **问题**：`git status --porcelain` 把未跟踪文件（本地日志、`*.local` 等）也计入 dirty → 误拒更新。`.env` 已被 gitignore 不显示，但其它本地产物会卡住更新。
-- **修复建议**：仅以**已跟踪文件**改动判定脏（`--untracked-files=no`），或显式白名单。
+- **修复**：仅以**被追踪文件**的改动判定脏（`??` 开头的未跟踪行忽略），未跟踪文件单独记到 `untrackedFiles` 供前端提示（不影响 ff-only 更新）。`runUpdate` 的脏校验现只针对 tracked。2 个用例覆盖（含仅未跟踪文件时 `dirty=false`）。
 
 ---
 
@@ -73,7 +73,7 @@
 - **无命令注入**：所有外部命令经 `execFile(cmd, args[], opts)`（参数数组，不走 shell）；`branch` 等拼进参数但来源是 `git` 自身输出而非用户输入，无 shell 元字符风险。
 - **仅 ff-only**：`git pull --ff-only` 不会自动 merge/rebase，杜绝覆盖本地提交。
 - **Docker 通道禁更新**：容器内返回明确指引，避免无效 pull。
-- **测试覆盖**：后端 178、前端 25 全绿；self-update 用注入式假 runner，route 用假模块，未触碰真实 git/网络。
+- **测试覆盖**：后端 186、前端 26 全绿；self-update 用注入式假 runner，route 用假模块，未触碰真实 git/网络。
 - **可视化图表数据契约对齐**：`verifyRealMode` 返回 `{name,kind,status,detail,ms}`，组件字段完全匹配；几何运算正确。
 - **常量时间 token 比较**：`safeEqual` 防计时侧信道。
 
