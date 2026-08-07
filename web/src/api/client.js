@@ -13,6 +13,19 @@ if (token) {
   api.defaults.headers.common['Authorization'] = 'Bearer ' + token;
 }
 
+// 全局 401 拦截：凭证失效时清掉本地 token 并广播「需要登录」事件，
+// 由 App.vue 的登录浮层接管。避免各页面各自处理鉴权。
+api.interceptors.response.use(
+  (resp) => resp,
+  (err) => {
+    if (err && err.response && err.response.status === 401) {
+      setToken(null);
+      window.dispatchEvent(new Event('zdm:unauthorized'));
+    }
+    return Promise.reject(err);
+  }
+);
+
 export function setToken(t, adminToken) {
   if (t) {
     localStorage.setItem('zdm_token', t);
