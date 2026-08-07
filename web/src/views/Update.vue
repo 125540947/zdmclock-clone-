@@ -116,13 +116,21 @@ function showToast(m, t = 'ok') {
   setTimeout(() => (toast.value = ''), 2600);
 }
 
+// 把后端错误码翻译成可读文案（含 H2 新增的 admin_token_required）
+function errText(e) {
+  const code = e.response?.data?.error;
+  if (code === 'admin_token_required')
+    return '需要管理员令牌，请退出重新登录后再试';
+  return e.response?.data?.error || e.response?.data?.message || '操作失败';
+}
+
 async function load() {
   loading.value = true;
   try {
     const d = await getUpdateStatus();
     state.value = d;
   } catch (e) {
-    showToast(e.response?.data?.error || '获取状态失败', 'err');
+    showToast(errText(e), 'err');
   } finally {
     loading.value = false;
   }
@@ -136,7 +144,7 @@ async function check() {
     checkResult.value = d;
     if (!d.ok) showToast(d.error || '检查失败', 'err');
   } catch (e) {
-    showToast(e.response?.data?.error || '检查失败', 'err');
+    showToast(errText(e), 'err');
   } finally {
     checking.value = false;
   }
@@ -160,7 +168,7 @@ async function apply() {
       showToast('已是最新，无需更新');
     }
   } catch (e) {
-    applyError.value = e.response?.data?.error || '更新失败';
+    applyError.value = errText(e);
   } finally {
     applying.value = false;
   }

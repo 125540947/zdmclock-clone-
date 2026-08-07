@@ -1,8 +1,25 @@
 // 更新路由 HTTP 测试（node:test）：用注入的假 selfUpdate 验证 /status /check /apply 的鉴权放行与响应结构。
-import { test } from 'node:test';
+import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import { createUpdateRouter } from '../src/routes/update.js';
+import { config } from '../src/config.js';
+
+// 默认把鉴权设为"开启 + 通用 API_TOKEN"，走 requireAdmin 的兜底分支（未配 ADMIN_TOKEN 时）。
+const SAVED = {};
+before(() => {
+  SAVED.requireAuth = config.requireAuth;
+  SAVED.apiToken = config.apiToken;
+  SAVED.adminToken = config.adminToken;
+  config.requireAuth = true;
+  config.apiToken = 'test-api-token';
+  config.adminToken = '';
+});
+after(() => {
+  config.requireAuth = SAVED.requireAuth;
+  config.apiToken = SAVED.apiToken;
+  config.adminToken = SAVED.adminToken;
+});
 
 function makeApp(fakeSelf) {
   const app = express();
@@ -11,13 +28,14 @@ function makeApp(fakeSelf) {
   return app;
 }
 
-async function j(app, method, p, body) {
+// 默认带通用 API_TOKEN（兜底分支放行）；可传 headers 覆盖（如 X-Admin-Token）。
+async function j(app, method, p, body, headers = {}) {
   const server = app.listen(0);
   await new Promise((r) => server.once('listening', r));
   const base = 'http://localhost:' + server.address().port;
   const res = await fetch(base + p, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-api-token', ...headers },
     body: body !== undefined ? JSON.stringify(body) : undefined
   });
   const data = await res.json().catch(() => null);
@@ -99,4 +117,88 @@ test('GET /api/update/status 在 unsupported 时 supported=false', async () => {
   };
   const { data } = await j(makeApp(fakeSelf), 'GET', '/api/update/status');
   assert.equal(data.supported, false);
+});
+
+// ===== H2 修复：更新接口独立管理员鉴权 =====
+
+test('配置了 ADMIN_TOKEN 时，提供正确的 X-Admin-Token 才放行', async () => {
+  config.adminToken = 'secret-admin';
+  try {
+    const fakeSelf = {
+      getRepoState: async () => supportedState,
+      checkUpdate: async () => ({ ok: true, behind: 0 }),
+      runUpdate: async () => ({ ok: true, log: [], restarting: false }),
+      scheduleRestart: () => {},
+      updateSupported: (s) => s.isRepo && s.hasRemote
+    };
+    const { status } = await j(makeApp(fakeSelf), 'GET', '/api/update/status', undefined, {
+      'X-Admin-Token': 'secret-admin'
+    });
+    assert.equal(status, 200);
+  } finally {
+    config.adminToken = '';
+  }
+});
+
+test('配置了 ADMIN_TOKEN 时，缺少/错误令牌一律 401（即使带通用 API_TOKEN 也不行）', async () => {
+  config.adminToken = 'secret-admin';
+  try {
+    const fakeSelf = {
+      getRepoState: async () => supportedState,
+      checkUpdate: async () => ({ ok: true, behind: 0 }),
+      runUpdate: async () => ({ ok: true, log: [], restarting: false }),
+      scheduleRestart: () => {},
+      updateSupported: (s) => s.isRepo && s.hasRemote
+    };
+    // 无 admin 头（但带默认 API_TOKEN）
+    const r1 = await j(makeApp(fakeSelf), 'GET', '/api/update/status');
+    assert.equal(r1.status, 401);
+    assert.equal(r1.data.error, 'admin_token_required');
+    // 错误的 admin 头
+    const r2 = await j(makeApp(fakeSelf), 'POST', '/api/update/apply', {}, {
+      'X-Admin-Token': 'wrong'
+    });
+    assert.equal(r2.status, 401);
+    assert.equal(r2.data.error, 'admin_token_required');
+  } finally {
+    config.adminToken = '';
+  }
+});
+
+test('H2 关键：REQUIRE_AUTH=false（默认）时，更新接口绝不匿名放行', async () => {
+  config.adminToken = '';
+  config.requireAuth = false; // 模拟开箱默认值
+  try {
+    const fakeSelf = {
+      getRepoState: async () => supportedState,
+      checkUpdate: async () => ({ ok: true, behind: 0 }),
+      runUpdate: async () => ({ ok: true, log: [], restarting: false }),
+      scheduleRestart: () => {},
+      updateSupported: (s) => s.isRepo && s.hasRemote
+    };
+    // 不带任何令牌
+    const r1 = await j(makeApp(fakeSelf), 'GET', '/api/update/status', undefined, {});
+    assert.equal(r1.status, 401, '匿名请求必须被拒');
+    // 只带通用 API_TOKEN（即便泄露也无法触发更新）
+    const r2 = await j(makeApp(fakeSelf), 'GET', '/api/update/status', undefined, {});
+    assert.equal(r2.status, 401, '仅靠 API_TOKEN 在 REQUIRE_AUTH=false 时也不能更新');
+  } finally {
+    config.requireAuth = true;
+    config.apiToken = 'test-api-token';
+  }
+});
+
+test('未配置 ADMIN_TOKEN 时，通用 API_TOKEN + REQUIRE_AUTH=true 可放行（兜底）', async () => {
+  config.adminToken = '';
+  config.requireAuth = true;
+  config.apiToken = 'test-api-token';
+  const fakeSelf = {
+    getRepoState: async () => supportedState,
+    checkUpdate: async () => ({ ok: true, behind: 0 }),
+    runUpdate: async () => ({ ok: true, log: [], restarting: false }),
+    scheduleRestart: () => {},
+    updateSupported: (s) => s.isRepo && s.hasRemote
+  };
+  const { status } = await j(makeApp(fakeSelf), 'GET', '/api/update/status');
+  assert.equal(status, 200);
 });

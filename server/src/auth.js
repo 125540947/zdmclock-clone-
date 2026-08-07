@@ -18,6 +18,32 @@ export function authRequired(req, res, next) {
   return res.status(401).json({ error: 'unauthorized', message: '缺少或无效的 Token' });
 }
 
+// 管理级 / 高危操作鉴权（H2 修复）：用于「系统更新」等会执行 git pull + 重启的接口。
+// 关键差异：不受 REQUIRE_AUTH=false 影响——更新接口永远需要鉴权，绝不匿名放行。
+// 优先级：
+//   1) 配置了独立 ADMIN_TOKEN → 必须提供且匹配 ADMIN_TOKEN（与通用 API_TOKEN 隔离）。
+//   2) 未配置 ADMIN_TOKEN → 退回要求通用 API_TOKEN 且 REQUIRE_AUTH 已开启（仍不允许匿名）。
+// 凭证来源：请求头 X-Admin-Token，或 Authorization: Admin <token>，或 POST body 里的 adminToken。
+export function requireAdmin(req, res, next) {
+  const h = req.headers.authorization || '';
+  // 凭证来源优先级：X-Admin-Token 头 > POST body.adminToken > Authorization（支持 Admin 与 Bearer 方案）。
+  let provided = req.headers['x-admin-token'] || (req.body && req.body.adminToken) || '';
+  if (!provided && h) {
+    if (h.startsWith('Admin ')) provided = h.slice(6);
+    else if (h.startsWith('Bearer ')) provided = h.slice(7);
+  }
+  if (config.adminToken) {
+    if (provided && safeEqual(provided, config.adminToken)) return next();
+    return res.status(401).json({
+      error: 'admin_token_required',
+      message: '更新操作需要独立的管理员 Token（ADMIN_TOKEN）'
+    });
+  }
+  // 兜底：未单独配置 ADMIN_TOKEN 时，至少要求通用 API_TOKEN 且鉴权已开启（绝不匿名放行）。
+  if (config.requireAuth && provided && safeEqual(provided, config.apiToken)) return next();
+  return res.status(401).json({ error: 'unauthorized', message: '缺少或无效的 Token' });
+}
+
 // 对外展示时遮罩 cookie，避免敏感信息泄露（S7：不再暴露前后缀，统一隐藏）
 export function maskCookie(cookie = '') {
   return cookie ? '已保存(已隐藏)' : '';

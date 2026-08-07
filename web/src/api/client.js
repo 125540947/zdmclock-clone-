@@ -13,7 +13,7 @@ if (token) {
   api.defaults.headers.common['Authorization'] = 'Bearer ' + token;
 }
 
-export function setToken(t) {
+export function setToken(t, adminToken) {
   if (t) {
     localStorage.setItem('zdm_token', t);
     api.defaults.headers.common['Authorization'] = 'Bearer ' + t;
@@ -21,11 +21,20 @@ export function setToken(t) {
     localStorage.removeItem('zdm_token');
     delete api.defaults.headers.common['Authorization'];
   }
+  if (adminToken !== undefined) {
+    if (adminToken) localStorage.setItem('zdm_admin_token', adminToken);
+    else localStorage.removeItem('zdm_admin_token');
+  }
+}
+
+// 取独立管理员 Token（用于系统更新等高危操作）；未单独配置时回落为空（客户端不发头，由服务端兜底）。
+export function getAdminToken() {
+  return localStorage.getItem('zdm_admin_token') || '';
 }
 
 export async function login(username, password) {
   const { data } = await api.post('/auth/login', { username, password });
-  if (data.token) setToken(data.token);
+  if (data.token) setToken(data.token, data.adminToken);
   return data;
 }
 
@@ -139,16 +148,26 @@ export async function verifyReal(userId, withCheckin = false) {
   return data;
 }
 
-// ===== 系统更新（从 Git 仓库拉取最新代码）=====
+// ===== 系统更新（从 Git 仓库拉取最新代码，需独立管理员 Token）=====
 export async function getUpdateStatus() {
-  const { data } = await api.get('/update/status');
+  const { data } = await api.get('/update/status', {
+    headers: { 'X-Admin-Token': getAdminToken() }
+  });
   return data;
 }
 export async function checkUpdateRepo() {
-  const { data } = await api.post('/update/check');
+  const { data } = await api.post(
+    '/update/check',
+    {},
+    { headers: { 'X-Admin-Token': getAdminToken() } }
+  );
   return data;
 }
 export async function applyUpdateRepo() {
-  const { data } = await api.post('/update/apply');
+  const { data } = await api.post(
+    '/update/apply',
+    {},
+    { headers: { 'X-Admin-Token': getAdminToken() } }
+  );
   return data;
 }

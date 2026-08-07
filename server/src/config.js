@@ -16,6 +16,9 @@ export const parseBool = (v, d = false) => {
 // 默认凭据治理：API_TOKEN 未显式设置时生成随机值，避免静态可猜测 token 被滥用。
 // 随机 token 每次启动都会变化（仅本地/测试场景），生产请显式设置固定 API_TOKEN。
 const apiTokenFromEnv = process.env.API_TOKEN || null;
+// 独立的管理员 Token：用于「系统更新」等高危操作，与通用 API_TOKEN 隔离（H2 修复）。
+// 未显式设置时为空（走兜底：要求通用 API_TOKEN 且 REQUIRE_AUTH 开启，绝不匿名放行）。
+const adminTokenFromEnv = process.env.ADMIN_TOKEN || null;
 
 export const config = {
   port: Number(process.env.PORT || 3000),
@@ -27,6 +30,9 @@ export const config = {
   adminPasswordIsDefault: !process.env.ADMIN_PASSWORD,
   apiToken: apiTokenFromEnv || crypto.randomBytes(24).toString('hex'),
   apiTokenIsDefault: !apiTokenFromEnv,
+  // 独立管理员 Token（高危操作鉴权）。未配置时为空，由 requireAdmin 走兜底策略。
+  adminToken: adminTokenFromEnv,
+  adminTokenIsDefault: !adminTokenFromEnv,
   smzdmAdapter: process.env.SMZDM_ADAPTER || 'mock',
   // real 适配器对外请求超时（毫秒），避免 smzdm 挂起时 Promise 永久 pending
   smzdmRequestTimeout: Number(process.env.SMZDM_REQUEST_TIMEOUT || 10000),

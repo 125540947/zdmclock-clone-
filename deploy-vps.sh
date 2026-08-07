@@ -102,6 +102,7 @@ echo "==> [4/6] 生成 / 校验 .env（关键安全项）"
 valid_env=0
 if [ -f .env ] && grep -Eq '^ADMIN_PASSWORD=.{8,}$' .env \
                 && grep -Eq '^API_TOKEN=.{8,}$' .env \
+                && grep -Eq '^ADMIN_TOKEN=.{8,}$' .env \
                 && grep -Eq '^REQUIRE_AUTH=true$' .env; then
   valid_env=1
 fi
@@ -112,6 +113,7 @@ if [ "$valid_env" -eq 0 ]; then
   fi
   ADMIN_PASSWORD="$(openssl rand -base64 18 | tr -dc 'A-Za-z0-9' | head -c 24)"
   API_TOKEN="$(openssl rand -hex 24)"
+  ADMIN_TOKEN="$(openssl rand -hex 24)"
   cat > .env <<ZDM_ENV_EOF
 PORT=$PORT
 NODE_ENV=production
@@ -119,6 +121,7 @@ REQUIRE_AUTH=true
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=$ADMIN_PASSWORD
 API_TOKEN=$API_TOKEN
+ADMIN_TOKEN=$ADMIN_TOKEN
 SMZDM_ADAPTER=mock
 AUTO_UPDATE_APPLY=false
 UPDATE_CHECK_INTERVAL_MIN=1440
@@ -132,6 +135,7 @@ ZDM_ENV_EOF
   echo "=========================================================="
   echo "  管理员密码(请立即记录): $ADMIN_PASSWORD"
   echo "  API_TOKEN(请立即记录):  $API_TOKEN"
+  echo "  ADMIN_TOKEN(请立即记录): $ADMIN_TOKEN"
   echo "=========================================================="
 else
   echo "  .env 已存在且有效，沿用现有配置。"

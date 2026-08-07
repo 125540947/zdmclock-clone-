@@ -21,15 +21,17 @@
   - 将新进程 stdout/stderr 重定向到 `logs/restart-<ts>.log`，**不要用 `stdio:'ignore'`**。
   - 生产环境建议把重启职责交给 supervisor（systemd / pm2 / docker 的"退出即拉起"），更新逻辑只做 `pull + build + exit(0)`。
 
-### H2. 更新接口默认免鉴权 + 仅通用 Token，无管理员隔离
+### H2. 更新接口默认免鉴权 + 仅通用 Token，无管理员隔离 ✅ 已修复（2026-08-07）
 - **位置**：`server/src/auth.js` `authRequired`（L13-19）；`server/src/routes/update.js`。
 - **问题**：
   - `authRequired` 在 `requireAuth=false`（默认开箱即跑）时直接 `next()`，**更新接口完全免鉴权**。
   - 即便开启鉴权，只校验一个通用 `API_TOKEN`，未区分"管理员"。而更新接口会执行 `git pull + npm install + 重启`——端口一旦暴露（公网或不可信内网），等于授予"拉取任意远端代码并以服务身份执行"的能力（供应链/RCE 相邻风险）。
-- **修复建议**：
-  - 更新/健康/资产等管理接口强制要求鉴权（即便全局 `requireAuth=false`，也单独要求或新增 `UPDATE_REQUIRE_AUTH`）。
-  - 引入独立 `ADMIN_TOKEN`，与通用 API Token 区分，管理接口走管理员通道。
-  - README/DEPLOY 明确：暴露端口前必须 `REQUIRE_AUTH=true` 且改默认密码/Token。
+- **修复（已落地）**：
+  - 新增 `requireAdmin` 中间件（`server/src/auth.js`），更新接口 `GET /status` / `POST /check` / `POST /apply` 全部改用它。
+  - **永远需要鉴权，不受 `REQUIRE_AUTH=false` 影响**：配置了 `ADMIN_TOKEN` 时只认 `ADMIN_TOKEN`；未配置时退回"通用 `API_TOKEN` + 必须 `REQUIRE_AUTH=true`"，仍不允许匿名放行。
+  - 新增独立 `ADMIN_TOKEN` 配置项；`/api/auth/login` 登录时一并返回 `adminToken`；前端 `client.js` 存储并在更新调用时附带 `X-Admin-Token` 头。
+  - 部署脚本 `deploy-vps.sh` 与 `.env.example` 已自动生成/说明 `ADMIN_TOKEN`。
+  - 测试覆盖：`server/test/update.test.js` 新增 4 例（含"REQUIRE_AUTH=false 时更新接口仍 401"这一关键回归用例）。
 
 ### H3. 并发无互斥：重复点击 / 调度与手动同时触发会互相破坏
 - **位置**：`server/src/routes/update.js` `POST /apply`；`server/src/scheduler.js` `runUpdateCheck`。

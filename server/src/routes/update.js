@@ -1,8 +1,8 @@
 import { Router } from 'express';
-import { authRequired } from '../auth.js';
+import { requireAdmin } from '../auth.js';
 import * as realSelf from '../selfUpdate.js';
 
-// 自动更新接口（管理级，需鉴权）。依赖以参数注入，便于测试替换。
+// 自动更新接口（管理级，需独立管理员鉴权，永远不匿名放行）。依赖以参数注入，便于测试替换。
 // - GET  /status ：本地仓库状态（分支/提交/是否脏/通道/是否支持更新）
 // - POST /check  ：git fetch 并比较，返回落后/领先提交数
 // - POST /apply  ：ff-only 拉取 + 按需重建 + 自重启
@@ -10,7 +10,7 @@ export function createUpdateRouter(self = realSelf) {
   const router = Router();
   let lastCheck = null; // 缓存最近一次检查结果，供 status 直接回显
 
-  router.get('/status', authRequired, async (req, res) => {
+  router.get('/status', requireAdmin, async (req, res) => {
     try {
       const state = await self.getRepoState();
       res.json({
@@ -23,7 +23,7 @@ export function createUpdateRouter(self = realSelf) {
     }
   });
 
-  router.post('/check', authRequired, async (req, res) => {
+  router.post('/check', requireAdmin, async (req, res) => {
     try {
       const state = await self.getRepoState();
       if (!state.isRepo || !state.hasRemote) {
@@ -37,7 +37,7 @@ export function createUpdateRouter(self = realSelf) {
     }
   });
 
-  router.post('/apply', authRequired, async (req, res) => {
+  router.post('/apply', requireAdmin, async (req, res) => {
     try {
       const result = await self.runUpdate({ restart: true });
       if (result.ok && result.restarting) {
