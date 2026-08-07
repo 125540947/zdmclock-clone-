@@ -187,7 +187,7 @@ async function getRobotToken(cookie) {
     body: { f: 'android', v: APP_V, weixin: 1, time: ts, sign }
   });
   // [诊断] 不论成败都打印，便于排查签名/Cookie 是否被 smzdm 拒绝
-  console.log('[smzdm-debug] /robot/token error_code=', json?.error_code, 'error_msg=', json?.error_msg, 'hasToken=', !!json?.data?.token);
+  console.log('[smzdm-debug] /robot/token error_code=', json?.error_code, 'error_msg=', json?.error_msg, 'hasToken=', !!json?.data?.token, 'cookieLen=', (cookie || '').length);
   if (Number(json?.error_code) !== 0) throw new Error('获取 token 失败：' + (json?.error_msg || '未知'));
   return json.data?.token;
 }
