@@ -60,6 +60,16 @@ fi
 
 echo "==> 部署目录: $APP_DIR"
 
+# 安全护栏：禁止把项目部署到系统关键目录。
+# 否则后续 `chown -R $APP_USER $APP_DIR` 会误伤家目录/系统文件（曾把 /root 改成 zdm 归属）。
+case "$APP_DIR" in
+  /root|/|/home|/usr|/etc|/var|/boot|/srv|/bin|/lib|/lib64|/tmp)
+    echo "✗ APP_DIR=$APP_DIR 是系统关键目录，禁止在此部署（chown 会误伤系统文件）。"
+    echo "  请把仓库放到独立目录，例如："
+    echo "    mkdir -p /opt/zdmclock && cp -a /root/. /opt/zdmclock/ && cd /opt/zdmclock && bash deploy.sh"
+    exit 1 ;;
+esac
+
 # ---- 获取代码 ----
 mkdir -p "$APP_DIR"
 if [ -d "$APP_DIR/.git" ]; then
