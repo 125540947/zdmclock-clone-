@@ -200,6 +200,10 @@ if [ "$valid_env" -eq 0 ]; then
   ADMIN_PASSWORD="$(openssl rand -base64 18 | tr -dc 'A-Za-z0-9' | head -c 24)"
   API_TOKEN="$(openssl rand -hex 24)"
   ADMIN_TOKEN="$(openssl rand -hex 24)"
+  # 保留用户已显式选择的适配器（real/mock），避免重新生成时把 real 悄悄重置回 mock
+  # （历史上会导致"重新部署后变回假签到"）。未设置则安全默认 mock。
+  PREV_ADAPTER="$(grep -E '^SMZDM_ADAPTER=' .env 2>/dev/null | cut -d= -f2-)"
+  SMZDM_ADAPTER_VAL="${PREV_ADAPTER:-mock}"
   cat > .env <<ZDM_ENV_EOF
 PORT=$PORT
 NODE_ENV=production
@@ -208,7 +212,7 @@ ADMIN_USERNAME=admin
 ADMIN_PASSWORD=$ADMIN_PASSWORD
 API_TOKEN=$API_TOKEN
 ADMIN_TOKEN=$ADMIN_TOKEN
-SMZDM_ADAPTER=mock
+SMZDM_ADAPTER=$SMZDM_ADAPTER_VAL
 AUTO_UPDATE_APPLY=false
 UPDATE_CHECK_INTERVAL_MIN=1440
 SELF_UPDATE_NO_REEXEC=1
