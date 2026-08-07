@@ -186,6 +186,8 @@ async function getRobotToken(cookie) {
     ua: ANDROID_UA,
     body: { f: 'android', v: APP_V, weixin: 1, time: ts, sign }
   });
+  // [诊断] 不论成败都打印，便于排查签名/Cookie 是否被 smzdm 拒绝
+  console.log('[smzdm-debug] /robot/token error_code=', json?.error_code, 'error_msg=', json?.error_msg, 'hasToken=', !!json?.data?.token);
   if (Number(json?.error_code) !== 0) throw new Error('获取 token 失败：' + (json?.error_msg || '未知'));
   return json.data?.token;
 }
@@ -231,6 +233,8 @@ export const realAdapter = {
       ua: ANDROID_UA,
       body: { f: 'android', v: APP_V, sk: APP_SK, weixin: 1, time: ts, token, sign }
     });
+    // [诊断] 打印 smzdm 真实返回，定位"显示已签但实际没签"（签名失效/Cookie 不对/已签过）
+    console.log('[smzdm-debug] /checkin raw:', JSON.stringify(json).slice(0, 1200), 'cookieLen=', (cookie || '').length);
     if (Number(json?.error_code) !== 0) throw new Error('签到失败：' + (json?.error_msg || '未知'));
     const d = json.data || {};
     // 社区逆向确认：/checkin 返回体直接带权威余额字段，用作模块 B 资产落账的"之后"总额，
