@@ -167,6 +167,16 @@ export async function getCookieGrabberScript() {
   return data;
 }
 
+// ===== 偷懒-极端（一键全自动流水线）=====
+export async function runExtremeLazy() {
+  const { data } = await api.post('/extreme-lazy/run');
+  return data;
+}
+export async function getExtremeLazyRuns() {
+  const { data } = await api.get('/extreme-lazy/runs');
+  return data;
+}
+
 // ===== 系统更新（从 Git 仓库拉取最新代码，需独立管理员 Token）=====
 export async function getUpdateStatus() {
   const { data } = await api.get('/update/status', {

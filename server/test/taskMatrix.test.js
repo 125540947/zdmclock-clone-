@@ -82,3 +82,33 @@ test('parseJsonp 剥离函数外壳', () => {
   assert.deepEqual(parseJsonp('{"plain":true}'), { plain: true });
   assert.throws(() => parseJsonp('not json at all'));
 });
+
+test('导入端点后优先用导入端点（非 dailyTasks 覆盖内置策略）', async () => {
+  const calls = [];
+  const fakeAdapter = {
+    requestRaw: async (url, opts) => {
+      calls.push({ url, opts });
+      return 'jQuery999({"error_code":0,"data":{"gold":7}})';
+    }
+  };
+  const db = dbWithEndpoint('turntable', {
+    endpoint: 'https://custom/jsonp_draw?active_id=REAL123',
+    method: 'GET',
+    jsonp: true,
+    assetFields: { gold: 'data.gold' },
+    referer: 'https://m.smzdm.com/'
+  });
+  const r = await runCustomEndpointTask({ type: 'turntable', name: '转盘抽奖' }, db, { id: 'u1', cookie: 'c' }, fakeAdapter);
+  assert.equal(calls.length, 1, '应调用导入的端点而非内置策略');
+  assert.equal(calls[0].url, 'https://custom/jsonp_draw?active_id=REAL123');
+  assert.equal(r.ok, true);
+  assert.equal(r.goldDelta, 7);
+});
+
+test('dailyTasks 即便导入端点也始终走内置策略（不调用导入的单端点）', async () => {
+  const calls = [];
+  const fakeAdapter = { requestRaw: async (url) => { calls.push(url); return '{}'; } };
+  const db = dbWithEndpoint('dailyTasks', { endpoint: 'https://custom/activity_task_receive', method: 'POST' });
+  await runCustomEndpointTask({ type: 'dailyTasks', name: '每日任务' }, db, { id: 'u1', cookie: 'c' }, fakeAdapter);
+  assert.ok(!calls.includes('https://custom/activity_task_receive'), 'dailyTasks 是多步流程，不应使用导入的单端点');
+});

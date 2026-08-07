@@ -126,11 +126,16 @@ export function getTaskEndpoint(db, type) {
 //   { ok:true, success:true, message, goldDelta, silverDelta, expDelta, levelAfter, explicit, result }
 //   { ok:false, pendingCapture:true, message }  —— 未配置接口（待抓包）
 //   { ok:false, error, message }                —— 执行失败（由调用方决定重试/记录）
-export async function runCustomEndpointTask(task, db, user) {
-  // 内置真实策略（移植自青龙社区逆向）：优先走这里，用户只需填动态参数（active_id/crowd_id 等）
+export async function runCustomEndpointTask(task, db, user, adapter = smzdm) {
+  const def = getTaskEndpoint(db, task.type) || {};
+  const hasCustomEndpoint = !!(def && def.endpoint);
+  // 内置真实策略（移植自青龙社区逆向）：默认优先走这里，用户只需填动态参数（active_id/crowd_id 等）。
+  // 但若用户显式导入/配置了真实端点（抓包导入 / 手动配置），则让导入的端点生效，覆盖内置策略——
+  // 这正是「抓包导入」功能的目的（用你抓到的真实 active_id / task_id）。
+  // 注：dailyTasks 是多步流程（list_v2 → 批量领奖），单端点无法表达，始终走内置策略。
   const strategy = REAL_STRATEGIES[task.type];
-  if (strategy) {
-    const def = getTaskEndpoint(db, task.type) || {};
+  const useBuiltin = strategy && (task.type === 'dailyTasks' || !hasCustomEndpoint);
+  if (useBuiltin) {
     const params = def && def.params && typeof def.params === 'object' ? def.params : {};
     if (strategy.needsParam && !params[strategy.needsParam] && !params.topicUrl) {
       return {
@@ -141,7 +146,7 @@ export async function runCustomEndpointTask(task, db, user) {
       };
     }
     // mock 适配器无 requestRaw：即便内置也不允许在 mock 模式下"假跑"
-    if (typeof smzdm.requestRaw !== 'function') {
+    if (typeof adapter.requestRaw !== 'function') {
       return {
         ok: false,
         pendingCapture: true,
@@ -168,8 +173,8 @@ export async function runCustomEndpointTask(task, db, user) {
     }
   }
 
-  // 其余自定义端点任务（follow/share 等）：沿用通用端点配置（需用户从 App 抓包填入 URL/参数）
-  const def = getTaskEndpoint(db, task.type);
+  // 通用端点路径：抓包导入 / 手动配置的真实端点（单端点调用，支持 jsonp / robotToken / 资产字段映射）。
+  // 这里才真正使用用户导入的 endpoint / body / headers / jsonp / assetFields，覆盖内置策略。
   if (!def || !def.endpoint) {
     return {
       ok: false,
@@ -180,7 +185,7 @@ export async function runCustomEndpointTask(task, db, user) {
   }
 
   // mock 适配器无 requestRaw：即便填了端点也不允许在 mock 模式下"假跑"
-  if (typeof smzdm.requestRaw !== 'function') {
+  if (typeof adapter.requestRaw !== 'function') {
     return {
       ok: false,
       pendingCapture: true,
@@ -193,8 +198,8 @@ export async function runCustomEndpointTask(task, db, user) {
   let body = renderBody(def.body, user);
 
   // 预取 robot token（部分 user-api 端点如 task 领奖需要）：注入到请求体指定字段
-  if (def.robotToken && typeof smzdm.getRobotToken === 'function') {
-    const tok = await smzdm.getRobotToken(user.cookie);
+  if (def.robotToken && typeof adapter.getRobotToken === 'function') {
+    const tok = await adapter.getRobotToken(user.cookie);
     const field = def.tokenField || 'robot_token';
     body = typeof body === 'object' && body ? { ...body, [field]: tok } : { [field]: tok };
   }
@@ -207,7 +212,7 @@ export async function runCustomEndpointTask(task, db, user) {
     referer: def.referer,
     extraHeaders: def.headers
   };
-  const raw = def.jsonp ? await smzdm.requestRaw(def.endpoint, { ...extraOpts, raw: true }) : await smzdm.requestRaw(def.endpoint, extraOpts);
+  const raw = def.jsonp ? await adapter.requestRaw(def.endpoint, { ...extraOpts, raw: true }) : await adapter.requestRaw(def.endpoint, extraOpts);
 
   // JSONP 响应形如 callback({...})，需剥离外层函数壳再解析
   let json = raw;

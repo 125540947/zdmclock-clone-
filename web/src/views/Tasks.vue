@@ -161,6 +161,7 @@
           <div v-if="c.jsonp" class="cap-tag">JSONP</div>
           <div v-if="c.robotToken" class="cap-tag">需token</div>
           <div v-if="c.assetHint && c.assetHint.length" class="cap-hint">资产字段候选：{{ c.assetHint.join(', ') }}</div>
+          <div v-if="c.type === 'dailyTasks'" class="cap-hint warn">每日任务已内置此端点（无需导入）；如不想导入，可忽略本条或在上方改为其它类型</div>
         </div>
         <button class="btn primary sm" :disabled="applying" @click="submitCaptures">应用所选端点</button>
       </div>
@@ -381,7 +382,8 @@ async function scanCaptures() {
     const items = await getCaptures();
     captures.value = items.map((c) => ({
       ...c,
-      type: customTypeOptions.includes(c.guessedType) ? c.guessedType : 'follow'
+      // 未知类型兜底到 dailyTasks（每日任务领奖端点已内置，无需导入），避免误标成 follow
+      type: customTypeOptions.includes(c.guessedType) ? c.guessedType : 'dailyTasks'
     }));
     if (!captures.value.length) {
       capHint.value = '未识别到抓包文件。请把 HAR / cURL 放进 server/captures/ 并运行 node tools/importCapture.mjs';

@@ -123,7 +123,8 @@ function classify(url) {
   const u = url.toLowerCase();
   if (u.includes('lottery/jsonp_draw')) return 'turntable'; // 转盘/抽奖共用 jsonp_draw
   if (u.includes('/checkin') && !u.includes('all_reward') && !u.includes('extra_reward') && !u.includes('show_view')) return 'clock';
-  if (u.includes('task/activity_task_receive') || u.includes('task/activity_receive')) return 'task_receive';
+  // 每日任务领奖端点（task_id 动态）：dailyTasks 内置已用此端点，标记 dailyTasks 让前端提示"已内置、无需导入"
+  if (u.includes('task/activity_task_receive') || u.includes('task/activity_receive')) return 'dailyTasks';
   if (u.includes('task/list_v2')) return 'skip'; // 任务列表，不是动作，跳过
   return 'unknown';
 }
@@ -171,8 +172,8 @@ function toDetected(req) {
     headers: extraHeaders,
     assetHint,
     note:
-      type === 'task_receive'
-        ? '每日任务领奖端点，task_id 为动态值（需从 /task/list_v2 抓包或用本工具抓到对应请求）'
+      type === 'dailyTasks'
+        ? '每日任务领奖端点，task_id 为动态值；dailyTasks 已内置此端点（list_v2→activity_task_receive），无需导入'
         : isJsonp
         ? 'JSONP 抽奖端点，active_id 为动态值（专题页链接里抓）'
         : ''
