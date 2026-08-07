@@ -5,9 +5,12 @@
 //    请仅在自有账号、且充分知悉风险的前提下启用（SMZDM_ADAPTER=real），
 //    切勿用于批量注册、刷量或任何商用/牟利场景。
 // 2. 真实签到链路（社区逆向，已在下方实现）：
-//    robot/token → checkin，带 MD5 签名。签名用的 key / sk 为社区逆向出的客户端常量，
-//    可能随 smzdm 版本更新而失效，请用同名环境变量覆盖：
-//      SMZDM_SIGN_KEY / SMZDM_SK / SMZDM_APP_V / SMZDM_API_BASE
+//    本适配器默认走【网页签到流程】——直接 GET zhiyou.smzdm.com/user/checkin/jsonp_checkin，
+//    带浏览器网页 Cookie（sess + smzdm_id）即可，无需签名、无需 APP 登录态。
+//    ⚠️ 关键坑：APP 流程（robot/token → checkin，带 MD5 签名）需要 user-api.smzdm.com 的 APP Cookie
+//    （含 access_token，需手机抓包），与浏览器抓的网页 Cookie 不互通——用网页 Cookie 打 APP 接口必回
+//    "请先登录"(error_code 11111)。本项目油猴抓取的是浏览器网页 Cookie，故统一用网页流程。
+//    签名常量（SMZDM_SIGN_KEY / SMZDM_SK / SMZDM_APP_V）仅留给仍用 APP Cookie 的自定义任务。
 // 3. 返回值字段以社区经验为准，请按你账号的真实响应在解析处微调。
 
 import crypto from 'node:crypto';
@@ -15,6 +18,8 @@ import { normalizeArticleId } from './articleId.js';
 
 const BASE = (process.env.SMZDM_BASE || 'https://www.smzdm.com').replace(/\/$/, '');
 const API_BASE = (process.env.SMZDM_API_BASE || 'https://user-api.smzdm.com').replace(/\/$/, '');
+// 网页签到基址（与浏览器抓包 Cookie 匹配）：zhiyou.smzdm.com/user/checkin/jsonp_checkin
+const WEB_BASE = (process.env.SMZDM_WEB_BASE || 'https://zhiyou.smzdm.com').replace(/\/$/, '');
 
 // 社区逆向得到的签名密钥与客户端标识（失效时用抓包值覆盖）
 const SIGN_KEY = process.env.SMZDM_SIGN_KEY || 'apr1$AwP!wRRT$gJ/q.X24poeBInlUJC';
@@ -173,6 +178,20 @@ function removeTags(s) {
     .trim();
 }
 
+// 解析 smzdm 网页签到返回：兼容纯 JSON、JSONP 包裹（callback({...})）与 Angular 风格 )]}' 前缀
+export function parseJsonp(text) {
+  if (typeof text !== 'string') return text;
+  let t = text.trim();
+  const wrap = t.match(/^[a-zA-Z_$][\w$]*\s*\(([\s\S]*)\)\s*;?\s*$/);
+  if (wrap) t = wrap[1];
+  t = t.replace(/^\)\]\}',?\s*/, '');
+  try {
+    return JSON.parse(t);
+  } catch {
+    return {};
+  }
+}
+
 // normalizeArticleId 已抽到 ./articleId.js 供 taskRunner 共用，这里 re-export 保持兼容
 export { normalizeArticleId };
 
@@ -221,63 +240,61 @@ export const realAdapter = {
     };
   },
 
+  // 网页签到流程：GET zhiyou.smzdm.com/user/checkin/jsonp_checkin（带浏览器网页 Cookie）。
+  // 这是与浏览器抓包 Cookie 匹配的端点（APP 流程 robot/token 需要 user-api 的 APP Cookie，二者不互通）。
   async doClockIn(cookie) {
-    const token = await getRobotToken(cookie);
-    const ts = Date.now();
-    const sign = md5Sign(
-      `f=android&sk=${APP_SK}&time=${ts}&token=${token}&v=${APP_V}&weixin=1&key=${SIGN_KEY}`
-    );
-    const json = await call('/checkin', {
-      method: 'POST',
+    const text = await call('/user/checkin/jsonp_checkin', {
+      method: 'GET',
       cookie,
-      ua: ANDROID_UA,
-      body: { f: 'android', v: APP_V, sk: APP_SK, weixin: 1, time: ts, token, sign }
+      ua: UA,
+      base: WEB_BASE,
+      raw: true,
+      referer: BASE + '/'
     });
-    // [诊断] 打印 smzdm 真实返回，定位"显示已签但实际没签"（签名失效/Cookie 不对/已签过）
-    console.log('[smzdm-debug] /checkin raw:', JSON.stringify(json).slice(0, 1200), 'cookieLen=', (cookie || '').length);
-    if (Number(json?.error_code) !== 0) throw new Error('签到失败：' + (json?.error_msg || '未知'));
-    const d = json.data || {};
-    // 社区逆向确认：/checkin 返回体直接带权威余额字段，用作模块 B 资产落账的"之后"总额，
-    // 避免再依赖可能返回 HTML 的 /user/ 接口（cgold=金币余额, pre_re_silver=碎银, cexperience=经验, rank=等级）
-    const gold = Number(d.cgold ?? 0);
-    const silver = Number(d.pre_re_silver ?? 0);
-    const exp = Number(d.cexperience ?? 0);
-    const level = d.rank ?? d.rank_name ?? null;
-    const points = Number(d.add_point ?? d.addPoint ?? gold); // 本次 awarded（优先）否则用余额
-    const continuity = Number(d.daily_num ?? d.continue_sign_days ?? 0);
-    // 签约外奖励（青龙脚本常规动作）：all_reward / extra_reward，失败静默跳过不阻断签到
-    let extraMsg = '';
-    try {
-      const ex = await doCheckinExtras(cookie);
-      if (ex.rewards.length) extraMsg = '；额外：' + ex.rewards.join('；');
-    } catch {
-      /* 额外奖励非关键，忽略异常 */
+    const json = parseJsonp(text);
+    // [诊断] 打印 smzdm 真实返回，确认网页端点是否真签成（error_code=0 即成功）
+    console.log('[smzdm-debug] web /jsonp_checkin raw:', JSON.stringify(json).slice(0, 1200), 'cookieLen=', (cookie || '').length);
+    const ec = Number(json?.error_code ?? json?.errorCode);
+    const msg = String(json?.error_msg || json?.errorMsg || json?.message || '');
+    if (ec === 0) {
+      const d = json.data || {};
+      const gold = Number(d.cgold ?? d.gold ?? 0);
+      const silver = Number(d.pre_re_silver ?? d.silver ?? 0);
+      const exp = Number(d.cexperience ?? d.exp ?? 0);
+      const level = d.rank ?? d.rank_name ?? d.level ?? null;
+      const points = Number(d.add_point ?? d.addPoint ?? gold); // 本次 awarded（优先）否则用余额
+      const continuity = Number(d.daily_num ?? d.continue_sign_days ?? d.continue_sign ?? 0);
+      // 签约外奖励（best-effort，网页端点，失败静默跳过不阻断签到）
+      let extraMsg = '';
+      try {
+        const ex = await doCheckinExtras(cookie);
+        if (ex.rewards.length) extraMsg = '；额外：' + ex.rewards.join('；');
+      } catch {
+        /* 额外奖励非关键，忽略异常 */
+      }
+      return {
+        success: true,
+        points,
+        balances: { gold, silver, exp, level },
+        continuity,
+        message: `签到成功，金币 ${gold} / 碎银 ${silver} / 经验 ${exp}${extraMsg}`
+      };
     }
-    return {
-      success: true,
-      points,
-      balances: { gold, silver, exp, level },
-      continuity,
-      message: `签到成功，金币 ${gold} / 碎银 ${silver} / 经验 ${exp}${extraMsg}`
-    };
+    // 今日已签到：软成功，不报错（避免重复触发失败 / 误判 Cookie 失效）
+    if (/已签到|已经签到|今天已|今日已|已签过|已经签/.test(msg)) {
+      return { success: true, points: 0, balances: {}, continuity: 0, message: '今日已签到（重复请求）' };
+    }
+    throw new Error('签到失败：' + (msg || '未知') + ' (error_code=' + ec + ')');
   },
 
-  // 签到额外奖励（青龙脚本签约动作）：领取 all_reward 与 extra_reward。
-  // 采用与 checkin 相同的显式签名串（含 sk + token，不含 basic_v），与社区 smzdm.py 一致。
+  // 签到额外奖励（best-effort，网页端点）：领取 all_reward 与 extra_reward。
+  // 网页 Cookie 无 APP 签名，直接 GET 对应网页端点；任一失败静默跳过，不阻断主签到。
   async doCheckinExtras(cookie) {
-    let token;
-    try {
-      token = await getRobotToken(cookie);
-    } catch {
-      return { rewards: [] };
-    }
-    const ts = Date.now();
-    const sign = md5Sign(`f=android&sk=${APP_SK}&time=${ts}&token=${token}&v=${APP_V}&weixin=1&key=${SIGN_KEY}`);
-    const body = { f: 'android', v: APP_V, sk: APP_SK, weixin: 1, time: ts, token, sign };
     const rewards = [];
     for (const ep of ['/checkin/all_reward', '/checkin/extra_reward']) {
       try {
-        const j = await call(ep, { method: 'POST', cookie, ua: ANDROID_UA, body });
+        const text = await call(ep, { method: 'GET', cookie, ua: UA, base: WEB_BASE, raw: true, referer: BASE + '/' });
+        const j = parseJsonp(text);
         if (Number(j?.error_code) === 0) rewards.push(removeTags(j?.data?.reward_msg || '领取成功'));
       } catch {
         /* 单个额外奖励失败不影响整体 */
