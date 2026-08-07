@@ -188,6 +188,9 @@ else
 fi
 
 echo "==> [5/6] 注册 systemd 服务（崩溃自动重启；禁用应用内 re-exec）"
+# 解析 npm 绝对路径：二进制 Node 装在 /usr/local/bin，而 systemd 默认 PATH 常不含该目录，
+# 若直接用 `npm start` 会出现 "npm: command not found"。这里写死 PATH 与 npm 绝对路径。
+NPM_BIN="$(command -v npm || echo /usr/local/bin/npm)"
 cat > "/etc/systemd/system/$SERVICE.service" <<UNIT_EOF
 [Unit]
 Description=zdmclock smzdm 自动化助手
@@ -197,7 +200,9 @@ After=network.target
 Type=simple
 User=$APP_USER
 WorkingDirectory=$APP_DIR
-ExecStart=npm start
+# 显式 PATH，确保能找到装到 /usr/local/bin 的 node/npm
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin:/sbin
+ExecStart=$NPM_BIN start
 Restart=always
 RestartSec=5
 Environment=NODE_ENV=production
