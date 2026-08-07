@@ -41,26 +41,29 @@
   }
 
   // 收集 smzdm 域下的全部 Cookie（含 HttpOnly，document.cookie 拿不到）。
+  // ⚠️ 关键修复：用 url 参数（而非 domain）匹配。domain:'smzdm.com' 这种写法常常匹配不到
+  // 实际 domain 为 .smzdm.com（带点前缀、覆盖所有子域）的 cookie，会漏掉 HttpOnly 的登录会话，
+  // 导致推上去的 cookie 不含有效 session —— smzdm /robot/token 直接回「请先登录」。
+  // 改为按 url 列举该站点归属的全部 cookie（含 .smzdm.com 通配 + 各子域 + HttpOnly），最稳妥。
   function collectCookie(done) {
-    const domains = [
-      'smzdm.com',
-      '.smzdm.com',
-      'www.smzdm.com',
-      'm.smzdm.com',
-      'zhiyou.smzdm.com'
+    const urls = [
+      'https://www.smzdm.com/',
+      'https://m.smzdm.com/',
+      'https://zhiyou.smzdm.com/',
+      'https://user-api.smzdm.com/'
     ];
     if (typeof GM_cookie === 'object' && GM_cookie && typeof GM_cookie.list === 'function') {
       const out = {};
-      let pending = domains.length;
+      let pending = urls.length;
       const finish = () => {
         const str = Object.keys(out)
           .map((k) => k + '=' + out[k])
           .join('; ');
         done(str);
       };
-      domains.forEach((d) => {
+      urls.forEach((u) => {
         try {
-          GM_cookie.list({ domain: d }, (cookies, error) => {
+          GM_cookie.list({ url: u }, (cookies, error) => {
             if (!error && Array.isArray(cookies)) {
               cookies.forEach((c) => {
                 out[c.name] = c.value;
