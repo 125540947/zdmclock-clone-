@@ -12,8 +12,11 @@
 #   6) 可选 nginx + Let's Encrypt 免费 TLS
 #
 # 关键安全/健壮性约定（避免历史上"卡在交互提示 / APP_DIR=/root"的问题）：
-#   - 全程非交互、绝不读终端输入（无 read），一条命令到底。
-#   - APP_DIR 由脚本自身所在目录判定，绝不误用 /root。
+#   - 默认非交互、一条命令到底；但若 stdin 是终端（真人 SSH/控制台运行），会在开头
+#     弹出"安装方式"菜单（部署用户 / 端口 / 是否配 nginx+TLS），被管道或重定向时自动
+#     静默用默认值或命令行参数，read 还带 60s 超时，绝不卡死。
+#   - APP_DIR 由脚本自身所在目录判定；若落在 /root 或 /home 下，会为该目录追加 others
+#     的 x（仅遍历）位，放行部署用户 chdir，避免 systemd 在切换工作目录时 Permission denied。
 #   - 任何一步失败都会明确报错并退出，不会悄悄进入危险状态。
 #
 # 用法（任选其一）：
@@ -49,6 +52,28 @@ while [ $# -gt 0 ]; do
 done
 
 [ "$(id -u)" -eq 0 ] || { echo "✗ 请用 root 运行本脚本（systemd 需要特权）。"; exit 1; }
+
+# ---- 交互式配置（仅当 stdin 是终端时启用；被管道/重定向时静默用默认值，绝不卡死）----
+INTERACTIVE=0
+[ -t 0 ] && INTERACTIVE=1
+if [ "$INTERACTIVE" -eq 1 ]; then
+  echo "============================================================"
+  echo " 交互式部署（直接回车 = 使用 [默认值]；60 秒未输入自动跳过）"
+  echo "============================================================"
+  _ask() { # $1=prompt $2=default -> 写回同名全局需调用方处理
+    local _p="$1" _d="$2" _a=""
+    if read -r -t 60 -p " $_p [$2]: " _a; then
+      [ -n "$_a" ] && printf '%s' "$_a"
+    else
+      echo ""   # 超时/EOF：回车默认
+    fi
+  }
+  _v="$(_ask "部署用户" "$APP_USER")"; [ -n "$_v" ] && APP_USER="$_v"
+  _v="$(_ask "服务端口" "$PORT")";      [ -n "$_v" ] && PORT="$_v"
+  _v="$(_ask "nginx+HTTPS 域名（留空=仅 :$PORT 直连）" "$DOMAIN")"; [ -n "$_v" ] && DOMAIN="$_v"
+  echo " → 安装方式：$([ -n "$DOMAIN" ] && echo "nginx 反代 + TLS($DOMAIN)" || echo "直接 :$PORT 访问")；部署用户=$APP_USER"
+  echo "------------------------------------------------------------"
+fi
 
 # ---- 定位项目目录（修复旧脚本把 APP_DIR 解析成 /root 的坑）----
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -154,7 +179,7 @@ chown -R "$APP_USER":"$APP_USER" "$APP_DIR"
 P="$(dirname "$APP_DIR")"
 while [ "$P" != "/" ]; do
   case "$P" in
-    /home/*) [ -d "$P" ] && chmod o+x "$P" 2>/dev/null || true ;;
+    /home/*|/root) [ -d "$P" ] && chmod o+x "$P" 2>/dev/null || true ;;
   esac
   P="$(dirname "$P")"
 done
