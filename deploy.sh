@@ -142,6 +142,9 @@ if [ ! -f web/dist/index.html ]; then
   echo "  · 前端未构建，执行 npm run build"
   npm run build
 fi
+# 防御：从 Windows 拷贝的仓库 node_modules/.bin 常丢 +x，导致 vite/cross-env 报
+# Permission denied（npm install 不会给已存在的文件补回 +x）。显式补回执行位。
+chmod -R +x node_modules 2>/dev/null || true
 chown -R "$APP_USER":"$APP_USER" "$APP_DIR"
 
 # 确保部署用户能"穿越"到 APP_DIR：若 APP_DIR 落在某用户的家目录（如 /home/ubuntu），
