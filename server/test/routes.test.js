@@ -225,6 +225,23 @@ test('GET /api/users/import-script.user.js 注入服务地址并返回 javascrip
   config.requireAuth = false;
 });
 
+test('GET /api/users/import-script.user.js 开启鉴权时需 token（?token= 可放行）', async () => {
+  config.requireAuth = true;
+  const origin = 'http://1.2.3.4:3000';
+  // 无 token → 401
+  const noToken = await fetch(base + '/api/users/import-script.user.js?server=' + encodeURIComponent(origin));
+  assert.equal(noToken.status, 401, '无 token 应被拒');
+  // 带正确 ?token= → 200 且地址/Token 占位符均被替换
+  const withToken = await fetch(
+    base + '/api/users/import-script.user.js?server=' + encodeURIComponent(origin) + '&token=' + encodeURIComponent(config.apiToken)
+  );
+  const text = await withToken.text();
+  assert.equal(withToken.status, 200, '带 ?token= 应放行');
+  assert.ok(text.includes(JSON.stringify(origin)), '应注入服务地址');
+  assert.ok(!text.includes('__TOKEN__'), 'Token 占位符应被替换');
+  config.requireAuth = false;
+});
+
 test('关闭测试服务器', () => {
   server.close();
   assert.ok(true);

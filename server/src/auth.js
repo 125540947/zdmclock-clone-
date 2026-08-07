@@ -18,6 +18,18 @@ export function authRequired(req, res, next) {
   return res.status(401).json({ error: 'unauthorized', message: '缺少或无效的 Token' });
 }
 
+// 允许 Bearer 头或 ?token= 查询参数二选一（用于「一键安装」油猴脚本直链）。
+// 浏览器导航到 .user.js 无法携带 Authorization 头，前端改从已登录会话的 localStorage 取 token 作为 ?token= 传入；
+// 该 token 本就会写进脚本用于自动推送 Cookie，用 query 传不增加额外泄露面，从而开启鉴权时也能一键安装。
+export function authRequiredOrQuery(req, res, next) {
+  if (!config.requireAuth) return next();
+  const h = req.headers.authorization || '';
+  const bearer = h.startsWith('Bearer ') ? h.slice(7) : '';
+  const q = String(req.query.token || '');
+  if ((bearer && safeEqual(bearer, config.apiToken)) || (q && safeEqual(q, config.apiToken))) return next();
+  return res.status(401).json({ error: 'unauthorized', message: '缺少或无效的 Token' });
+}
+
 // 管理级 / 高危操作鉴权（H2 修复）：用于「系统更新」等会执行 git pull + 重启的接口。
 // 关键差异：不受 REQUIRE_AUTH=false 影响——更新接口永远需要鉴权，绝不匿名放行。
 // 优先级：

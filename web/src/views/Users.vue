@@ -148,7 +148,8 @@ const defaultTime = ref('09:00');
 const scriptText = ref('');
 const loadingScript = ref(false);
 // 一键安装链接：指向服务端注入好「服务地址 + Token」的 .user.js，油猴导航到此即弹安装。
-const installUrl = `/api/users/import-script.user.js?server=${encodeURIComponent(window.location.origin)}`;
+// 开启鉴权时浏览器直链无法带 Authorization 头，故把已登录会话的 token 作为 ?token= 传入（脚本本身就会含该 token）。
+const installUrl = `/api/users/import-script.user.js?server=${encodeURIComponent(window.location.origin)}&token=${encodeURIComponent(localStorage.getItem('zdm_token') || '')}`;
 const showScript = ref(false);
 
 function showToast(m, t = 'ok') {

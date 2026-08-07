@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { load, persist, genId, withWriteLock } from '../store.js';
 import { smzdm } from '../smzdm/adapter.js';
 import { config } from '../config.js';
-import { authRequired, maskCookie } from '../auth.js';
+import { authRequired, authRequiredOrQuery, maskCookie } from '../auth.js';
 import { resolvedCheckInTime } from '../clockSchedule.js';
 import { resetRisk } from '../riskControl.js';
 
@@ -149,10 +149,11 @@ router.get('/import-script', (req, res) => {
 // 一键安装版脚本：把服务地址 + Token 直接注入模板，用户无需在油猴菜单里手动填写。
 // URL 以 .user.js 结尾且返回 text/javascript，浏览器导航到此链接时油猴会自动弹出安装对话框。
 // - server：优先取前端通过 ?server= 传入的真实访问地址（穿透反代/HTTPS 也正确）；缺省回退 Host 头拼接。
-// - token ：缺省回退服务端 config.apiToken（默认部署 REQUIRE_AUTH=false 时 import 本就不校验，无实质风险）。
-// 鉴权：开启 REQUIRE_AUTH 时本接口仍需 Bearer（直接导航无法带头，建议用前端「复制脚本」降级，
-//       那里会从已登录会话的 localStorage 取 token 注入，同样无需手动配置）。
-router.get('/import-script.user.js', authRequired, (req, res) => {
+// - token ：优先取前端通过 ?token= 传入的已登录会话 Token（一键安装直链由前端注入）；缺省回退 config.apiToken。
+// 鉴权（authRequiredOrQuery）：开启 REQUIRE_AUTH 时，允许 Bearer 头或 ?token= 查询参数二选一。
+//   浏览器直接导航 .user.js 无法带 Authorization 头，故前端把已登录会话的 token 作为 ?token= 传入；
+//   该 token 本就会写进脚本用于自动推送 Cookie，用 query 传不增加额外泄露面，从而「一键安装」在开启鉴权时也可用。
+router.get('/import-script.user.js', authRequiredOrQuery, (req, res) => {
   try {
     const code = fs.readFileSync(SCRIPT_PATH, 'utf8');
     const server = String(
