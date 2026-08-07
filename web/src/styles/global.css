@@ -131,6 +131,25 @@ body::before {
   letter-spacing: -0.5px;
 }
 
+/* mock 模式醒目警告（签到不会真实生效） */
+.warn-banner {
+  margin: 12px 0 4px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  border: 1px solid rgba(255, 90, 77, 0.45);
+  background: rgba(255, 90, 77, 0.1);
+  color: #ffb3ac;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.warn-banner code {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.35);
+  color: #ffd06b;
+  font-size: 12px;
+}
+
 /* 主按钮 */
 .btn {
   appearance: none;

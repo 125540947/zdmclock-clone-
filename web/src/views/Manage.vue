@@ -22,6 +22,12 @@
       </p>
     </section>
 
+    <div v-if="adapter !== 'real'" class="warn-banner">
+      ⚠️ 当前为 <b>模拟模式（mock）</b>：签到不会真实生效（只写库、不请求 smzdm）。
+      请在服务端 <code>.env</code> 设置 <code>SMZDM_ADAPTER=real</code> 并
+      <code>systemctl restart zdmclock</code> 后才会真正签到。
+    </div>
+
     <section class="card rise" style="animation-delay: 0.1s">
       <p class="card-title">🚀 一键执行</p>
       <button class="btn block gold" :disabled="running" @click="runAll">

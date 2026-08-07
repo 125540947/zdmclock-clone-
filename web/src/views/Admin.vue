@@ -10,6 +10,12 @@
       </span>
     </header>
 
+    <div v-if="stats.adapter !== 'real'" class="warn-banner">
+      ⚠️ 当前为 <b>模拟模式（mock）</b>：签到 / 任务只写库、<b>不会真实请求 smzdm</b>，
+      所以"看起来签了其实没签"。请到「运行台」或服务端 <code>.env</code> 设置
+      <code>SMZDM_ADAPTER=real</code> 并重启服务后才会真正签到。
+    </div>
+
     <section class="stats rise" style="animation-delay: 0.05s">
       <div class="stat">
         <div class="display">{{ stats.users }}</div>
