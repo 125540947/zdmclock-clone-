@@ -132,11 +132,15 @@ router.post('/import', authRequired, async (req, res) => {
   res.json({ ...user, cookie: maskCookie(user.cookie), imported: true, upserted: existed });
 });
 
-// 返回油猴抓取脚本源码（前端「复制/下载」用）
-router.get('/import-script', authRequired, (req, res) => {
+// 返回油猴抓取脚本源码（前端「复制/下载」用）。
+// 该脚本不含任何服务端密钥（仅模板，需使用者在浏览器里自行填写服务地址/API_TOKEN），
+// 故设为公开可读，以便前端用纯 <a download> 直链下载——HTTP（非 HTTPS/localhost）下也能稳定触发下载，
+// 不再依赖 JS Blob（其在 HTTP 下常被浏览器拦截）。
+router.get('/import-script', (req, res) => {
   try {
     const code = fs.readFileSync(SCRIPT_PATH, 'utf8');
-    res.type('text/plain').send(code);
+    res.setHeader('Content-Disposition', 'attachment; filename="cookie-grabber.user.js"');
+    res.type('text/javascript').send(code);
   } catch {
     res.status(404).json({ error: 'not_found', message: '脚本文件不存在（请确认 tools/cookie-grabber.user.js）' });
   }

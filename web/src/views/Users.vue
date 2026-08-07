@@ -27,8 +27,10 @@
       </ol>
       <div class="grab-actions">
         <button class="btn ghost sm" :disabled="loadingScript" @click="copyScript">📋 复制脚本</button>
-        <button class="btn ghost sm" :disabled="loadingScript" @click="downloadScript">⬇ 下载 .user.js</button>
+        <a class="btn ghost sm" :href="scriptUrl" download="cookie-grabber.user.js">⬇ 下载 .user.js</a>
+        <button class="btn ghost sm" :disabled="loadingScript" @click="toggleScript">{{ showScript ? '隐藏脚本' : '👁 查看脚本' }}</button>
       </div>
+      <pre v-if="showScript" class="script-box">{{ scriptText }}</pre>
     </section>
 
     <section v-if="users.length" class="card rise" style="animation-delay: 0.05s">
@@ -146,6 +148,8 @@ const autoWindow = ref('08:00~10:59');
 const defaultTime = ref('09:00');
 const scriptText = ref('');
 const loadingScript = ref(false);
+const scriptUrl = '/api/users/import-script';
+const showScript = ref(false);
 
 function showToast(m, t = 'ok') {
   toast.value = m;
@@ -278,25 +282,37 @@ async function ensureScript() {
 async function copyScript() {
   await ensureScript();
   if (!scriptText.value) return;
+  const text = scriptText.value;
   try {
-    await navigator.clipboard.writeText(scriptText.value);
+    // 优先用标准 Clipboard API（HTTPS/localhost 可用）
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      // HTTP（非安全上下文）降级：临时 textarea + execCommand 复制
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.top = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      ta.setSelectionRange(0, text.length);
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      if (!ok) throw new Error('execCommand copy failed');
+    }
     showToast('脚本已复制，去 Tampermonkey 新建脚本粘贴即可');
   } catch {
-    showToast('复制失败，请手动选择文本复制', 'err');
+    showToast('复制失败，请点「查看脚本」手动长按复制', 'err');
   }
 }
-async function downloadScript() {
+async function toggleScript() {
+  if (showScript.value) {
+    showScript.value = false;
+    return;
+  }
   await ensureScript();
-  if (!scriptText.value) return;
-  const blob = new Blob([scriptText.value], { type: 'text/javascript' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'cookie-grabber.user.js';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(a.href);
-  showToast('已下载 cookie-grabber.user.js');
+  showScript.value = true;
 }
 </script>
 
@@ -466,6 +482,26 @@ async function downloadScript() {
 .grab-actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
+}
+.grab-actions a {
+  text-decoration: none;
+}
+.script-box {
+  margin: 12px 0 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre;
+  word-break: break-all;
+  -webkit-user-select: text;
+  user-select: text;
 }
 .toast {
   position: fixed;
