@@ -144,6 +144,18 @@ if [ ! -f web/dist/index.html ]; then
 fi
 chown -R "$APP_USER":"$APP_USER" "$APP_DIR"
 
+# 确保部署用户能"穿越"到 APP_DIR：若 APP_DIR 落在某用户的家目录（如 /home/ubuntu），
+# 该家目录默认权限 750，部署用户无法进入，systemd 会在 chdir 阶段直接报 Permission denied，
+# 导致服务永远起不来（历史上反复卡在 step 5 的根因）。这里仅给家目录追加 others 的 x
+# （遍历）位，不开放读取，影响面最小，且幂等。
+P="$(dirname "$APP_DIR")"
+while [ "$P" != "/" ]; do
+  case "$P" in
+    /home/*) [ -d "$P" ] && chmod o+x "$P" 2>/dev/null || true ;;
+  esac
+  P="$(dirname "$P")"
+done
+
 echo "==> [4/6] 生成 / 校验 .env（关键安全项）"
 valid_env=0
 if [ -f .env ] && grep -Eq '^ADMIN_PASSWORD=.{8,}$' .env \
