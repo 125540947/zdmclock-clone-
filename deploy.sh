@@ -120,9 +120,18 @@ if ! id -u "$APP_USER" >/dev/null 2>&1; then
   useradd -r -m -s /usr/sbin/nologin "$APP_USER"
 fi
 
-echo "==> [3/6] 安装依赖与构建前端（按需）"
-[ -d node_modules ] || npm install
-[ -d web/dist ] || npm run build
+echo "==> [3/6] 安装依赖与构建前端（校验关键包，缺失才装）"
+# 不能只判断 node_modules 目录是否存在：历史上有"目录在但依赖残缺"导致 npm start
+# 起不来的情况。改为检查真正需要的包/可执行文件。
+if [ ! -x node_modules/.bin/cross-env ] || [ ! -d node_modules/express ] \
+   || [ ! -d node_modules/dotenv ] || [ ! -d node_modules/vite ]; then
+  echo "  · 依赖不完整，执行 npm install"
+  npm install
+fi
+if [ ! -f web/dist/index.html ]; then
+  echo "  · 前端未构建，执行 npm run build"
+  npm run build
+fi
 chown -R "$APP_USER":"$APP_USER" "$APP_DIR"
 
 echo "==> [4/6] 生成 / 校验 .env（关键安全项）"
