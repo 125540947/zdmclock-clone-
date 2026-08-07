@@ -28,6 +28,7 @@ export function zonedWallClock(date, tz) {
   if (!tz || tz === 'local' || tz === 'UTC') {
     return {
       date: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`,
+      getTime: () => date.getTime(),
       getMinutes: () => date.getMinutes(),
       getHours: () => date.getHours(),
       getDate: () => date.getDate(),
@@ -54,6 +55,7 @@ export function zonedWallClock(date, tz) {
   const month = Number(p.month) - 1;
   return {
     date: `${p.year}-${p.month}-${p.day}`,
+    getTime: () => new Date(Number(p.year), month, day, hour, minute).getTime(),
     getMinutes: () => minute,
     getHours: () => hour,
     getDate: () => day,
