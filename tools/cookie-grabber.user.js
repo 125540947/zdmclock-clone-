@@ -1,16 +1,12 @@
 // ==UserScript==
 // @name         zdmclock 一键推送 Cookie
 // @namespace    https://github.com/125540947/zdmclock-clone-
-// @version      1.0.0
-// @description  在 smzdm 页面一键把登录 Cookie 推送到你的 zdmclock 服务（自动签到助手）。
-//               比手动去 DevTools 复制 Cookie 更安全省事：不碰你的 smzdm 密码，且能读取 HttpOnly 的会话 Cookie。
+// @version      1.1.0
+// @description  在 smzdm 页面一键把登录 Cookie 推送到你的 zdmclock 服务（自动签到助手）。服务地址与 Token 已由本服务自动写入，无需在油猴菜单里手动配置。
 // @match        https://www.smzdm.com/*
 // @match        https://m.smzdm.com/*
 // @match        https://zhiyou.smzdm.com/*
 // @grant        GM_xmlhttpRequest
-// @grant        GM_setValue
-// @grant        GM_getValue
-// @grant        GM_registerMenuCommand
 // @grant        GM_cookie
 // @connect      *
 // ==/UserScript==
@@ -18,8 +14,10 @@
 (function () {
   'use strict';
 
-  const getServer = () => (GM_getValue('zdm_server') || '').trim();
-  const getToken = () => (GM_getValue('zdm_token') || '').trim();
+  // 以下两项由本服务的「一键安装」自动注入（服务地址 + 鉴权 Token），
+  // 普通用户无需在油猴菜单里手填——这也是 v1.1 相比旧版最大的简化点。
+  const ZDMC_SERVER = __SERVER__;
+  const ZDMC_TOKEN = __TOKEN__;
 
   function toast(msg, ok) {
     let el = document.getElementById('zdm_toast');
@@ -40,22 +38,6 @@
     el._t = setTimeout(() => {
       el.style.opacity = '0';
     }, 3500);
-  }
-
-  function openSettings() {
-    const server = prompt(
-      'zdmclock 服务地址（含端口），例如 http://1.2.3.4:3000',
-      getServer()
-    );
-    if (server === null) return;
-    const token = prompt(
-      'API_TOKEN（在 .env / 部署输出里，留空则不带鉴权）',
-      getToken()
-    );
-    if (token === null) return;
-    GM_setValue('zdm_server', server.trim());
-    GM_setValue('zdm_token', token.trim());
-    toast('已保存设置：' + server.trim());
   }
 
   // 收集 smzdm 域下的全部 Cookie（含 HttpOnly，document.cookie 拿不到）。
@@ -97,11 +79,8 @@
   }
 
   function pushCookie() {
-    const server = getServer();
-    const token = getToken();
-    if (!server) {
-      toast('请先在 Tampermonkey 菜单「⚙ zdmclock 设置」里填写服务地址', false);
-      openSettings();
+    if (!ZDMC_SERVER) {
+      toast('脚本未写入服务地址，请重新从 zdmclock 页面「一键安装」', false);
       return;
     }
     collectCookie((cookie) => {
@@ -109,9 +88,9 @@
         toast('未读取到任何 smzdm Cookie，请先登录 smzdm', false);
         return;
       }
-      const url = server.replace(/\/+$/, '') + '/api/users/import';
+      const url = String(ZDMC_SERVER).replace(/\/+$/, '') + '/api/users/import';
       const headers = { 'Content-Type': 'application/json' };
-      if (token) headers['Authorization'] = 'Bearer ' + token;
+      if (ZDMC_TOKEN) headers['Authorization'] = 'Bearer ' + ZDMC_TOKEN;
       GM_xmlhttpRequest({
         method: 'POST',
         url,
@@ -131,7 +110,7 @@
         },
         onerror: (e) => {
           toast(
-            '推送失败：' + (e.error || '网络错误') + '（检查服务地址 / Token / 跨域）',
+            '推送失败：' + (e.error || '网络错误') + '（检查服务地址 / 跨域）',
             false
           );
         }
@@ -150,10 +129,6 @@
       'font-size:13px;box-shadow:0 4px 16px rgba(0,0,0,.25);';
     btn.addEventListener('click', pushCookie);
     document.body.appendChild(btn);
-  }
-
-  if (typeof GM_registerMenuCommand === 'function') {
-    GM_registerMenuCommand('⚙ zdmclock 设置', openSettings);
   }
 
   const init = () => {

@@ -16,18 +16,17 @@
       </div>
       <p class="hint">
         在 smzdm 网页登录后，点一下页面上的「🍪 推送到 zdmclock」按钮，自动把登录态推送到本服务
-        （按账号去重更新，不重复建号）。比手动去 DevTools 复制 Cookie 更省事，且能读取 HttpOnly 的会话
-        Cookie、不碰你的 smzdm 密码。
+        （按账号去重更新，不重复建号）。<b>服务地址和 Token 已自动写入脚本，无需在油猴里手动配置</b>。
+        比手动去 DevTools 复制 Cookie 更省事，且能读取 HttpOnly 的会话 Cookie、不碰你的 smzdm 密码。
       </p>
       <ol class="steps">
-        <li>浏览器装 <a href="https://www.tampermonkey.net/" target="_blank" rel="noreferrer">Tampermonkey</a> 插件</li>
-        <li>点下方「复制脚本」或「下载 .user.js」，新建一个用户脚本粘贴 / 安装</li>
-        <li>油猴菜单「⚙ zdmclock 设置」里填：服务地址（http://你的IP:3000）+ API_TOKEN</li>
-        <li>打开 smzdm 任意页面，点「🍪 推送到 zdmclock」即可</li>
+        <li>浏览器装一次 <a href="https://www.tampermonkey.net/" target="_blank" rel="noreferrer">Tampermonkey</a> 插件</li>
+        <li>点下方「🚀 一键安装」→ 油猴自动弹出安装，确认即可</li>
+        <li>打开 smzdm 任意页面，点「🍪 推送到 zdmclock」完成</li>
       </ol>
       <div class="grab-actions">
+        <a class="btn primary sm" :href="installUrl" target="_blank" rel="noreferrer">🚀 一键安装</a>
         <button class="btn ghost sm" :disabled="loadingScript" @click="copyScript">📋 复制脚本</button>
-        <a class="btn ghost sm" :href="scriptUrl" download="cookie-grabber.user.js">⬇ 下载 .user.js</a>
         <button class="btn ghost sm" :disabled="loadingScript" @click="toggleScript">{{ showScript ? '隐藏脚本' : '👁 查看脚本' }}</button>
       </div>
       <pre v-if="showScript" class="script-box">{{ scriptText }}</pre>
@@ -148,7 +147,8 @@ const autoWindow = ref('08:00~10:59');
 const defaultTime = ref('09:00');
 const scriptText = ref('');
 const loadingScript = ref(false);
-const scriptUrl = '/api/users/import-script';
+// 一键安装链接：指向服务端注入好「服务地址 + Token」的 .user.js，油猴导航到此即弹安装。
+const installUrl = `/api/users/import-script.user.js?server=${encodeURIComponent(window.location.origin)}`;
 const showScript = ref(false);
 
 function showToast(m, t = 'ok') {
@@ -267,12 +267,22 @@ onMounted(async () => {
   }
 });
 
-// ===== 油猴抓取脚本：复制 / 下载 =====
+// ===== 油猴抓取脚本：复制 / 查看（客户端把服务地址 + Token 注入模板）=====
+// 把模板里的 __SERVER__ / __TOKEN__ 占位符替换为当前访问地址与已登录会话的 Token，
+// 这样用户无需在油猴菜单里手填，复制出去的脚本开箱即用。
+function bake(raw) {
+  const origin = window.location.origin;
+  const token = localStorage.getItem('zdm_token') || '';
+  return String(raw)
+    .replace(/__SERVER__/g, JSON.stringify(origin))
+    .replace(/__TOKEN__/g, JSON.stringify(token));
+}
 async function ensureScript() {
   if (scriptText.value) return;
   loadingScript.value = true;
   try {
-    scriptText.value = await getCookieGrabberScript();
+    const raw = await getCookieGrabberScript();
+    scriptText.value = bake(raw);
   } catch (e) {
     showToast(e.response?.data?.message || '脚本加载失败', 'err');
   } finally {
@@ -457,6 +467,15 @@ async function toggleScript() {
 .btn.danger {
   color: #ffb3ac;
   border-color: rgba(255, 90, 77, 0.4);
+}
+.btn.primary {
+  background: linear-gradient(135deg, #ffd06b, var(--gold));
+  color: #3a2a06;
+  border-color: transparent;
+  font-weight: 600;
+}
+.btn.primary:hover {
+  filter: brightness(1.05);
 }
 .grab {
   padding: 16px 14px 14px;

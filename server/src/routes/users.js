@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { load, persist, genId, withWriteLock } from '../store.js';
 import { smzdm } from '../smzdm/adapter.js';
+import { config } from '../config.js';
 import { authRequired, maskCookie } from '../auth.js';
 import { resolvedCheckInTime } from '../clockSchedule.js';
 import { resetRisk } from '../riskControl.js';
@@ -132,15 +133,36 @@ router.post('/import', authRequired, async (req, res) => {
   res.json({ ...user, cookie: maskCookie(user.cookie), imported: true, upserted: existed });
 });
 
-// 返回油猴抓取脚本源码（前端「复制/下载」用）。
-// 该脚本不含任何服务端密钥（仅模板，需使用者在浏览器里自行填写服务地址/API_TOKEN），
-// 故设为公开可读，以便前端用纯 <a download> 直链下载——HTTP（非 HTTPS/localhost）下也能稳定触发下载，
-// 不再依赖 JS Blob（其在 HTTP 下常被浏览器拦截）。
+// 返回油猴抓取脚本「模板」源码（含 __SERVER__ / __TOKEN__ 占位符，前端「复制 / 查看」降级用）。
+// 该模板不含任何服务端密钥，且本接口本身就不带鉴权依赖，故设为公开可读，
+// 以便前端用纯 <a download> 直链 / 文本复制——HTTP（非 HTTPS/localhost）下也能稳定触发。
+// 真正免去手动配置的是下方的 /import-script.user.js 一键安装版。
 router.get('/import-script', (req, res) => {
   try {
     const code = fs.readFileSync(SCRIPT_PATH, 'utf8');
-    res.setHeader('Content-Disposition', 'attachment; filename="cookie-grabber.user.js"');
     res.type('text/javascript').send(code);
+  } catch {
+    res.status(404).json({ error: 'not_found', message: '脚本文件不存在（请确认 tools/cookie-grabber.user.js）' });
+  }
+});
+
+// 一键安装版脚本：把服务地址 + Token 直接注入模板，用户无需在油猴菜单里手动填写。
+// URL 以 .user.js 结尾且返回 text/javascript，浏览器导航到此链接时油猴会自动弹出安装对话框。
+// - server：优先取前端通过 ?server= 传入的真实访问地址（穿透反代/HTTPS 也正确）；缺省回退 Host 头拼接。
+// - token ：缺省回退服务端 config.apiToken（默认部署 REQUIRE_AUTH=false 时 import 本就不校验，无实质风险）。
+// 鉴权：开启 REQUIRE_AUTH 时本接口仍需 Bearer（直接导航无法带头，建议用前端「复制脚本」降级，
+//       那里会从已登录会话的 localStorage 取 token 注入，同样无需手动配置）。
+router.get('/import-script.user.js', authRequired, (req, res) => {
+  try {
+    const code = fs.readFileSync(SCRIPT_PATH, 'utf8');
+    const server = String(
+      req.query.server || `${req.protocol}://${req.headers.host || ''}`
+    );
+    const token = String(req.query.token || config.apiToken || '');
+    const baked = code
+      .replace(/__SERVER__/g, JSON.stringify(server))
+      .replace(/__TOKEN__/g, JSON.stringify(token));
+    res.type('text/javascript').send(baked);
   } catch {
     res.status(404).json({ error: 'not_found', message: '脚本文件不存在（请确认 tools/cookie-grabber.user.js）' });
   }

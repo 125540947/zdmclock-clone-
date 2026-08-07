@@ -211,6 +211,20 @@ test('GET /api/users/import-script 返回油猴脚本源码（text/plain）', as
   config.requireAuth = false;
 });
 
+test('GET /api/users/import-script.user.js 注入服务地址并返回 javascript', async () => {
+  config.requireAuth = false;
+  const origin = 'http://1.2.3.4:3000';
+  const res = await fetch(base + '/api/users/import-script.user.js?server=' + encodeURIComponent(origin));
+  const text = await res.text();
+  assert.equal(res.status, 200);
+  assert.ok(text.includes('UserScript'), '应返回油猴脚本内容');
+  assert.ok(text.includes(JSON.stringify(origin)), '应注入服务地址');
+  assert.ok(!text.includes('__SERVER__'), '地址占位符应被替换');
+  assert.ok(!text.includes('__TOKEN__'), 'Token 占位符应被替换');
+  assert.ok((res.headers.get('content-type') || '').includes('javascript'), '应为 javascript 类型');
+  config.requireAuth = false;
+});
+
 test('关闭测试服务器', () => {
   server.close();
   assert.ok(true);
