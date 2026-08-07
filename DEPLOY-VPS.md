@@ -1,11 +1,8 @@
 # 部署到 VPS（加固版运行手册）
 
 > 目标机：`124.222.218.174`（公网 IP）。本手册默认 **Ubuntu/Debian**，root 登录。
-> 重要前提：本沙箱无外网出口，无法替你 `git push` / SSH。请先在**你自己的机器**把最新提交（`e8652cc`，含 `SELF_UPDATE_NO_REEXEC`）推到 GitHub，VPS 才能 `git pull` 到它：
-> ```bash
-> git push            # 在你本机执行
-> ```
-> 若仓库是**私有**的，VPS 上 `git clone` 需要认证：用 GitHub PAT（勾 repo 权限）或部署 SSH 密钥。
+> 本沙箱无外网出口，无法替你 SSH / `git push`。但你**自己的机器**（运行 WorkBuddy 的 Windows / Mac）可以直连 VPS，
+> 所以下面用 **scp 把仓库传上去** 的方式，完全不依赖 GitHub 推送或 PAT，最省事。
 
 ---
 
@@ -21,30 +18,43 @@
 
 ---
 
-## 1. 在 VPS 上执行（文件方式，无需复制长脚本）
+## 1. 部署步骤（推荐：scp 传仓库，无需 GitHub）
 
-> ⚠️ **不要再复制粘贴文档里那一长串多行脚本**——换行极易在终端里丢失，导致命令错乱（你已经踩过这个坑了）。
-> 改用**文件方式**：脚本已落地为仓库里的 `deploy-vps.sh`，你只需 `git pull` 后 `bash deploy-vps.sh` 一条命令跑完。
+> ⚠️ **不要再复制粘贴文档里那一长串多行脚本**——换行极易在终端里丢失导致命令错乱（你已踩过坑）。
+> 改为 **scp 把整个仓库传到 VPS**，然后 `bash deploy-vps.sh` 一条命令跑完。脚本会自动装 Node 22、构建、起 systemd。
 
-### 1.1 如果你刚才已经跑到一半（卡在 .env 生成）
+### 1.0 退出卡住的旧脚本
 
-你现在是 `bash-5.2#` 提示符，正常现象。脚本在 `cat > .env <<EOF` 处断了，`.env` 可能写成了半截/空文件。按下面「1.2」重跑即可：`deploy-vps.sh` 会**检测到 .env 无效 → 自动备份为 `.env.broken.*` → 重新生成强密钥**，不影响之前已完成的 clone/装依赖/构建。
+你刚才卡在 `bash ./deploy.sh` 的 `read` 交互等待，先按 **`Ctrl + C`** 退出它（不要回车选 Docker，那会因没装 docker 失败）。
 
-### 1.2 干净步骤（在 VPS 的 root shell）
+### 1.1 在你自己的机器上，把仓库 scp 到 VPS（保留 .git，排除大目录）
+
+在**你本机**打开终端（Windows 用 Git Bash / PowerShell；仓库就在 WorkBuddy 目录里），执行：
 
 ```bash
-# 如果你之前是手动 clone 到 /opt/zdmclock（默认），请进该目录；其它路径改之
-cd /opt/zdmclock
-git pull                                  # 取回含 deploy-vps.sh 的最新提交
-bash deploy-vps.sh                        # IP:PORT 访问（无 TLS）
-# 若你有域名想免费 HTTPS： bash deploy-vps.sh --tls your.domain.com
+# Windows Git Bash 示例（路径换成你实际的 zdmclock-clone 目录）
+REPO="/c/Users/1/WorkBuddy/2026-08-04-08-27-18/zdmclock-clone"
+ssh root@124.222.218.174 "mkdir -p /opt/zdmclock"
+scp -r -o StrictHostKeyChecking=no \
+  "$REPO"/.git \
+  "$REPO"/server "$REPO"/web "$REPO"/package.json "$REPO"/package-lock.json \
+  "$REPO"/deploy-vps.sh "$REPO"/.env.example \
+  root@124.222.218.174:/opt/zdmclock/
+```
+
+> 说明：只传源码与 `.git`（保留 git 历史，方便日后「系统更新」页自动拉取）；**不传** `node_modules` / `web/dist`（脚本会自动装、自动构建）。若你本机已有 `.env`，不要传（脚本会生成新的强密钥）。
+
+### 1.2 在 VPS 上运行部署脚本
+
+```bash
+ssh root@124.222.218.174
+bash /opt/zdmclock/deploy-vps.sh            # IP:PORT 访问（无 TLS）
+# 有域名想免费 HTTPS： bash /opt/zdmclock/deploy-vps.sh --tls your.domain.com
 ```
 
 脚本会依次：装 Node 22 LTS（缺失才装）→ 建非 root 用户 → 装依赖/构建（已有则跳过）→
-生成强密钥 `.env`（无效则重建）→ 注册 systemd（`Restart=always` + `SELF_UPDATE_NO_REEXEC=1`）→ 可选 nginx+TLS。
+生成强密钥 `.env`（无效则备份重建）→ 注册 systemd（`Restart=always` + `SELF_UPDATE_NO_REEXEC=1`）→ 可选 nginx+TLS。
 运行结束会**回显管理员密码与 API_TOKEN，请立即记下**。
-
-> 私有仓库：VPS 上 `git pull` 需认证（GitHub PAT 或部署 SSH 密钥）。
 
 ---
 

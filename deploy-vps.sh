@@ -1,53 +1,86 @@
 #!/usr/bin/env bash
 # =============================================================================
-# zdmclock-clone · VPS 生产部署脚本（systemd 托管，idempotent 可重入）
+# zdmclock-clone · VPS 生产部署脚本（systemd 托管，自举 + idempotent 可重入）
 # -----------------------------------------------------------------------------
-# 关键修复：
-#   - 不依赖「复制粘贴长脚本」（容易丢换行导致命令错乱）；本脚本作为文件存在仓库，
-#     在 VPS 上 `git pull` 后 `bash deploy-vps.sh` 即可运行。
-#   - 可重入：依赖/前端产物/系统用户/服务已存在时自动跳过，可反复安全执行。
-#   - 修复被截断的半截 .env：检测到 .env 无效会自动备份并重新生成强密钥。
-#   - 使用 systemd（Restart=always）+ SELF_UPDATE_NO_REEXEC=1：崩溃自动拉起，
-#     且「系统更新」页点升级时应用只退出、由 systemd 重启，不产生孤儿进程。
+# 设计目标：从一台「裸 Debian」上，只要把本文件传上去，一条命令跑完：
+#   1) 自动安装 git / curl / Node 22 LTS（缺失才装）
+#   2) 获取代码：优先 git clone（--repo 带 PAT）；若已是项目目录则原地部署
+#   3) npm install + 构建前端
+#   4) 生成强密钥 .env（无效则备份重建）
+#   5) 注册 systemd（Restart=always + SELF_UPDATE_NO_REEXEC=1，崩溃自动拉起）
+#   6) 可选 nginx + Let's Encrypt 免费 TLS
+# 全程非交互、不读终端输入，避免卡在交互提示。
 #
-# 用法：
-#   bash deploy-vps.sh                 # IP:PORT 访问（无 TLS，Cookie 明文）
-#   bash deploy-vps.sh --tls example.com   # 自动配 nginx + Let's Encrypt 免费 TLS
-#   bash deploy-vps.sh --pull          # 运行前先 git pull --ff-only
+# 用法（任选其一）：
+#   # 你把整个仓库 scp 到 /opt/zdmclock 后，进去直接跑：
+#   bash /opt/zdmclock/deploy-vps.sh
+#
+#   # 或让脚本自己从 GitHub 拉私有库（PAT 需有 repo 权限）：
+#   bash deploy-vps.sh --repo https://<PAT>@github.com/125540947/zdmclock-clone-.git
+#
+#   bash deploy-vps.sh --tls example.com     # 顺带配 nginx + TLS
 #   bash deploy-vps.sh --user zdm --port 3000
+#   bash deploy-vps.sh --pull                # 代码已 clone 时，先 git pull --ff-only
 # =============================================================================
-set -euo pipefail
+set -uo pipefail
 
-APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$APP_DIR"
-
+# ---- 解析参数 ----
 APP_USER="${APP_USER:-zdm}"
 PORT="${PORT:-3000}"
 SERVICE="zdmclock"
 DOMAIN=""
 DO_PULL=0
+REPO=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --tls)  DOMAIN="$2"; shift 2 ;;
-    --user) APP_USER="$2"; shift 2 ;;
-    --port) PORT="$2"; shift 2 ;;
-    --pull) DO_PULL=1; shift ;;
+    --tls)   DOMAIN="$2"; shift 2 ;;
+    --user)  APP_USER="$2"; shift 2 ;;
+    --port)  PORT="$2"; shift 2 ;;
+    --repo)  REPO="$2"; shift 2 ;;
+    --pull)  DO_PULL=1; shift ;;
     *) shift ;;
   esac
 done
 
 [ "$(id -u)" -eq 0 ] || { echo "✗ 请用 root 运行本脚本（systemd 需要特权）。"; exit 1; }
 
-if [ "$DO_PULL" = "1" ]; then
-  echo "==> 拉取最新代码"
-  git -C "$APP_DIR" pull --ff-only || echo "  ⚠ git pull 失败（可能无网络或需先 push），继续用现有代码"
+# ---- 定位项目目录（修复旧脚本把 APP_DIR 解析成 /root 的坑）----
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/server/src/index.js" ] || [ -f "$SCRIPT_DIR/package.json" ]; then
+  APP_DIR="$SCRIPT_DIR"          # 脚本就在项目目录内（scp 整库 / 已 clone 后运行）
+else
+  APP_DIR="/opt/zdmclock"        # 脚本被单独传到别处，则部署到固定目录并 clone
 fi
+
+echo "==> 部署目录: $APP_DIR"
+
+# ---- 获取代码 ----
+mkdir -p "$APP_DIR"
+if [ -d "$APP_DIR/.git" ]; then
+  echo "==> 已有 git 仓库，更新代码"
+  [ "$DO_PULL" = "1" ] && git -C "$APP_DIR" pull --ff-only || true
+elif [ -f "$APP_DIR/server/src/index.js" ]; then
+  echo "==> 检测到项目文件，原地部署（未检测到 .git，自动更新功能将不可用，可稍后 git init 配置 remote）"
+elif [ -n "$REPO" ]; then
+  echo "==> 从仓库克隆代码"
+  if [ -n "$(ls -A "$APP_DIR" 2>/dev/null)" ]; then
+    mv "$APP_DIR" "${APP_DIR}.bak.$(date +%s)"
+    mkdir -p "$APP_DIR"
+  fi
+  git clone "$REPO" "$APP_DIR"
+else
+  echo "✗ 未在 $APP_DIR 找到项目代码，也未提供 --repo。"
+  echo "  方案A：把你机器上的仓库 scp 到 $APP_DIR，再 bash $APP_DIR/deploy-vps.sh"
+  echo "  方案B：bash deploy-vps.sh --repo https://<PAT>@github.com/125540947/zdmclock-clone-.git"
+  exit 1
+fi
+cd "$APP_DIR"
 
 echo "==> [1/6] 系统依赖与 Node 22 LTS（缺失才装）"
 export DEBIAN_FRONTEND=noninteractive
-NODE_MAJOR="$(node -v 2>/dev/null | cut -d. -f1 | tr -d v || echo 0)"
-if [ "$NODE_MAJOR" -lt 22 ]; then
+NODE_BIN="$(command -v node || true)"
+if [ -z "$NODE_BIN" ] || [ "$(node -v 2>/dev/null | cut -d. -f1 | tr -d v)" -lt 22 ]; then
   apt-get update -y
   apt-get install -y -q git curl ca-certificates gnupg
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
