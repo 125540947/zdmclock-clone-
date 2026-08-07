@@ -84,12 +84,34 @@ cd "$APP_DIR"
 
 echo "==> [1/6] 系统依赖与 Node 22 LTS（缺失才装）"
 export DEBIAN_FRONTEND=noninteractive
-NODE_BIN="$(command -v node || true)"
-if [ -z "$NODE_BIN" ] || [ "$(node -v 2>/dev/null | cut -d. -f1 | tr -d v)" -lt 22 ]; then
-  apt-get update -y
-  apt-get install -y -q git curl ca-certificates gnupg
-  curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-  apt-get install -y -q nodejs
+
+# 仅当 git/curl/xz 缺失时才动用 apt-get（注意：用 apt-get 而非 apt，
+# apt-get 不会触发 "apt does not have a stable CLI interface" 告警）。
+if ! command -v git >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1 || ! command -v xz >/dev/null 2>&1; then
+  echo "  · 安装基础工具 git/curl/xz-utils（apt-get，安静模式）"
+  apt-get update -y -qq
+  apt-get install -y -qq git curl ca-certificates gnupg xz-utils
+fi
+
+# 优先复用系统已装的 Node（>=22 即可）；否则下载官方二进制包解包到 /usr/local。
+# 这样做彻底避免两件事：
+#   1) apt 的 "apt does not have a stable CLI interface" 告警（旧脚本用 bare apt / NodeSource 会触发）；
+#   2) `curl ... | bash -` 在弱网或受限环境里挂起（NodeSource 安装脚本的隐患）。
+NODE_OK=0
+if command -v node >/dev/null 2>&1; then
+  NODE_MAJOR="$(node -v 2>/dev/null | cut -d. -f1 | tr -d v)"
+  case "$NODE_MAJOR" in ''|*[!0-9]*) NODE_OK=0 ;; *) [ "$NODE_MAJOR" -ge 22 ] && NODE_OK=1 ;; esac
+fi
+
+if [ "$NODE_OK" -ne 1 ]; then
+  NODE_VER="v22.14.0"
+  NODE_TAR="node-${NODE_VER}-linux-x64.tar.xz"
+  NODE_URL="https://nodejs.org/dist/${NODE_VER}/${NODE_TAR}"
+  echo "  · 下载 Node ${NODE_VER} 官方二进制（无 apt、不挂起）"
+  curl -fsSL --connect-timeout 20 --max-time 360 -o "/tmp/${NODE_TAR}" "$NODE_URL"
+  tar -xJf "/tmp/${NODE_TAR}" -C /usr/local --strip-components=1
+  rm -f "/tmp/${NODE_TAR}"
+  hash -r 2>/dev/null || true
 fi
 node -v; npm -v
 
@@ -156,7 +178,7 @@ After=network.target
 Type=simple
 User=$APP_USER
 WorkingDirectory=$APP_DIR
-ExecStart=/usr/bin/npm start
+ExecStart=npm start
 Restart=always
 RestartSec=5
 Environment=NODE_ENV=production
@@ -177,7 +199,7 @@ fi
 
 if [ -n "$DOMAIN" ]; then
   echo "==> [6/6] 配置 nginx + TLS（$DOMAIN）"
-  apt-get install -y -q nginx certbot python3-certbot-nginx
+  apt-get install -y -qq nginx certbot python3-certbot-nginx
   cat > "/etc/nginx/sites-available/$SERVICE" <<NGX_EOF
 server {
   listen 80;
