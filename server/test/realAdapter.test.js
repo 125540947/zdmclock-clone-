@@ -64,25 +64,49 @@ test('doComment：缺 articleId 抛错', async () => {
   );
 });
 
-test('doFavorite / doPoint：注入 callImpl 传递 UA + 校验端点路径', async () => {
+test('doFavorite / doPoint：注入 callImpl + resolveChannelIdImpl，校验端点路径与真实 channel_id', async () => {
   const favPaths = [];
   const pointPaths = [];
+  const favBodies = [];
+  const pointBodies = [];
   const favImpl = async (p, o) => {
     favPaths.push(p);
+    favBodies.push(Object.fromEntries(new URLSearchParams(o.body)));
     assert.match(o.ua, /^Mozilla\/\d\.\d/);
     return { error_code: 0 };
   };
   const pointImpl = async (p, o) => {
     pointPaths.push(p);
+    pointBodies.push(Object.fromEntries(new URLSearchParams(o.body)));
     assert.match(o.ua, /^Mozilla\/\d\.\d/);
     return { error_code: 0 };
   };
-  const r1 = await realAdapter.doFavorite('cookie', { articleId: '999', count: 1, callImpl: favImpl });
-  const r2 = await realAdapter.doPoint('cookie', { articleId: '999', count: 1, callImpl: pointImpl });
+  // 注入 channel_id 解析：返回真实频道号（非 '0'）
+  const resolveChannelIdImpl = async () => '76';
+  const r1 = await realAdapter.doFavorite('cookie', { articleId: '999', count: 1, callImpl: favImpl, resolveChannelIdImpl });
+  const r2 = await realAdapter.doPoint('cookie', { articleId: '999', count: 1, callImpl: pointImpl, resolveChannelIdImpl });
   assert.equal(r1.success, true);
   assert.equal(r2.success, true);
   assert.deepEqual(favPaths, ['/favorites/create']);
   assert.ok(pointPaths.length === 1 && pointPaths[0].startsWith('/rating/like_create'));
+  // 关键断言：必须发送真实 channel_id，不能再用 '0'（否则 smzdm 报"无效的评论类型"）
+  assert.equal(favBodies[0].channel_id, '76');
+  assert.equal(pointBodies[0].channel_id, '76');
+  assert.notEqual(favBodies[0].channel_id, '0');
+  assert.notEqual(pointBodies[0].channel_id, '0');
+});
+
+test('doFavorite / doPoint：解析不到 channel_id 时抛出明确错误', async () => {
+  const resolveChannelIdImpl = async () => null;
+  const callImpl = async () => ({ error_code: 0 });
+  await assert.rejects(
+    () => realAdapter.doFavorite('cookie', { articleId: '999', callImpl, resolveChannelIdImpl }),
+    /无法解析文章频道ID/
+  );
+  await assert.rejects(
+    () => realAdapter.doPoint('cookie', { articleId: '999', callImpl, resolveChannelIdImpl }),
+    /无法解析文章频道ID/
+  );
 });
 
 test('submitBaoliao：传递 UA 且校验端点与字段', async () => {

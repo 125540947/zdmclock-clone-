@@ -18,6 +18,9 @@ const BASE = (process.env.SMZDM_BASE || 'https://www.smzdm.com').replace(/\/$/, 
 const API_BASE = (process.env.SMZDM_API_BASE || 'https://user-api.smzdm.com').replace(/\/$/, '');
 // 网页签到基址（与浏览器抓包 Cookie 匹配）：zhiyou.smzdm.com/user/checkin/jsonp_checkin
 const WEB_BASE = (process.env.SMZDM_WEB_BASE || 'https://zhiyou.smzdm.com').replace(/\/$/, '');
+// 文章详情基址（APP 接口家族，与 user-api 同族，服务端带登录 Cookie 可用，无 www 反爬墙）：
+// 点赞/收藏接口必填文章真实 channel_id，此端点可返回 data.data.channel_id。
+const ARTICLE_API_BASE = (process.env.SMZDM_ARTICLE_API_BASE || 'https://article-api.smzdm.com').replace(/\/$/, '');
 
 // 社区逆向得到的签名密钥与客户端标识（失效时用抓包值覆盖）
 const SIGN_KEY = process.env.SMZDM_SIGN_KEY || 'apr1$AwP!wRRT$gJ/q.X24poeBInlUJC';
@@ -180,6 +183,46 @@ export async function appRequest(path, { cookie, data = {}, method = 'POST', bas
     return call(url, { method: 'GET', cookie, ua, base });
   }
   return call(path, { method, cookie, ua, base, body: signed });
+}
+
+// 解析文章真实 channel_id（点赞/收藏 APP 接口必填；传 '0' 会被 smzdm 拒绝为"无效的评论类型"）。
+// 社区脚本（hex-ci/smzdm_script）的做法：getArticleDetail 调 article-api.smzdm.com/article_detail/<id>，
+// 取返回 data.data.channel_id。该端点属 APP 接口家族，服务端带登录 Cookie 即可用（无 www 反爬墙）。
+// 兜底：article-api 取不到时，用 www 文章页（带 Cookie）正则提取 channel_id。
+// 结果按 articleId 缓存，避免对同一条文章重复请求。
+const channelIdCache = new Map();
+
+export async function resolveChannelId(articleId, cookie) {
+  if (!articleId) return null;
+  if (channelIdCache.has(articleId)) return channelIdCache.get(articleId);
+  let cid = null;
+  // 1) article-api 文章详情（GET + 社区签名，与 user-api 同机制）
+  try {
+    const json = await appRequest(`/article_detail/${articleId}`, {
+      cookie,
+      base: ARTICLE_API_BASE,
+      method: 'GET',
+      data: { comment_flow: '', hashcode: '', lastest_update_time: '', uhome: 0, imgmode: 0, article_channel_id: 0, h5hash: '' }
+    });
+    console.log('[smzdm-debug] resolveChannelId article-api raw:', JSON.stringify(json).slice(0, 600), 'articleId=', articleId);
+    const c = json?.data?.channel_id ?? json?.data?.data?.channel_id ?? json?.channel_id;
+    if (c != null) cid = String(c);
+  } catch (e) {
+    console.log('[smzdm-debug] resolveChannelId article-api failed:', e.message, 'articleId=', articleId);
+  }
+  // 2) www 文章页（带 Cookie）正则兜底
+  if (!cid) {
+    try {
+      const text = await call(`/p/${articleId}/`, { method: 'GET', cookie, ua: pickUA(), base: BASE, raw: true });
+      const m = text.match(/channel_id['"]?\s*[:=]\s*['"]?(\d+)/i);
+      if (m) cid = m[1];
+      console.log('[smzdm-debug] resolveChannelId www cid=', cid, 'articleId=', articleId, 'cookieLen=', (cookie || '').length);
+    } catch (e) {
+      console.log('[smzdm-debug] resolveChannelId www failed:', e.message, 'articleId=', articleId);
+    }
+  }
+  if (cid) channelIdCache.set(articleId, cid);
+  return cid;
 }
 
 function removeTags(s) {
@@ -417,8 +460,12 @@ export const realAdapter = {
   async doFavorite(cookie, opts = {}) {
     const req = opts.callImpl || call;
     const wait = opts.sleepImpl || sleep;
+    const resolveCid = opts.resolveChannelIdImpl || resolveChannelId;
     const articleId = normalizeArticleId(opts.articleId);
     if (!articleId) throw new Error('收藏需要 articleId（请在自动任务里填写目标文章ID或链接）');
+    // 点赞/收藏 APP 接口必填文章真实 channel_id；传 '0' 会被 smzdm 拒绝为"无效的评论类型"。
+    const channelId = await resolveCid(articleId, cookie);
+    if (!channelId) throw new Error('收藏失败：无法解析文章频道ID（channel_id），请确认 Cookie 有效且该文章存在');
     const count = Math.min(Math.max(1, Number(opts.count) || 1), 5);
     let last;
     const uas = new Set();
@@ -430,9 +477,9 @@ export const realAdapter = {
       if (i > 0) await wait(actionJitter());
       const ua = pickUA();
       uas.add(ua);
-      const signed = signFormData({ id: articleId, channel_id: '0', token: robotToken });
+      const signed = signFormData({ id: articleId, channel_id: channelId, token: robotToken });
       last = await req(ENDPOINTS.favorite, { method: 'POST', cookie, ua, body: signed, base: API_BASE });
-      console.log('[smzdm-debug] favorite raw:', JSON.stringify(last).slice(0, 800), 'articleId=', articleId, 'cookieLen=', (cookie || '').length);
+      console.log('[smzdm-debug] favorite raw:', JSON.stringify(last).slice(0, 800), 'articleId=', articleId, 'channelId=', channelId, 'cookieLen=', (cookie || '').length);
       if (isSoftSuccess(last)) { last = last; continue; } // 已收藏/已经收藏 = 软成功
       assertOk(last, '收藏');
     }
@@ -442,8 +489,12 @@ export const realAdapter = {
   async doPoint(cookie, opts = {}) {
     const req = opts.callImpl || call;
     const wait = opts.sleepImpl || sleep;
+    const resolveCid = opts.resolveChannelIdImpl || resolveChannelId;
     const articleId = normalizeArticleId(opts.articleId);
     if (!articleId) throw new Error('点赞需要 articleId（请在自动任务里填写目标文章ID或链接）');
+    // 点赞 APP 接口必填文章真实 channel_id；传 '0' 会被 smzdm 拒绝为"无效的评论类型"。
+    const channelId = await resolveCid(articleId, cookie);
+    if (!channelId) throw new Error('点赞失败：无法解析文章频道ID（channel_id），请确认 Cookie 有效且该文章存在');
     const count = Math.min(Math.max(1, Number(opts.count) || 1), 5);
     let last;
     const uas = new Set();
@@ -455,9 +506,9 @@ export const realAdapter = {
       if (i > 0) await wait(actionJitter());
       const ua = pickUA();
       uas.add(ua);
-      const signed = signFormData({ id: articleId, channel_id: '0', token: robotToken });
+      const signed = signFormData({ id: articleId, channel_id: channelId, token: robotToken });
       last = await req(ENDPOINTS.point, { method: 'POST', cookie, ua, body: signed, base: API_BASE });
-      console.log('[smzdm-debug] point raw:', JSON.stringify(last).slice(0, 800), 'articleId=', articleId, 'cookieLen=', (cookie || '').length);
+      console.log('[smzdm-debug] point raw:', JSON.stringify(last).slice(0, 800), 'articleId=', articleId, 'channelId=', channelId, 'cookieLen=', (cookie || '').length);
       if (isSoftSuccess(last)) { last = last; continue; } // 已赞/已经点赞 = 软成功
       assertOk(last, '点赞');
     }
