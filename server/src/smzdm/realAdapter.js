@@ -63,9 +63,11 @@ export function actionJitter(rng = Math.random) {
 const ENDPOINTS = {
   userInfo: process.env.SMZDM_API_USERINFO || '/user/',
   checkin: process.env.SMZDM_API_CHECKIN || '/user/checkin',
-  // 评论/点赞：zhiyou 域网页互动端点（GET+JSONP），原 www/article/ajax_* 已失效返回 404（2026-08 实测）
+  // 评论：zhiyou 域网页互动端点（GET+JSONP），原 www/article/ajax_* 已失效返回 404（2026-08 实测）
   comment: process.env.SMZDM_API_COMMENT || '/user/comment/ajax_set_comment',
-  point: process.env.SMZDM_API_POINT || '/user/comment/ajax_set_comment',
+  // 点赞：user-api APP 接口（已验证端点存在，data.msg="点赞成功" 即成功，顶层 error_msg 偶有"参数错误"干扰需忽略）；
+  // 原 www/zhiyou 网页端点无法真正点赞（type=1 实为评论分类，非点赞），故迁到 APP 接口与收藏同机制。
+  point: process.env.SMZDM_API_POINT || '/rating/like_create',
   // 收藏：user-api APP 接口（已验证端点存在，需签名+登录态）；www/zhiyou 同名路径已 404（2026-08 实测）
   favorite: process.env.SMZDM_API_FAVORITE || '/favorites/create',
   baoliao: process.env.SMZDM_API_BAOLIAO || '/publish/articles/ajax_create'
@@ -431,6 +433,7 @@ export const realAdapter = {
       const signed = signFormData({ id: articleId, channel_id: '0', token: robotToken });
       last = await req(ENDPOINTS.favorite, { method: 'POST', cookie, ua, body: signed, base: API_BASE });
       console.log('[smzdm-debug] favorite raw:', JSON.stringify(last).slice(0, 800), 'articleId=', articleId, 'cookieLen=', (cookie || '').length);
+      if (isSoftSuccess(last)) { last = last; continue; } // 已收藏/已经收藏 = 软成功
       assertOk(last, '收藏');
     }
     return { success: true, message: `收藏成功 ×${count}（文章 ${articleId}）`, count, articleId, uas: [...uas] };
@@ -444,21 +447,19 @@ export const realAdapter = {
     const count = Math.min(Math.max(1, Number(opts.count) || 1), 5);
     let last;
     const uas = new Set();
+    // user-api APP 点赞接口需登录态 + 社区签名；与收藏同机制（www/zhiyou 网页端点无法真正点赞）。
+    // 成功判定：error_code:"0"（data.msg="点赞成功"）；顶层 error_msg 偶有"参数错误"干扰，assertOk 只看 error_code。
+    let robotToken = '';
+    try { robotToken = await getRobotToken(cookie); } catch { /* best-effort，取 token 失败则不带 */ }
     for (let i = 0; i < count; i++) {
       if (i > 0) await wait(actionJitter());
       const ua = pickUA();
       uas.add(ua);
-      // zhiyou 域网页「顶/有用」端点：与评论同接口，type=1（type=2 为踩），GET+JSONP
-      const q = 'type=1&pid=' + encodeURIComponent(articleId) +
-        '&callback=jsonp_' + Date.now();
-      const text = await req(ENDPOINTS.point + '?' + q, {
-        method: 'GET', cookie, ua, base: WEB_BASE, raw: true
-      });
-      const json = typeof text === 'string' ? parseJsonp(text) : text;
-      console.log('[smzdm-debug] point raw:', JSON.stringify(json).slice(0, 800), 'articleId=', articleId, 'cookieLen=', (cookie || '').length);
-      if (isSoftSuccess(json)) { last = json; continue; } // 请勿重复提交/已赞 = 软成功
-      assertOk(json, '点赞');
-      last = json;
+      const signed = signFormData({ id: articleId, channel_id: '0', token: robotToken });
+      last = await req(ENDPOINTS.point, { method: 'POST', cookie, ua, body: signed, base: API_BASE });
+      console.log('[smzdm-debug] point raw:', JSON.stringify(last).slice(0, 800), 'articleId=', articleId, 'cookieLen=', (cookie || '').length);
+      if (isSoftSuccess(last)) { last = last; continue; } // 已赞/已经点赞 = 软成功
+      assertOk(last, '点赞');
     }
     return { success: true, message: `点赞成功 ×${count}（文章 ${articleId}）`, count, articleId, uas: [...uas] };
   },
@@ -504,9 +505,17 @@ export const realAdapter = {
       }
       throw new Error('抓取好价网络错误：' + e.message);
     }
-    if (!resp.ok) { console.log('[smzdm-debug] fetchBaoliao HTTP', resp.status); throw new Error(`抓取好价 HTTP ${resp.status}`); }
+    if (!resp.ok) {
+      console.log('[smzdm-debug] fetchBaoliao HTTP', resp.status);
+      throw new Error(`抓取好价 HTTP ${resp.status}：smzdm 已对服务端启用反爬拦截（挑战页），服务端无法自动抓取好价。请改用浏览器导入：打开 /baoliao-import 页面，用页面里的书签一键复制 smzdm 文章链接，粘贴导入即可。`);
+    }
     const html = await resp.text();
     console.log('[smzdm-debug] fetchBaoliao http=', resp.status, 'htmlLen=', html.length);
+    // smzdm 对服务端 IP 启用反爬挑战页（典型 HTTP 202 + ~209 字节风控页，或 200 但内容为空/验证页），
+    // 此时页面里没有任何 /p/ 链接，继续往下只会得到空列表。明确报错并引导用浏览器导入，避免误导用户以为"刷新成功却没数据"。
+    if (resp.status === 202 || html.length < 600 || /验证|challenge|anti.?bot|访问验证|<title>验证/i.test(html)) {
+      throw new Error('抓取好价失败：smzdm 已对服务端启用反爬拦截（返回挑战页），服务端无法自动抓取好价。请改用浏览器导入：打开 /baoliao-import 页面，用页面里的书签一键复制 smzdm 文章链接，粘贴导入即可。');
+    }
     if (html.length > 5_000_000) throw new Error('好价列表响应过大，已拒绝（疑似异常响应）');
     // 抽取文章卡片：捕获 /p/<id> 链接与相邻标题文本（容忍标签嵌套）
     const cardRe = /href="\/p\/(\d+)"[^>]*>([\s\S]*?)<\/a>/gi;

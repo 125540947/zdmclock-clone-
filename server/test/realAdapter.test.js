@@ -82,7 +82,7 @@ test('doFavorite / doPoint：注入 callImpl 传递 UA + 校验端点路径', as
   assert.equal(r1.success, true);
   assert.equal(r2.success, true);
   assert.deepEqual(favPaths, ['/favorites/create']);
-  assert.ok(pointPaths.length === 1 && pointPaths[0].startsWith('/user/comment/ajax_set_comment'));
+  assert.ok(pointPaths.length === 1 && pointPaths[0].startsWith('/rating/like_create'));
 });
 
 test('submitBaoliao：传递 UA 且校验端点与字段', async () => {
