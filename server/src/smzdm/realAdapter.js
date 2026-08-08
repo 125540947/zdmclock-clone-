@@ -5,12 +5,10 @@
 //    请仅在自有账号、且充分知悉风险的前提下启用（SMZDM_ADAPTER=real），
 //    切勿用于批量注册、刷量或任何商用/牟利场景。
 // 2. 真实签到链路（社区逆向，已在下方实现）：
-//    本适配器默认走【网页签到流程】——直接 GET zhiyou.smzdm.com/user/checkin/jsonp_checkin，
-//    带浏览器网页 Cookie（sess + smzdm_id）即可，无需签名、无需 APP 登录态。
-//    ⚠️ 关键坑：APP 流程（robot/token → checkin，带 MD5 签名）需要 user-api.smzdm.com 的 APP Cookie
-//    （含 access_token，需手机抓包），与浏览器抓的网页 Cookie 不互通——用网页 Cookie 打 APP 接口必回
-//    "请先登录"(error_code 11111)。本项目油猴抓取的是浏览器网页 Cookie，故统一用网页流程。
-//    签名常量（SMZDM_SIGN_KEY / SMZDM_SK / SMZDM_APP_V）仅留给仍用 APP Cookie 的自定义任务。
+//    doClockIn 优先走【APP robot 签到流程】——robot/token 取 token → POST user-api.smzdm.com/checkin（带 MD5 签名）。
+//    实测：浏览器抓的网页 Cookie 对 user-api 同样有效（robot/token 返回 0），且 APP 流程**无网页端点验证码墙(110202)**，
+//    故作为首选。网页 jsonp_checkin 仅作 robot 流程失败时的兜底（其常因验证码墙返回 110202）。
+//    签名常量（SMZDM_SIGN_KEY / SMZDM_SK / SMZDM_APP_V）与社区脚本（checkinpanel / 52pojie）完全一致。
 // 3. 返回值字段以社区经验为准，请按你账号的真实响应在解析处微调。
 
 import crypto from 'node:crypto';
@@ -65,9 +63,11 @@ export function actionJitter(rng = Math.random) {
 const ENDPOINTS = {
   userInfo: process.env.SMZDM_API_USERINFO || '/user/',
   checkin: process.env.SMZDM_API_CHECKIN || '/user/checkin',
-  comment: process.env.SMZDM_API_COMMENT || '/article/ajax_post_comment',
-  favorite: process.env.SMZDM_API_FAVORITE || '/article/ajax_favorite',
-  point: process.env.SMZDM_API_POINT || '/article/ajax_vote',
+  // 评论/点赞：zhiyou 域网页互动端点（GET+JSONP），原 www/article/ajax_* 已失效返回 404（2026-08 实测）
+  comment: process.env.SMZDM_API_COMMENT || '/user/comment/ajax_set_comment',
+  point: process.env.SMZDM_API_POINT || '/user/comment/ajax_set_comment',
+  // 收藏：www 域存活路径（POST form，article_id）；zhiyou 域同名路径已 404
+  favorite: process.env.SMZDM_API_FAVORITE || '/user/article/ajax_favorite',
   baoliao: process.env.SMZDM_API_BAOLIAO || '/publish/articles/ajax_create'
 };
 
@@ -135,6 +135,15 @@ function assertOk(json, where) {
   const msg =
     json?.error_msg || json?.error_reason || json?.errorMsg || json?.message || json?.msg || '未知错误';
   throw new Error(`${where}失败：${msg}`);
+}
+
+// smzdm 对"已做过 / 重复提交"类提示，对自动任务应视为软成功（动作已生效或无需重复），
+// 不应当作失败抛错。覆盖：请勿重复提交、已评论/已赞/已收藏、已顶/已签过等。
+function isSoftSuccess(json) {
+  if (!json) return false;
+  if (Number(json.error_code) === 0 || Number(json.errorCode) === 0 || json.success === true) return false; // 真成功走 assertOk
+  const msg = String(json?.error_msg || json?.errorMsg || json?.message || json?.msg || '');
+  return /请勿重复提交|已评论|已经评论|已赞|已经赞|已收藏|已经收藏|已顶|已经顶|已签过|已经签到|今天已|今日已|已经点过|您已经/.test(msg);
 }
 
 function md5Sign(str) {
@@ -211,6 +220,63 @@ async function getRobotToken(cookie) {
   return json.data?.token;
 }
 
+// APP 签到流程（优先）：robot/token 取 token → POST /checkin（带 MD5 签名）。
+// 该流程对网页 Cookie 同样有效（已验证 robot/token 返回 0），且**无网页端点验证码墙(110202)**，
+// 故作为 doClockIn 的首选路径；网页 jsonp_checkin 仅作兜底。
+async function robotCheckIn(cookie) {
+  const token = await getRobotToken(cookie); // 内部已打印 [smzdm-debug] /robot/token
+  const ts = Date.now();
+  const sign = md5Sign(`f=android&sk=${APP_SK}&time=${ts}&token=${token}&v=${APP_V}&weixin=1&key=${SIGN_KEY}`);
+  const body = { f: 'android', v: APP_V, sk: APP_SK, weixin: 1, time: ts, token, sign };
+  const json = await call('/checkin', { method: 'POST', cookie, ua: ANDROID_UA, base: API_BASE, body });
+  console.log('[smzdm-debug] robot /checkin raw:', JSON.stringify(json).slice(0, 1200), 'cookieLen=', (cookie || '').length);
+  const ec = Number(json?.error_code ?? json?.errorCode);
+  const msg = String(json?.error_msg || json?.errorMsg || json?.message || '');
+  if (ec === 0) {
+    const d = json.data || {};
+    const gold = Number(d.cgold ?? d.gold ?? 0);
+    const silver = Number(d.pre_re_silver ?? d.silver ?? 0);
+    const exp = Number(d.cexperience ?? d.exp ?? 0);
+    const level = d.rank ?? d.rank_name ?? d.level ?? null;
+    const points = Number(d.cpoints ?? d.add_point ?? d.addPoint ?? gold);
+    const continuity = Number(d.daily_num ?? d.continue_sign_days ?? d.continue_sign ?? 0);
+    let extraMsg = '';
+    try {
+      const ex = await robotCheckinExtras(cookie, token);
+      if (ex.rewards.length) extraMsg = '；额外：' + ex.rewards.join('；');
+    } catch {
+      /* 额外奖励非关键 */
+    }
+    return {
+      success: true,
+      points,
+      balances: { gold, silver, exp, level },
+      continuity,
+      message: `签到成功（APP流程），金币 ${gold} / 碎银 ${silver} / 经验 ${exp}${extraMsg}`
+    };
+  }
+  // 今日已签到：软成功，不报错
+  if (/已签到|已经签到|今天已|今日已|已签过|已经签/.test(msg)) {
+    return { success: true, points: 0, balances: {}, continuity: 0, message: '今日已签到（重复请求）' };
+  }
+  throw new Error('签到失败：' + (msg || '未知') + ' (error_code=' + ec + ')');
+}
+
+// APP 签到额外奖励（best-effort）：领取 /checkin/all_reward
+async function robotCheckinExtras(cookie, token) {
+  const rewards = [];
+  const ts = Date.now();
+  const sign = md5Sign(`f=android&sk=${APP_SK}&time=${ts}&token=${token}&v=${APP_V}&weixin=1&key=${SIGN_KEY}`);
+  const body = { f: 'android', v: APP_V, sk: APP_SK, weixin: 1, time: ts, token, sign };
+  try {
+    const j = await call('/checkin/all_reward', { method: 'POST', cookie, ua: ANDROID_UA, base: API_BASE, body });
+    if (Number(j?.error_code) === 0) rewards.push(removeTags(j?.data?.reward_msg || j?.data?.title || '领取成功'));
+  } catch {
+    /* 单个额外奖励失败不影响整体 */
+  }
+  return { rewards };
+}
+
 export const realAdapter = {
   name: 'real',
 
@@ -240,9 +306,24 @@ export const realAdapter = {
     };
   },
 
-  // 网页签到流程：GET zhiyou.smzdm.com/user/checkin/jsonp_checkin（带浏览器网页 Cookie）。
-  // 这是与浏览器抓包 Cookie 匹配的端点（APP 流程 robot/token 需要 user-api 的 APP Cookie，二者不互通）。
+  // 签到主入口：优先走 APP robot 流程（user-api.smzdm.com/checkin，带 MD5 签名），
+  // 该流程对网页 Cookie 同样有效（已验证 robot/token 返回 0），且**无网页端点验证码墙(110202)**。
+  // 仅当 robot 流程异常时才回退网页 jsonp_checkin（兜底，部分账号/场景可用）。
   async doClockIn(cookie) {
+    try {
+      return await robotCheckIn(cookie);
+    } catch (robotErr) {
+      try {
+        return await webCheckIn(cookie);
+      } catch {
+        throw robotErr; // 抛出 robot 流程的原始错误（更可能是根因）
+      }
+    }
+  },
+
+  // 网页签到流程（兜底）：GET zhiyou.smzdm.com/user/checkin/jsonp_checkin（带浏览器网页 Cookie）。
+  // ⚠️ 该端点有验证码风控墙，直连常返回 110202「验证码输入错误」，故仅作 robot 流程失败后的兜底。
+  async webCheckIn(cookie) {
     const text = await call('/user/checkin/jsonp_checkin', {
       method: 'GET',
       cookie,
@@ -315,14 +396,18 @@ export const realAdapter = {
       if (i > 0) await wait(actionJitter()); // 多次动作之间拟人化随机等待，避免背靠背
       const ua = pickUA();
       uas.add(ua);
-      last = await req(ENDPOINTS.comment, {
-        method: 'POST',
-        cookie,
-        ua,
-        body: { article_id: articleId, content: opts.content || '好价，感谢分享！' },
-        base: BASE
+      // zhiyou 域网页评论端点：GET + JSONP（type=3 评论，pid 文章ID，content 内容）
+      const q = 'type=3&pid=' + encodeURIComponent(articleId) +
+        '&content=' + encodeURIComponent(opts.content || '好价，感谢分享！') +
+        '&callback=jsonp_' + Date.now();
+      const text = await req(ENDPOINTS.comment + '?' + q, {
+        method: 'GET', cookie, ua, base: WEB_BASE, raw: true
       });
-      assertOk(last, '评论');
+      const json = typeof text === 'string' ? parseJsonp(text) : text;
+      console.log('[smzdm-debug] comment raw:', JSON.stringify(json).slice(0, 800), 'articleId=', articleId, 'cookieLen=', (cookie || '').length);
+      if (isSoftSuccess(json)) { last = json; continue; } // 请勿重复提交/已评论 = 软成功
+      assertOk(json, '评论');
+      last = json;
     }
     return { success: true, message: `评论成功 ×${count}（文章 ${articleId}）`, count, articleId, uas: [...uas] };
   },
@@ -340,6 +425,7 @@ export const realAdapter = {
       const ua = pickUA();
       uas.add(ua);
       last = await req(ENDPOINTS.favorite, { method: 'POST', cookie, ua, body: { article_id: articleId }, base: BASE });
+      console.log('[smzdm-debug] favorite raw:', JSON.stringify(last).slice(0, 800), 'articleId=', articleId, 'cookieLen=', (cookie || '').length);
       assertOk(last, '收藏');
     }
     return { success: true, message: `收藏成功 ×${count}（文章 ${articleId}）`, count, articleId, uas: [...uas] };
@@ -357,8 +443,17 @@ export const realAdapter = {
       if (i > 0) await wait(actionJitter());
       const ua = pickUA();
       uas.add(ua);
-      last = await req(ENDPOINTS.point, { method: 'POST', cookie, ua, body: { article_id: articleId }, base: BASE });
-      assertOk(last, '点赞');
+      // zhiyou 域网页「顶/有用」端点：与评论同接口，type=1（type=2 为踩），GET+JSONP
+      const q = 'type=1&pid=' + encodeURIComponent(articleId) +
+        '&callback=jsonp_' + Date.now();
+      const text = await req(ENDPOINTS.point + '?' + q, {
+        method: 'GET', cookie, ua, base: WEB_BASE, raw: true
+      });
+      const json = typeof text === 'string' ? parseJsonp(text) : text;
+      console.log('[smzdm-debug] point raw:', JSON.stringify(json).slice(0, 800), 'articleId=', articleId, 'cookieLen=', (cookie || '').length);
+      if (isSoftSuccess(json)) { last = json; continue; } // 请勿重复提交/已赞 = 软成功
+      assertOk(json, '点赞');
+      last = json;
     }
     return { success: true, message: `点赞成功 ×${count}（文章 ${articleId}）`, count, articleId, uas: [...uas] };
   },
@@ -404,8 +499,9 @@ export const realAdapter = {
       }
       throw new Error('抓取好价网络错误：' + e.message);
     }
-    if (!resp.ok) throw new Error(`抓取好价 HTTP ${resp.status}`);
+    if (!resp.ok) { console.log('[smzdm-debug] fetchBaoliao HTTP', resp.status); throw new Error(`抓取好价 HTTP ${resp.status}`); }
     const html = await resp.text();
+    console.log('[smzdm-debug] fetchBaoliao http=', resp.status, 'htmlLen=', html.length);
     if (html.length > 5_000_000) throw new Error('好价列表响应过大，已拒绝（疑似异常响应）');
     // 抽取文章卡片：捕获 /p/<id> 链接与相邻标题文本（容忍标签嵌套）
     const cardRe = /href="\/p\/(\d+)"[^>]*>([\s\S]*?)<\/a>/gi;
@@ -429,7 +525,8 @@ export const realAdapter = {
         content: rawTitle
       });
     }
-    if (!items.length) throw new Error('未能从页面解析到好价文章（页面结构可能已变更）');
+    if (!items.length) { console.log('[smzdm-debug] fetchBaoliao 解析到 0 条（页面结构可能已变更），htmlLen=', html.length); throw new Error('未能从页面解析到好价文章（页面结构可能已变更）'); }
+    console.log('[smzdm-debug] fetchBaoliao 解析到', items.length, '条');
     return { ok: true, items, page };
   }
 };
