@@ -66,8 +66,8 @@ const ENDPOINTS = {
   // 评论/点赞：zhiyou 域网页互动端点（GET+JSONP），原 www/article/ajax_* 已失效返回 404（2026-08 实测）
   comment: process.env.SMZDM_API_COMMENT || '/user/comment/ajax_set_comment',
   point: process.env.SMZDM_API_POINT || '/user/comment/ajax_set_comment',
-  // 收藏：www 域存活路径（POST form，article_id）；zhiyou 域同名路径已 404
-  favorite: process.env.SMZDM_API_FAVORITE || '/user/article/ajax_favorite',
+  // 收藏：user-api APP 接口（已验证端点存在，需签名+登录态）；www/zhiyou 同名路径已 404（2026-08 实测）
+  favorite: process.env.SMZDM_API_FAVORITE || '/favorites/create',
   baoliao: process.env.SMZDM_API_BAOLIAO || '/publish/articles/ajax_create'
 };
 
@@ -420,11 +420,16 @@ export const realAdapter = {
     const count = Math.min(Math.max(1, Number(opts.count) || 1), 5);
     let last;
     const uas = new Set();
+    // user-api APP 收藏接口需登录态 + 社区签名；一并带入 robot token（与签到同套机制）。
+    // www/zhiyou 的 /user/article/ajax_favorite 已 404（2026-08 实测），故走 user-api。
+    let robotToken = '';
+    try { robotToken = await getRobotToken(cookie); } catch { /* 取 token 失败则不带，端点可能仅校验签名+会话 */ }
     for (let i = 0; i < count; i++) {
       if (i > 0) await wait(actionJitter());
       const ua = pickUA();
       uas.add(ua);
-      last = await req(ENDPOINTS.favorite, { method: 'POST', cookie, ua, body: { article_id: articleId }, base: BASE });
+      const signed = signFormData({ id: articleId, channel_id: '0', token: robotToken });
+      last = await req(ENDPOINTS.favorite, { method: 'POST', cookie, ua, body: signed, base: API_BASE });
       console.log('[smzdm-debug] favorite raw:', JSON.stringify(last).slice(0, 800), 'articleId=', articleId, 'cookieLen=', (cookie || '').length);
       assertOk(last, '收藏');
     }

@@ -35,7 +35,7 @@ test('doComment：注入 callImpl 时传递池内 UA，且 count>1 触发一次 
   const sleeps = [];
   const callImpl = async (path, opts) => {
     seenUas.push(opts.ua);
-    assert.equal(path, '/article/ajax_post_comment');
+    assert.ok(path.startsWith('/user/comment/ajax_set_comment'));
     return { error_code: 0 };
   };
   const sleepImpl = async (ms) => {
@@ -81,8 +81,8 @@ test('doFavorite / doPoint：注入 callImpl 传递 UA + 校验端点路径', as
   const r2 = await realAdapter.doPoint('cookie', { articleId: '999', count: 1, callImpl: pointImpl });
   assert.equal(r1.success, true);
   assert.equal(r2.success, true);
-  assert.deepEqual(favPaths, ['/article/ajax_favorite']);
-  assert.deepEqual(pointPaths, ['/article/ajax_vote']);
+  assert.deepEqual(favPaths, ['/favorites/create']);
+  assert.ok(pointPaths.length === 1 && pointPaths[0].startsWith('/user/comment/ajax_set_comment'));
 });
 
 test('submitBaoliao：传递 UA 且校验端点与字段', async () => {
