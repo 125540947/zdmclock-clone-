@@ -83,8 +83,9 @@ test('doFavorite / doPoint：注入 callImpl + resolveChannelIdImpl，校验端�
   };
   // 注入 channel_id 解析：返回真实频道号（非 '0'）
   const resolveChannelIdImpl = async () => '76';
-  const r1 = await realAdapter.doFavorite('cookie', { articleId: '999', count: 1, callImpl: favImpl, resolveChannelIdImpl });
-  const r2 = await realAdapter.doPoint('cookie', { articleId: '999', count: 1, callImpl: pointImpl, resolveChannelIdImpl });
+  const cookieWithSess = 'sess=SESSVAL123; other=1';
+  const r1 = await realAdapter.doFavorite(cookieWithSess, { articleId: '999', count: 1, callImpl: favImpl, resolveChannelIdImpl });
+  const r2 = await realAdapter.doPoint(cookieWithSess, { articleId: '999', count: 1, callImpl: pointImpl, resolveChannelIdImpl });
   assert.equal(r1.success, true);
   assert.equal(r2.success, true);
   assert.deepEqual(favPaths, ['/favorites/create']);
@@ -94,6 +95,15 @@ test('doFavorite / doPoint：注入 callImpl + resolveChannelIdImpl，校验端�
   assert.equal(pointBodies[0].channel_id, '76');
   assert.notEqual(favBodies[0].channel_id, '0');
   assert.notEqual(pointBodies[0].channel_id, '0');
+  // 社区脚本必带字段：touchstone_event 必须是含 channel_id/文章ID 的 JSON 串，token 取 Cookie 里的 sess 值
+  const ft = JSON.parse(favBodies[0].touchstone_event);
+  assert.equal(ft.event_value.cid, '76');
+  assert.equal(ft.event_value.aid, '999');
+  assert.equal(favBodies[0].token, 'SESSVAL123');
+  const pt = JSON.parse(pointBodies[0].touchstone_event);
+  assert.equal(pt.event_value.cid, '76');
+  assert.equal(pt.event_value.aid, '999');
+  assert.equal(pointBodies[0].token, 'SESSVAL123');
 });
 
 test('doFavorite / doPoint：解析不到 channel_id 时抛出明确错误', async () => {

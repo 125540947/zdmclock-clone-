@@ -175,6 +175,12 @@ export function signFormData(data = {}) {
   return { ...newData, sign };
 }
 
+// 从 Cookie 取 sess 值（社区脚本的 token 即 sess；rating/favorites 接口需带 token 字段）
+export function extractSess(cookie = '') {
+  const m = String(cookie || '').match(/sess=([^;]+)/);
+  return m ? m[1] : '';
+}
+
 // 带社区统一签名的请求（POST 表单 / GET 查询），供 task / checkin 家族端点使用
 export async function appRequest(path, { cookie, data = {}, method = 'POST', base = API_BASE, ua = ANDROID_UA } = {}) {
   const signed = signFormData(data);
@@ -205,7 +211,9 @@ export async function resolveChannelId(articleId, cookie) {
       data: { comment_flow: '', hashcode: '', lastest_update_time: '', uhome: 0, imgmode: 0, article_channel_id: 0, h5hash: '' }
     });
     console.log('[smzdm-debug] resolveChannelId article-api raw:', JSON.stringify(json).slice(0, 600), 'articleId=', articleId);
-    const c = json?.data?.channel_id ?? json?.data?.data?.channel_id ?? json?.channel_id;
+    // 社区 getArticleDetail 返回 data.data.<article_channel_id>（字段名是 article_channel_id，不是 channel_id）
+    const c = json?.data?.data?.article_channel_id ?? json?.data?.data?.channel_id ??
+              json?.data?.article_channel_id ?? json?.data?.channel_id ?? json?.article_channel_id ?? json?.channel_id;
     if (c != null) cid = String(c);
   } catch (e) {
     console.log('[smzdm-debug] resolveChannelId article-api failed:', e.message, 'articleId=', articleId);
@@ -469,15 +477,19 @@ export const realAdapter = {
     const count = Math.min(Math.max(1, Number(opts.count) || 1), 5);
     let last;
     const uas = new Set();
-    // user-api APP 收藏接口需登录态 + 社区签名；一并带入 robot token（与签到同套机制）。
-    // www/zhiyou 的 /user/article/ajax_favorite 已 404（2026-08 实测），故走 user-api。
-    let robotToken = '';
-    try { robotToken = await getRobotToken(cookie); } catch { /* 取 token 失败则不带，端点可能仅校验签名+会话 */ }
+    // 社区脚本 favorites 接口必带 touchstone_event（埋点，JSON 串）+ token（=Cookie 里的 sess 值）；
+    // 缺 touchstone_event / channel_id 会被 smzdm 判为"无效的评论类型"。www/zhiyou 同名路径已 404，故走 user-api。
+    const touchstone = JSON.stringify({
+      event_value: { aid: articleId, cid: channelId, is_detail: true },
+      sourceMode: '我的_我的任务页',
+      sourcePage: `Android/长图文/P/${articleId}/`,
+      upperLevel_url: '个人中心/赚奖励/'
+    });
     for (let i = 0; i < count; i++) {
       if (i > 0) await wait(actionJitter());
       const ua = pickUA();
       uas.add(ua);
-      const signed = signFormData({ id: articleId, channel_id: channelId, token: robotToken });
+      const signed = signFormData({ id: articleId, channel_id: channelId, token: extractSess(cookie), touchstone_event: touchstone });
       last = await req(ENDPOINTS.favorite, { method: 'POST', cookie, ua, body: signed, base: API_BASE });
       console.log('[smzdm-debug] favorite raw:', JSON.stringify(last).slice(0, 800), 'articleId=', articleId, 'channelId=', channelId, 'cookieLen=', (cookie || '').length);
       if (isSoftSuccess(last)) { last = last; continue; } // 已收藏/已经收藏 = 软成功
@@ -498,15 +510,20 @@ export const realAdapter = {
     const count = Math.min(Math.max(1, Number(opts.count) || 1), 5);
     let last;
     const uas = new Set();
-    // user-api APP 点赞接口需登录态 + 社区签名；与收藏同机制（www/zhiyou 网页端点无法真正点赞）。
+    // 社区脚本 rating 接口必带 touchstone_event（埋点，JSON 串）+ token（=Cookie 里的 sess 值）；
+    // 缺 touchstone_event / channel_id 会被 smzdm 判为"无效的评论类型"。www/zhiyou 网页端点无法真正点赞，故走 user-api。
     // 成功判定：error_code:"0"（data.msg="点赞成功"）；顶层 error_msg 偶有"参数错误"干扰，assertOk 只看 error_code。
-    let robotToken = '';
-    try { robotToken = await getRobotToken(cookie); } catch { /* best-effort，取 token 失败则不带 */ }
+    const touchstone = JSON.stringify({
+      event_value: { aid: articleId, cid: channelId, is_detail: true },
+      sourceMode: '栏目页',
+      sourcePage: `Android//P/${articleId}/`,
+      upperLevel_url: '栏目页///'
+    });
     for (let i = 0; i < count; i++) {
       if (i > 0) await wait(actionJitter());
       const ua = pickUA();
       uas.add(ua);
-      const signed = signFormData({ id: articleId, channel_id: channelId, token: robotToken });
+      const signed = signFormData({ id: articleId, channel_id: channelId, token: extractSess(cookie), touchstone_event: touchstone });
       last = await req(ENDPOINTS.point, { method: 'POST', cookie, ua, body: signed, base: API_BASE });
       console.log('[smzdm-debug] point raw:', JSON.stringify(last).slice(0, 800), 'articleId=', articleId, 'channelId=', channelId, 'cookieLen=', (cookie || '').length);
       if (isSoftSuccess(last)) { last = last; continue; } // 已赞/已经点赞 = 软成功
