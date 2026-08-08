@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { load, persist, genId, mergeBaoliao, withWriteLock } from '../store.js';
 import { smzdm } from '../smzdm/adapter.js';
-import { authRequired } from '../auth.js';
+import { authRequired, authRequiredOrQuery } from '../auth.js';
+import { normalizeArticleId } from '../smzdm/articleId.js';
 
 const router = Router();
 
@@ -36,6 +37,40 @@ router.post('/refresh', authRequired, async (req, res) => {
   } catch (e) {
     res.status(502).json({ error: 'fetch_failed', message: e.message });
   }
+});
+
+// 批量导入好价文章链接（浏览器导入入口；支持 ?token= 以便书签/同源页面调用）
+// 背景：服务端直抓 smzdm 好价被反爬挡死（首页 202 挑战页 / 内部 JSON 接口要签名 / RSSHub 403），
+// 故改为「数据从用户浏览器来」——用户在 smzdm 页用书签抓取链接，粘贴到 /baoliao-import 同源页面，
+// 由本接口解析 /p/<id> 并合并进 db.baoliao，「从好价列表取」即可正常工作。
+// 输入：{ text: "url1\nurl2" } 或 { items: [{url,title}] } 或裸字符串（空格/逗号/分号分隔）。
+router.post('/bulk', authRequiredOrQuery, async (req, res) => {
+  const db = load();
+  const body = req.body || {};
+  let raw = [];
+  if (Array.isArray(body.items)) raw = body.items;
+  else if (typeof body.text === 'string' && body.text.trim())
+    raw = body.text.split(/[\s,;]+/).filter(Boolean).map((u) => ({ url: u }));
+  else if (typeof body === 'string' && body.trim())
+    raw = body.split(/[\s,;]+/).filter(Boolean).map((u) => ({ url: u }));
+  const items = [];
+  for (const it of raw) {
+    const url = typeof it === 'string' ? it : String(it.url || it.smzdmUrl || '');
+    const id = normalizeArticleId(url);
+    if (!id) continue; // 跳过非 smzdm 文章链接
+    const title = typeof it === 'object' && it.title ? String(it.title).trim() : '';
+    const full = `https://www.smzdm.com/p/${id}`;
+    items.push({ url: full, smzdmUrl: full, title: title || `文章 ${id}`, content: title });
+  }
+  if (!items.length) {
+    return res.status(400).json({ error: 'no_valid', message: '没有解析到有效的 smzdm 文章链接（需包含 /p/<数字>）' });
+  }
+  let added = 0;
+  await withWriteLock(() => {
+    added = mergeBaoliao(items);
+    persist();
+  });
+  res.json({ ok: true, received: items.length, added, total: db.baoliao.length });
 });
 
 // 新增爆料草稿
