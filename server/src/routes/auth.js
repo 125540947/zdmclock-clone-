@@ -22,11 +22,19 @@ router.post('/login', (req, res) => {
   const { username, password } = req.body || {};
   // 开放模式（OPEN_MODE）：彻底免登录，login 直接返回合法 token，前端可自动注入后正常调用所有接口。
   if (config.openMode) {
-    return res.json({
-      token: config.apiToken,
-      adminToken: config.adminToken || config.apiToken,
-      username: username || 'open'
-    });
+    // 匿名自动登录：仅签发普通 token，绝不向访客泄露管理员 Token（修复：此前会把 ADMIN_TOKEN 发给所有匿名访客，
+    // 导致「匿名不能改删」形同虚设——任何人都能拿到管理员令牌去改删账号、触发系统更新）。
+    const resp = { token: config.apiToken, adminToken: '', username: username || 'open' };
+    // 管理员通道：提交正确的 ADMIN_TOKEN（作为 adminToken 或 password 字段）才签发管理员 Token，
+    // 使「保留管理员改删/更新能力」在开放模式下可用，且不对匿名访客开放。
+    if (config.adminToken) {
+      const provided = req.body && (req.body.adminToken || req.body.password || '');
+      if (provided && safeEqual(provided, config.adminToken)) {
+        resp.adminToken = config.adminToken;
+        resp.username = config.adminUsername || 'admin';
+      }
+    }
+    return res.json(resp);
   }
   if (config.trustProxyAuth) {
     if (config.proxyAuthHeader) {

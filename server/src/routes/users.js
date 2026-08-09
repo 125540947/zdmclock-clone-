@@ -35,6 +35,21 @@ function normalizeSchedule(body) {
   return { schedMode: mode, checkInTime };
 }
 
+// 开放模式下：账号有 recordedIp 且与当前访客不同网段、且非管理员 → 视为不可见（返回 404）。
+// 集中处理 GET /:id、GET /:id/smzdm、POST /:id/refresh 的可见性判定，避免跨网段枚举读他人资料。
+function rejectHiddenAccount(res, req, u) {
+  if (
+    config.openMode &&
+    !isAdminRequest(req) &&
+    u.recordedIp &&
+    !sameSegment(getClientIp(req), u.recordedIp, 24)
+  ) {
+    res.status(404).json({ error: 'not_found', message: '无权查看该账号' });
+    return true;
+  }
+  return false;
+}
+
 // 账号列表（cookie 遮罩）。开放模式下：匿名访客仅可见「同 /24 网段」录入的账号（含无 recordedIp 的遗留账号）；
 // 提供有效 ADMIN_TOKEN 的请求（管理员）可绕过，查看全部。
 router.get('/', authRequired, (req, res) => {
@@ -252,6 +267,7 @@ router.get('/:id/smzdm', authRequired, async (req, res) => {
   const db = load();
   const u = db.users.find((x) => x.id === req.params.id);
   if (!u) return res.status(404).json({ error: 'not_found' });
+  if (rejectHiddenAccount(res, req, u)) return;
   try {
     const info = await smzdm.getUserInfo(u.cookie);
     res.json(info);
@@ -265,6 +281,7 @@ router.post('/:id/refresh', authRequired, async (req, res) => {
   const db = load();
   const u = db.users.find((x) => x.id === req.params.id);
   if (!u) return res.status(404).json({ error: 'not_found' });
+  if (rejectHiddenAccount(res, req, u)) return;
   try {
     const info = await smzdm.getUserInfo(u.cookie);
     u.points = info.points || u.points;

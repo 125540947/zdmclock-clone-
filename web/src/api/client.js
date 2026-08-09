@@ -13,6 +13,17 @@ if (token) {
   api.defaults.headers.common['Authorization'] = 'Bearer ' + token;
 }
 
+// 请求拦截器：若本地存有管理员 Token（开放模式下管理员登录后写入），为所有请求附加 X-Admin-Token，
+// 使管理员在开放模式下能突破同网段过滤、执行改删/系统更新等高权限操作；匿名访客无此头，不受影响。
+api.interceptors.request.use((cfg) => {
+  const at = localStorage.getItem('zdm_admin_token');
+  if (at) {
+    cfg.headers = cfg.headers || {};
+    cfg.headers['X-Admin-Token'] = at;
+  }
+  return cfg;
+});
+
 // 全局 401 拦截：凭证失效时清掉本地 token 并广播「需要登录」事件，
 // 由 App.vue 的登录浮层接管。避免各页面各自处理鉴权。
 api.interceptors.response.use(

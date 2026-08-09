@@ -20,12 +20,15 @@
     </router-link>
   </nav>
 
+  <!-- 开放模式：管理员入口（仅对本人可见，匿名访客看不到） -->
+  <button v-if="openMode && !needsLogin" class="admin-entry" @click="openAdminLogin">🔐 管理员</button>
+
   <!-- 全局登录浮层：未登录或凭证失效（401）时弹出 -->
   <div v-if="needsLogin" class="login-mask">
     <div class="login-card">
       <div class="login-logo">🛠️</div>
-      <h2 class="login-title">zdmclock 管理登录</h2>
-      <p class="login-sub">登录后可管理账号、任务与系统更新</p>
+      <h2 class="login-title">{{ adminMode ? '管理员登录' : 'zdmclock 管理登录' }}</h2>
+      <p class="login-sub">{{ adminMode ? '输入 ADMIN_TOKEN 以执行改删 / 系统更新' : '登录后可管理账号、任务与系统更新' }}</p>
       <div class="field">
         <label>管理员账号</label>
         <input
@@ -34,25 +37,26 @@
           type="text"
           autocomplete="username"
           placeholder="admin"
+          :disabled="adminMode"
           @keyup.enter="doLogin"
         />
       </div>
       <div class="field">
-        <label>密码</label>
+        <label>{{ adminMode ? '管理员 Token' : '密码' }}</label>
         <input
           v-model="password"
           class="input"
           type="password"
           autocomplete="current-password"
-          placeholder="部署时生成的 ADMIN_PASSWORD"
+          :placeholder="adminMode ? 'ADMIN_TOKEN' : '部署时生成的 ADMIN_PASSWORD'"
           @keyup.enter="doLogin"
         />
       </div>
       <button class="btn block" :disabled="busy" @click="doLogin">
-        {{ busy ? '登录中…' : '登 录' }}
+        {{ busy ? '登录中…' : (adminMode ? '以管理员身份进入' : '登 录') }}
       </button>
       <p v-if="err" class="login-err">{{ err }}</p>
-      <p class="login-hint">账号默认 <b>admin</b>；密码为部署时生成并提示的那串（在 VPS 的 deploy 输出里，或 .env 的 ADMIN_PASSWORD）。</p>
+      <p class="login-hint">{{ adminMode ? '请输入 .env 中的 ADMIN_TOKEN；仅管理员本人使用，普通访客请勿进入。' : '账号默认 admin；密码为部署时生成并提示的那串（在 VPS 的 deploy 输出里，或 .env 的 ADMIN_PASSWORD）。' }}</p>
     </div>
   </div>
 </template>
@@ -75,6 +79,8 @@ const username = ref('admin');
 const password = ref('');
 const busy = ref(false);
 const err = ref('');
+const openMode = ref(false);
+const adminMode = ref(false);
 
 function onUnauthorized() {
   needsLogin.value = true;
@@ -82,12 +88,21 @@ function onUnauthorized() {
   err.value = '';
 }
 
+// 开放模式下：管理员点「管理员登录」输入 ADMIN_TOKEN 以提升权限（匿名访客看不到此入口）
+function openAdminLogin() {
+  adminMode.value = true;
+  username.value = 'admin';
+  password.value = '';
+  needsLogin.value = true;
+}
+
 async function doLogin() {
   if (busy.value) return;
   busy.value = true;
   err.value = '';
+  const u = adminMode.value ? 'admin' : username.value.trim();
   try {
-    const data = await login(username.value.trim(), password.value);
+    const data = await login(u, password.value);
     if (data && data.token) {
       // 登录成功：刷新页面，让各页面用新 token 重新拉取数据
       window.location.reload();
@@ -107,6 +122,7 @@ onMounted(async () => {
   // 无需登录，直接进入应用；并尝试自动获取 token 供后续接口调用与油猴脚本「一键安装」使用。
   try {
     const cfg = await getAuthConfig();
+    openMode.value = !!(cfg && cfg.openMode);
     if (cfg.openMode || cfg.trustProxyAuth || !cfg.requireAuth) {
       needsLogin.value = false;
       if (cfg.openMode || cfg.trustProxyAuth) {
@@ -177,6 +193,26 @@ onBeforeUnmount(() => window.removeEventListener('zdm:unauthorized', onUnauthori
 .nav-item.active .ico {
   filter: none;
   transform: translateY(-2px) scale(1.08);
+}
+
+/* 开放模式：管理员入口按钮（右下角，浮于底部导航之上） */
+.admin-entry {
+  position: fixed;
+  right: 12px;
+  bottom: calc(64px + env(safe-area-inset-bottom));
+  z-index: 30;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: rgba(20, 17, 15, 0.8);
+  color: var(--text-dim);
+  font-size: 12px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  cursor: pointer;
+}
+.admin-entry:active {
+  transform: scale(0.96);
 }
 
 /* 登录浮层 */

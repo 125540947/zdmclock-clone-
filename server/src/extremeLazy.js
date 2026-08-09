@@ -63,7 +63,9 @@ export async function runExtremeLazy(opts = {}) {
     return r;
   }
 
-  const users = db.users.filter((u) => u.cookie);
+  // 与 resolveUsers 自动路径一致：仅对「已开启自动跑（autoRun!==false）」的账号执行，
+  // 录入时未勾选自动跑的账号不参与极端懒人全自动流水线。
+  const users = db.users.filter((u) => u.cookie && u.autoRun !== false);
   if (!users.length) {
     return { ok: false, message: '请先添加 smzdm 账号', logs: ['没有可用账号（需要录入 Cookie）'] };
   }
