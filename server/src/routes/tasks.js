@@ -145,19 +145,38 @@ router.get('/captures', authRequired, (req, res) => {
 });
 
 // 应用抓包结果：把用户在 UI 中选定/调整后的端点配置写入 db.settings.taskEndpoints
+// 注意：dailyTasks 等多步内置任务即使导入端点也会被内置策略覆盖（taskMatrix 强制走内置流程），
+// 这类类型在此处跳过并明确告知，避免用户以为"导入失败"或产生无效配置。
 router.post('/captures/apply', authRequired, async (req, res) => {
-  const db = load();
+  let db;
+  try {
+    db = load();
+  } catch (e) {
+    return res.status(500).json({ error: 'load_failed', message: '读取数据库失败：' + e.message });
+  }
   const { items } = req.body || {};
   if (!Array.isArray(items) || !items.length) {
     return res.status(400).json({ error: 'empty', message: '没有可应用的抓包项' });
   }
   if (!db.settings.taskEndpoints) db.settings.taskEndpoints = {};
+  const skipped = [];
   let applied = 0;
   for (const it of items) {
     const type = it.type;
-    if (!CUSTOM_TYPES.includes(type)) continue;
+    if (!CUSTOM_TYPES.includes(type)) {
+      skipped.push({ type, reason: '非自定义端点任务，已忽略' });
+      continue;
+    }
+    // dailyTasks 为内置多步流程，导入单端点无效（运行时始终走内置 list_v2→activity_task_receive）
+    if (type === 'dailyTasks') {
+      skipped.push({ type, reason: '每日任务为内置任务，端点已内置、无需导入（已跳过）' });
+      continue;
+    }
     const endpoint = (it.endpoint || '').toString().slice(0, 2000).trim();
-    if (!endpoint) continue;
+    if (!endpoint) {
+      skipped.push({ type, reason: '端点为空，已跳过' });
+      continue;
+    }
     const af = {};
     if (it.assetFields && typeof it.assetFields === 'object') {
       for (const k of ['gold', 'silver', 'exp', 'level', 'message']) {
@@ -179,8 +198,19 @@ router.post('/captures/apply', authRequired, async (req, res) => {
     db.settings.taskEndpoints[type] = cfg;
     applied += 1;
   }
-  await withWriteLock(() => persist());
-  res.json({ ok: true, applied, endpoints: db.settings.taskEndpoints });
+  if (applied === 0) {
+    return res.status(400).json({
+      error: 'nothing_applied',
+      message: '没有可应用的抓包端点。说明：dailyTasks 为内置任务无需导入；请选择转盘/抽奖/关注/分享等类型再应用。',
+      skipped
+    });
+  }
+  try {
+    await withWriteLock(() => persist());
+  } catch (e) {
+    return res.status(500).json({ error: 'persist_failed', message: '保存失败：' + e.message });
+  }
+  res.json({ ok: true, applied, skipped, endpoints: db.settings.taskEndpoints });
 });
 
 // 更新任务（启用/停用/名称/cron）

@@ -380,13 +380,19 @@ async function scanCaptures() {
   capHint.value = '';
   try {
     const items = await getCaptures();
-    captures.value = items.map((c) => ({
+    const mapped = items.map((c) => ({
       ...c,
       // 未知类型兜底到 dailyTasks（每日任务领奖端点已内置，无需导入），避免误标成 follow
       type: customTypeOptions.includes(c.guessedType) ? c.guessedType : 'dailyTasks'
     }));
-    if (!captures.value.length) {
-      capHint.value = '未识别到抓包文件。请把 HAR / cURL 放进 server/captures/ 并运行 node tools/importCapture.mjs';
+    // dailyTasks 为内置多步任务，导入单端点无效（运行时始终走内置流程），从导入列表移除并提示
+    const builtinSkipped = mapped.filter((c) => c.type === 'dailyTasks').length;
+    captures.value = mapped.filter((c) => c.type !== 'dailyTasks');
+    if (builtinSkipped) {
+      capHint.value = `检测到 ${builtinSkipped} 个内置任务（每日任务等），已自动跳过——它们的端点已内置，无需导入。可导入的是转盘/抽奖/关注/分享等。`;
+    }
+    if (!captures.value.length && !builtinSkipped) {
+      capHint.value = '未识别到可导入的抓包端点。请把 HAR / cURL 放进 server/captures/ 并运行 node tools/importCapture.mjs';
     }
   } catch (e) {
     capHint.value = e.response?.data?.message || '扫描失败';
@@ -426,7 +432,9 @@ async function submitCaptures() {
     await load();
     captures.value = [];
   } catch (e) {
-    showToast(e.response?.data?.message || '应用失败', 'err');
+    const status = e.response?.status;
+    const msg = e.response?.data?.message || (status ? `应用失败（HTTP ${status}）` : '应用失败');
+    showToast(msg, 'err');
   } finally {
     applying.value = false;
   }
