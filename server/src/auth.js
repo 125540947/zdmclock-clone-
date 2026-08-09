@@ -114,3 +114,18 @@ export function mutationGuard(req, res, next) {
   if (config.openMode) return requireAdmin(req, res, next);
   return authRequired(req, res, next);
 }
+
+// 判断是否可访问某个账号的私有数据（签到记录/streak/points、真机自检等）。
+// 用于修复 P0-3 水平越权：开放模式下非管理员只能访问「同 /24 网段」录入的账号；
+// 管理员（有效 ADMIN_TOKEN）可访问全部；非开放模式下 apiToken 持有者即操作员，允许全部。
+// 规则与 users / baoliao 列表可见性保持一致：无 recordedIp 的遗留账号对所有人可见（迁移兼容），
+// 有 recordedIp 则必须命中访问者网段。
+export function canAccessUser(req, userRecord) {
+  if (isAdminRequest(req)) return true;
+  if (config.openMode) {
+    if (!userRecord) return false;
+    const viewerIp = getClientIp(req);
+    return !userRecord.recordedIp || sameSegment(viewerIp, userRecord.recordedIp, 24);
+  }
+  return true;
+}

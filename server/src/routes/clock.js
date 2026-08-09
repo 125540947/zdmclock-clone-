@@ -1,10 +1,31 @@
 import { Router } from 'express';
 import { load, todayStr, localDateStr } from '../store.js';
 import { runClockForUser } from '../taskRunner.js';
-import { authRequired, mutationGuard } from '../auth.js';
+import { config } from '../config.js';
+import {
+  authRequired,
+  mutationGuard,
+  canAccessUser,
+  getClientIp,
+  sameSegment,
+  isAdminRequest
+} from '../auth.js';
 import { notify } from '../notifier.js';
 
 const router = Router();
+
+// 计算当前请求者「可访问的账号 id 集合」。返回 null 表示全部（管理员或非开放模式）；
+// 返回 Set 表示仅同 /24 网段（开放模式非管理员）。用于 P0-3 修复：列表/状态接口默认只返回当前用户数据。
+function scopeUserIds(db, req) {
+  if (isAdminRequest(req)) return null;
+  if (config.openMode) {
+    const viewerIp = getClientIp(req);
+    return new Set(
+      db.users.filter((u) => !u.recordedIp || sameSegment(viewerIp, u.recordedIp, 24)).map((u) => u.id)
+    );
+  }
+  return null;
+}
 
 // 生成最近 days 天的签到日历
 function buildCalendar(records, days = 30) {
@@ -24,28 +45,61 @@ function buildCalendar(records, days = 30) {
 }
 
 // 签到状态（打卡页核心数据）
+// P0-3 修复：开放模式非管理员只能读「同 /24 网段」账号；传了他人 userId 直接 403。
+// 不传 userId 时，聚合结果仅限同段账号（与 baoliao 列表一致）。
 router.get('/status', authRequired, (req, res) => {
   const db = load();
   const userId = req.query.userId;
-  const records = userId ? db.clockRecords.filter((r) => r.userId === userId) : db.clockRecords;
-  const user = userId ? db.users.find((u) => u.id === userId) : null;
+  const scope = scopeUserIds(db, req); // null=全部；Set=仅同段
+  if (userId) {
+    const user = db.users.find((u) => u.id === userId);
+    if (!user) return res.status(404).json({ error: 'not_found', message: '账号不存在' });
+    if (!canAccessUser(req, user)) {
+      return res.status(403).json({ error: 'forbidden', message: '无权访问该账号数据' });
+    }
+    const records = db.clockRecords.filter((r) => r.userId === userId);
+    const today = todayStr();
+    res.json({
+      today,
+      todayChecked: records.some((r) => r.date === today),
+      streak: user.streak,
+      total: user.totalClockIn,
+      points: user.points,
+      calendar: buildCalendar(records)
+    });
+    return;
+  }
+  // 无 userId：返回作用域内账号的聚合状态
+  const ids = scope ? [...scope] : null;
+  const records = ids ? db.clockRecords.filter((r) => ids.includes(r.userId)) : db.clockRecords;
   const today = todayStr();
   res.json({
     today,
     todayChecked: records.some((r) => r.date === today),
-    streak: user ? user.streak : 0,
-    total: user ? user.totalClockIn : records.length,
-    points: user ? user.points : 0,
+    streak: 0,
+    total: records.length,
+    points: 0,
     calendar: buildCalendar(records)
   });
 });
 
 // 签到记录列表（按时间倒序，可选 userId / 分页）
+// P0-3 修复：开放模式非管理员只能读「同 /24 网段」账号；传了他人 userId 直接 403。
 router.get('/history', authRequired, (req, res) => {
   const db = load();
   const { userId, page = 1, pageSize = 30 } = req.query;
+  const scope = scopeUserIds(db, req);
   let recs = db.clockRecords;
-  if (userId) recs = recs.filter((r) => r.userId === userId);
+  if (userId) {
+    const user = db.users.find((u) => u.id === userId);
+    if (!user) return res.status(404).json({ error: 'not_found', message: '账号不存在' });
+    if (!canAccessUser(req, user)) {
+      return res.status(403).json({ error: 'forbidden', message: '无权访问该账号数据' });
+    }
+    recs = recs.filter((r) => r.userId === userId);
+  } else if (scope) {
+    recs = recs.filter((r) => scope.has(r.userId));
+  }
   recs = [...recs].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const total = recs.length;
   const p = Math.max(1, Number(page) || 1);

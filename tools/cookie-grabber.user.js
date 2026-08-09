@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         zdmclock 一键推送 Cookie
 // @namespace    https://github.com/125540947/zdmclock-clone-
-// @version      1.1.1
+// @version      1.1.3
 // @description  在 smzdm 页面一键把登录 Cookie 推送到你的 zdmclock 服务（自动签到助手）。服务地址与 Token 已由本服务自动写入，无需在油猴菜单里手动配置。
 // @match        https://www.smzdm.com/*
 // @match        https://m.smzdm.com/*
@@ -40,58 +40,83 @@
     }, 3500);
   }
 
-  // 收集 smzdm 域下的全部 Cookie（含 HttpOnly，document.cookie 拿不到）。
-  // ⚠️ 关键修复：用 url 参数（而非 domain）匹配。domain:'smzdm.com' 这种写法常常匹配不到
-  // 实际 domain 为 .smzdm.com（带点前缀、覆盖所有子域）的 cookie，会漏掉 HttpOnly 的登录会话，
-  // 导致推上去的 cookie 不含有效 session —— smzdm /robot/token 直接回「请先登录」。
-  // 改为按 url 列举该站点归属的全部 cookie（含 .smzdm.com 通配 + 各子域 + HttpOnly），最稳妥。
+  // v1.1.3 修复：① 主路径用 domain 抓全（含通配域 sess/__ckguid）；
+  // ② 看门狗：若 domain 方式不回调/返回空（部分油猴实现不支持 domain 参数），
+  //    2.5s 后自动退回多 url 列举（含 apex https://smzdm.com/，能抓到通配/apex 登录态）；
+  // ③ 兼容两种回调签名 (cookies,error) 与 (error,cookies)；④ 全程 console 调试日志。
   function collectCookie(done) {
+    let settled = false;
+    const merge = (cookies) => {
+      const map = {};
+      (cookies || []).forEach((c) => {
+        if (!c || !c.name) return;
+        const isWild = c.domain && c.domain.indexOf('.smzdm.com') !== -1;
+        const existing = map[c.name];
+        if (!existing || (isWild && !existing.wild)) map[c.name] = { value: c.value, wild: isWild };
+      });
+      return map;
+    };
+    const finish = (map) => {
+      if (settled) return;
+      settled = true;
+      const str = Object.keys(map).map((k) => k + '=' + map[k].value).join('; ');
+      console.log('[zdmclock] cookie 拼接完成，键数=', Object.keys(map).length,
+        '含sess=', !!map.sess, '含__ckguid=', !!map.__ckguid);
+      done(str);
+    };
+
+    if (typeof GM_cookie === 'object' && GM_cookie && typeof GM_cookie.list === 'function') {
+      try {
+        GM_cookie.list({ domain: 'smzdm.com' }, function (a, b) {
+          const cookies = Array.isArray(a) ? a : (Array.isArray(b) ? b : null);
+          console.log('[zdmclock] domain 方式回调，cookie 数=', cookies ? cookies.length : 0);
+          if (cookies && cookies.length) finish(merge(cookies));
+          // 空/无效则不动，等看门狗走 url 兜底
+        });
+      } catch (e) {
+        console.log('[zdmclock] domain 方式异常，转 url 兜底:', e && e.message);
+      }
+      // 看门狗：domain 无回调或返回空 → 多 url 列举兜底
+      setTimeout(function () {
+        if (!settled) {
+          console.log('[zdmclock] domain 超时/空，启用 url 兜底');
+          fallbackUrlCollect(finish);
+        }
+      }, 2500);
+    } else {
+      console.log('[zdmclock] 无 GM_cookie，退回 document.cookie');
+      done(document.cookie || '');
+    }
+  }
+
+  // 兜底：按多个 url（含 apex）列举再合并（首个来源优先，不覆盖）
+  function fallbackUrlCollect(cb) {
     const urls = [
+      'https://smzdm.com/',
       'https://www.smzdm.com/',
       'https://m.smzdm.com/',
       'https://zhiyou.smzdm.com/',
       'https://user-api.smzdm.com/'
     ];
-    if (typeof GM_cookie === 'object' && GM_cookie && typeof GM_cookie.list === 'function') {
-      // 每个子域各自的桶，下标 0 = www 主站（权威登录态来源）
-      const perUrl = [];
-      let pending = urls.length;
-      const finish = () => {
-        // ⚠️ www 主站优先合并：同名 cookie 仅保留首个（www）来源的值，
-        // 禁止 m/zhiyou/user-api 等子站覆盖 www 的 sess/smzdm_id/w_tsfp 等登录态。
-        // 之前「后者覆盖前者」会让子站返回的 .smzdm.com 通配 cookie 把主站权威
-        // 登录态冲掉，产出 smzdm 判定「未登录」的残缺 cookie（实测 1526 字符被拒）。
-        const out = {};
-        for (const map of perUrl) {
-          for (const k in map) {
-            if (!(k in out)) out[k] = map[k];
-          }
-        }
-        const str = Object.keys(out)
-          .map((k) => k + '=' + out[k])
-          .join('; ');
-        done(str);
-      };
-      urls.forEach((u, idx) => {
-        try {
-          GM_cookie.list({ url: u }, (cookies, error) => {
-            perUrl[idx] = {};
-            if (!error && Array.isArray(cookies)) {
-              cookies.forEach((c) => {
-                if (c && c.name) perUrl[idx][c.name] = c.value;
-              });
-            }
-            if (--pending === 0) finish();
-          });
-        } catch {
+    const perUrl = [];
+    let pending = urls.length;
+    const finish = () => {
+      const out = {};
+      for (const m of perUrl) for (const k in m) if (!(k in out)) out[k] = m[k];
+      cb(out);
+    };
+    urls.forEach((u, idx) => {
+      try {
+        GM_cookie.list({ url: u }, (cookies, error) => {
           perUrl[idx] = {};
+          if (!error && Array.isArray(cookies)) cookies.forEach((c) => { if (c && c.name) perUrl[idx][c.name] = c.value; });
           if (--pending === 0) finish();
-        }
-      });
-    } else {
-      // 兜底：仅能拿到非 HttpOnly 的 Cookie
-      done(document.cookie || '');
-    }
+        });
+      } catch {
+        perUrl[idx] = {};
+        if (--pending === 0) finish();
+      }
+    });
   }
 
   function pushCookie() {
@@ -99,6 +124,7 @@
       toast('脚本未写入服务地址，请重新从 zdmclock 页面「一键安装」', false);
       return;
     }
+    toast('正在读取 Cookie…');
     collectCookie((cookie) => {
       if (!cookie) {
         toast('未读取到任何 smzdm Cookie，请先登录 smzdm', false);
