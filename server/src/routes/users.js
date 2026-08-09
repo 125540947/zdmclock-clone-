@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { load, persist, genId, withWriteLock } from '../store.js';
 import { smzdm } from '../smzdm/adapter.js';
 import { config } from '../config.js';
-import { authRequired, authRequiredOrQuery, maskCookie } from '../auth.js';
+import { authRequired, authRequiredOrQuery, maskCookie, getClientIp, sameSegment, isAdminRequest, mutationGuard } from '../auth.js';
 import { resolvedCheckInTime } from '../clockSchedule.js';
 import { resetRisk } from '../riskControl.js';
 
@@ -35,10 +35,16 @@ function normalizeSchedule(body) {
   return { schedMode: mode, checkInTime };
 }
 
-// 账号列表（cookie 遮罩）
+// 账号列表（cookie 遮罩）。开放模式下：匿名访客仅可见「同 /24 网段」录入的账号（含无 recordedIp 的遗留账号）；
+// 提供有效 ADMIN_TOKEN 的请求（管理员）可绕过，查看全部。
 router.get('/', authRequired, (req, res) => {
   const db = load();
-  const list = db.users.map((u) => ({ ...u, cookie: maskCookie(u.cookie) }));
+  let users = db.users;
+  if (config.openMode && !isAdminRequest(req)) {
+    const viewerIp = getClientIp(req);
+    users = users.filter((u) => !u.recordedIp || sameSegment(viewerIp, u.recordedIp, 24));
+  }
+  const list = users.map((u) => ({ ...u, cookie: maskCookie(u.cookie) }));
   res.json({ total: list.length, list });
 });
 
@@ -71,6 +77,9 @@ router.post('/', authRequired, async (req, res) => {
     totalClockIn: 0,
     schedMode: sched.schedMode,
     checkInTime: sched.checkInTime,
+    // 开放录入：记录录入者真实 IP（用于同网段可见）+ 是否参与自动任务（录入时勾选，默认开启）
+    recordedIp: getClientIp(req),
+    autoRun: (req.body && req.body.autoRun) !== false,
     createdAt: new Date().toISOString()
   };
   // auto 模式：固化系统分配的分散时间（便于展示与统计）
@@ -114,6 +123,9 @@ router.post('/import', authRequired, async (req, res) => {
       totalClockIn: 0,
       schedMode: 'auto',
       checkInTime: '',
+      // 油猴自动导入：记录录入者 IP（同网段可见）+ 默认参与自动任务
+      recordedIp: getClientIp(req),
+      autoRun: true,
       createdAt: new Date().toISOString()
     };
     user.checkInTime = resolvedCheckInTime(user);
@@ -169,16 +181,24 @@ router.get('/import-script.user.js', authRequiredOrQuery, (req, res) => {
   }
 });
 
-// 账号详情
+// 账号详情。开放模式下：匿名访客无权查看「非同网段」且已记录 IP 的账号。
 router.get('/:id', authRequired, (req, res) => {
   const db = load();
   const u = db.users.find((x) => x.id === req.params.id);
   if (!u) return res.status(404).json({ error: 'not_found' });
+  if (
+    config.openMode &&
+    !isAdminRequest(req) &&
+    u.recordedIp &&
+    !sameSegment(getClientIp(req), u.recordedIp, 24)
+  ) {
+    return res.status(404).json({ error: 'not_found', message: '无权查看该账号' });
+  }
   res.json({ ...u, cookie: maskCookie(u.cookie) });
 });
 
-// 更新账号（含换 cookie 时刷新资料、设置签到时间）
-router.put('/:id', authRequired, async (req, res) => {
+// 更新账号（含换 cookie 时刷新资料、设置签到时间）。开放模式下匿名不可改，须管理员 Token。
+router.put('/:id', mutationGuard, async (req, res) => {
   const db = load();
   const u = db.users.find((x) => x.id === req.params.id);
   if (!u) return res.status(404).json({ error: 'not_found' });
@@ -215,8 +235,8 @@ router.put('/:id', authRequired, async (req, res) => {
   res.json({ ...u, cookie: maskCookie(u.cookie) });
 });
 
-// 删除账号
-router.delete('/:id', authRequired, async (req, res) => {
+// 删除账号。开放模式下匿名不可删，须管理员 Token。
+router.delete('/:id', mutationGuard, async (req, res) => {
   const db = load();
   const i = db.users.findIndex((x) => x.id === req.params.id);
   if (i < 0) return res.status(404).json({ error: 'not_found' });

@@ -60,3 +60,57 @@ export function requireAdmin(req, res, next) {
 export function maskCookie(cookie = '') {
   return cookie ? '已保存(已隐藏)' : '';
 }
+
+// 解析真实访客 IP：优先取 X-Forwarded-For 首段（兼容 Cloudflare / 宝塔 / nginx 反代），
+// 回退到 req.ip（已配合 app.set('trust proxy')）。开放录入的「同IP段可见」依赖此值。
+export function getClientIp(req) {
+  const xff = req.headers && req.headers['x-forwarded-for'];
+  if (xff) {
+    const first = String(xff).split(',')[0].trim();
+    if (first) return first;
+  }
+  return (req && req.ip) || '';
+}
+
+// 将 IPv4 字符串转为 32 位无符号整数；非法（含非 IPv4）返回 null。
+export function ipToLong(ip) {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(String(ip || '').trim());
+  if (!m) return null;
+  const parts = [m[1], m[2], m[3], m[4]].map(Number);
+  if (parts.some((p) => p > 255)) return null;
+  return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
+}
+
+// 判断两个 IPv4 是否同网段（默认 /24）。任一非 IPv4 返回 false（IPv6 不纳入同段判定）。
+export function sameSegment(ipA, ipB, bits = 24) {
+  const a = ipToLong(ipA);
+  const b = ipToLong(ipB);
+  if (a === null || b === null) return false;
+  const mask = bits >= 32 ? 0xffffffff : (0xffffffff << (32 - bits)) >>> 0;
+  return (a & mask) === (b & mask);
+}
+
+// 从请求中提取管理员 Token（与 requireAdmin 同源）：X-Admin-Token 头 > body.adminToken > Authorization。
+export function extractAdminToken(req) {
+  const h = req.headers.authorization || '';
+  let provided = req.headers['x-admin-token'] || (req.body && req.body.adminToken) || '';
+  if (!provided && h) {
+    if (h.startsWith('Admin ')) provided = h.slice(6);
+    else if (h.startsWith('Bearer ')) provided = h.slice(7);
+  }
+  return provided;
+}
+
+// 是否为「管理员请求」：提供了有效的独立 ADMIN_TOKEN（高权限，可绕过开放模式的可见/改删限制）。
+// 关键：开放模式下 apiToken 对所有人自动签发，绝不能据此判定管理员，因此仅认 ADMIN_TOKEN。
+export function isAdminRequest(req) {
+  if (!config.adminToken) return false;
+  const provided = extractAdminToken(req);
+  return !!(provided && safeEqual(provided, config.adminToken));
+}
+
+// 写操作守卫（改/删账号）：开放模式下要求管理员 Token（匿名不能改/删）；非开放模式维持原鉴权（authRequired）。
+export function mutationGuard(req, res, next) {
+  if (config.openMode) return requireAdmin(req, res, next);
+  return authRequired(req, res, next);
+}

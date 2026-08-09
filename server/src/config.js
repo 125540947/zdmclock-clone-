@@ -39,6 +39,9 @@ export const config = {
   // 无需 Token、无需登录、无需前置代理。用于「开放式录入系统」等受信任或隔离网络场景。
   // ⚠️ 高危操作（系统更新 requireAdmin，会执行 git pull + 重启）仍受 ADMIN_TOKEN 保护，不会被匿名放开。
   openMode: parseBool(process.env.OPEN_MODE, false),
+  // 信任代理（开启后 req.ip 取 X-Forwarded-For 真实访客 IP）：开放录入的「同IP段可见」依赖真实访客 IP，
+  // 故 OPEN_MODE 开启时默认信任代理（兼容 Cloudflare / 宝塔 / nginx 反代）；直连暴露可显式设 TRUST_PROXY=false 关闭。
+  trustProxy: parseBool(process.env.TRUST_PROXY, parseBool(process.env.OPEN_MODE, false)),
   apiToken: apiTokenFromEnv || crypto.randomBytes(24).toString('hex'),
   apiTokenIsDefault: !apiTokenFromEnv,
   // 独立管理员 Token（高危操作鉴权）。未配置时为空，由 requireAdmin 走兜底策略。

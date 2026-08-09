@@ -336,15 +336,16 @@ async function runFetch(task, db) {
 }
 
 // 选定目标账号：
-// - 指定 userId → 仅该账号（手动单账号签到 / 提交等场景）
-// - 未指定 → 覆盖全部已录入账号（多账号自动化：定时任务与手动"运行"均如此）
+// - 指定 userId → 仅该账号（手动单账号签到 / 提交等场景，管理员手动触发不受 autoRun 限制）
+// - 未指定 → 覆盖全部「已开启自动跑（autoRun!==false）」的账号（多账号自动化：定时任务与手动"运行"均如此）
+//   录入时未勾选自动跑（autoRun===false）的账号不参与自动化，必须显式指定 userId 才会跑。
 export function resolveUsers(db, opts) {
   const { userId } = opts || {};
   if (userId) {
     const u = db.users.find((x) => x.id === userId);
     return u ? [u] : [];
   }
-  return db.users.slice();
+  return db.users.filter((u) => u.autoRun !== false);
 }
 
 export async function runTask(task, db, opts = {}) {

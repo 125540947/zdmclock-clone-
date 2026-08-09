@@ -51,6 +51,12 @@ export async function login(username, password) {
   return data;
 }
 
+// 公开鉴权配置：前端据此决定走「密码登录」还是「前置代理自动登录」
+export async function getAuthConfig() {
+  const { data } = await api.get('/auth/config');
+  return data;
+}
+
 export default api;
 
 // ===== 好价爆料（后端存储）=====

@@ -88,6 +88,9 @@ const BAOLIAO_IMPORT_HTML = `<!doctype html>
 // 构建并配置 Express 应用（不在此处监听端口，便于测试复用同一份中间件装配）
 export function createApp() {
   const app = express();
+  // 信任代理：开启后 req.ip 取真实访客 IP（经 X-Forwarded-For）。
+  // 开放录入的「同IP段可见」依赖真实访客 IP，故 OPEN_MODE 开启时默认开；否则默认关。
+  app.set('trust proxy', config.trustProxy);
   // CORS：默认仅同源（生产由本服务托管前端、开发由 Vite 代理，正常情况下无需跨域）。
   // 如需跨域部署（前端在独立域名），设置环境变量 CORS_ORIGIN="https://your.domain"
   // 或逗号分隔的多个域名；未设置时 origin:false 不返回 Access-Control-Allow-Origin，杜绝任意域调用。

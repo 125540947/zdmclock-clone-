@@ -24,6 +24,10 @@
         <label>Cookie <span class="primary-text">*</span></label>
         <textarea v-model="cookie" class="textarea" placeholder="粘贴完整 Cookie 字符串…"></textarea>
       </div>
+      <div class="field row" style="align-items:center; gap:10px;">
+        <input id="autoRun" v-model="autoRun" type="checkbox" style="width:auto; transform:scale(1.2);" />
+        <label for="autoRun" style="margin:0; cursor:pointer;">录入后自动跑任务（签到/互动等）</label>
+      </div>
       <button class="btn block" :disabled="saving || !cookie" @click="submit">
         {{ saving ? '保存中…' : '保存账号' }}
       </button>
@@ -44,6 +48,7 @@ const router = useRouter();
 const nickname = ref('');
 const smzdmId = ref('');
 const cookie = ref('');
+const autoRun = ref(true);
 const saving = ref(false);
 const toast = ref('');
 const toastType = ref('ok');
@@ -60,7 +65,8 @@ async function submit() {
     await api.post('/users', {
       nickname: nickname.value,
       smzdmId: smzdmId.value,
-      cookie: cookie.value
+      cookie: cookie.value,
+      autoRun: autoRun.value
     });
     showToast('账号已保存');
     setTimeout(() => router.push({ name: 'users' }), 900);
