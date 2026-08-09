@@ -426,10 +426,10 @@ async function submitCaptures() {
         headers: c.headers
       };
     });
-    const { data } = await applyCaptures(items);
-    console.log('[capture] apply 成功响应:', data);
-    endpoints.value = data.endpoints || {};
-    showToast(`已应用 ${data.applied} 个抓包端点`, 'ok');
+    const res = await applyCaptures(items);
+    console.log('[capture] apply 成功响应:', res);
+    endpoints.value = res.endpoints || {};
+    showToast(`已应用 ${res.applied} 个抓包端点`, 'ok');
     captures.value = [];
     // 刷新任务列表的失败不能掩盖「应用成功」：独立 catch，仅告警不弹错误
     load().catch((e) => console.warn('[capture] 任务列表刷新失败（不影响已应用结果）', e));
