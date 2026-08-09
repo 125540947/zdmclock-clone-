@@ -59,7 +59,7 @@
 
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from 'vue';
-import { login } from './api/client.js';
+import { login, getAuthConfig } from './api/client.js';
 
 const nav = [
   { name: 'userclock', label: '签到', icon: '📅' },
@@ -101,7 +101,27 @@ async function doLogin() {
   }
 }
 
-onMounted(() => window.addEventListener('zdm:unauthorized', onUnauthorized));
+onMounted(async () => {
+  window.addEventListener('zdm:unauthorized', onUnauthorized);
+  // 开放模式（OPEN_MODE）/ 前置代理已认证（TRUST_PROXY_AUTH）/ 关闭鉴权（REQUIRE_AUTH=false）：
+  // 无需登录，直接进入应用；并尝试自动获取 token 供后续接口调用与油猴脚本「一键安装」使用。
+  try {
+    const cfg = await getAuthConfig();
+    if (cfg.openMode || cfg.trustProxyAuth || !cfg.requireAuth) {
+      needsLogin.value = false;
+      if (cfg.openMode || cfg.trustProxyAuth) {
+        try {
+          const d = await login('open', '');
+          if (d && d.token) needsLogin.value = false;
+        } catch {
+          /* 开放模式下即便登录失败也不挡路，后端会直接放行 */
+        }
+      }
+    }
+  } catch {
+    /* 配置接口异常时维持默认行为（按 localStorage token 判断） */
+  }
+});
 onBeforeUnmount(() => window.removeEventListener('zdm:unauthorized', onUnauthorized));
 </script>
 

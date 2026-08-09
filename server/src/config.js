@@ -28,6 +28,17 @@ export const config = {
   adminPassword: process.env.ADMIN_PASSWORD || 'admin123',
   // 标记是否仍在使用内置默认密码，便于启动时给出安全告警
   adminPasswordIsDefault: !process.env.ADMIN_PASSWORD,
+  // 前置代理已认证模式：当前置（Cloudflare Access / 宝塔 / nginx 密码等）已完成身份验证时，
+  // 应用层不再校验 ADMIN_PASSWORD，login 自动放行并返回 token（写接口仍带 token）。
+  // 仅当前置有可靠保护时开启，否则等同于把后台裸奔到公网。
+  trustProxyAuth: parseBool(process.env.TRUST_PROXY_AUTH, false),
+  // 可选：前置代理注入的「已认证用户」请求头（如 Cloudflare Access: Cf-Access-Authenticated-User-Email；
+  // nginx auth_request: X-Forwarded-User）。配置后 login 会校验该头存在才放行；留空则只要 trustProxyAuth=true 即放行。
+  proxyAuthHeader: process.env.PROXY_AUTH_HEADER || '',
+  // 开放模式（OPEN_MODE）：彻底移除所有身份验证与登录流程——所有业务/数据接口对匿名访客直接放行，
+  // 无需 Token、无需登录、无需前置代理。用于「开放式录入系统」等受信任或隔离网络场景。
+  // ⚠️ 高危操作（系统更新 requireAdmin，会执行 git pull + 重启）仍受 ADMIN_TOKEN 保护，不会被匿名放开。
+  openMode: parseBool(process.env.OPEN_MODE, false),
   apiToken: apiTokenFromEnv || crypto.randomBytes(24).toString('hex'),
   apiTokenIsDefault: !apiTokenFromEnv,
   // 独立管理员 Token（高危操作鉴权）。未配置时为空，由 requireAdmin 走兜底策略。

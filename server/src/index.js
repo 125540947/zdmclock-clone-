@@ -208,6 +208,14 @@ if (isMain) {
           '公网部署前务必设为 true 并修改 ADMIN_PASSWORD / API_TOKEN。'
       );
     }
+    if (config.openMode) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[zdmclock][安全] OPEN_MODE=true —— 已启用开放模式，所有业务/数据接口对匿名访客直接放行，' +
+          '无需登录/Token。仅限受信任或隔离网络使用；公网裸奔将导致任何人可录入/修改/删除数据。' +
+          '系统更新等高危操作仍受 ADMIN_TOKEN 保护。'
+      );
+    }
     if (config.apiTokenIsDefault) {
       // eslint-disable-next-line no-console
       console.warn(
@@ -215,7 +223,7 @@ if (isMain) {
           '如需固定 Token 或启用鉴权，请在 .env 显式设置 API_TOKEN。'
       );
     }
-    if (config.adminPasswordIsDefault && config.requireAuth) {
+    if (config.adminPasswordIsDefault && config.requireAuth && !config.trustProxyAuth) {
       // eslint-disable-next-line no-console
       console.warn('[zdmclock][安全] 仍在使用默认管理员密码 admin123，请尽快设置强 ADMIN_PASSWORD。');
     }

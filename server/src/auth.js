@@ -11,7 +11,7 @@ export function safeEqual(a, b) {
 
 // 写操作 / 管理接口鉴权。REQUIRE_AUTH=false 时直接放行，保证开箱即跑。
 export function authRequired(req, res, next) {
-  if (!config.requireAuth) return next();
+  if (config.openMode || !config.requireAuth) return next();
   const h = req.headers.authorization || '';
   const token = h.startsWith('Bearer ') ? h.slice(7) : '';
   if (token && safeEqual(token, config.apiToken)) return next();
@@ -22,7 +22,7 @@ export function authRequired(req, res, next) {
 // 浏览器导航到 .user.js 无法携带 Authorization 头，前端改从已登录会话的 localStorage 取 token 作为 ?token= 传入；
 // 该 token 本就会写进脚本用于自动推送 Cookie，用 query 传不增加额外泄露面，从而开启鉴权时也能一键安装。
 export function authRequiredOrQuery(req, res, next) {
-  if (!config.requireAuth) return next();
+  if (config.openMode || !config.requireAuth) return next();
   const h = req.headers.authorization || '';
   const bearer = h.startsWith('Bearer ') ? h.slice(7) : '';
   const q = String(req.query.token || '');
