@@ -128,9 +128,18 @@ export function createApp() {
   });
 
   // 生产环境：托管前端构建产物（单进程对外）
+  // 对前端资源强制 no-cache，避免浏览器/反向代理缓存旧 JS bundle 导致
+  // "代码已更新但页面仍跑旧逻辑" 的诡异问题（抓包导入「应用失败」反复出现的根因）。
   if (config.nodeEnv === 'production' && fs.existsSync(config.webDist)) {
-    app.use(express.static(config.webDist));
-    app.get('*', (req, res) => res.sendFile(path.join(config.webDist, 'index.html')));
+    app.use(
+      express.static(config.webDist, {
+        setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache')
+      })
+    );
+    app.get('*', (req, res) => {
+      res.setHeader('Cache-Control', 'no-cache');
+      res.sendFile(path.join(config.webDist, 'index.html'));
+    });
   }
 
   // 兜底错误处理
