@@ -427,14 +427,21 @@ async function submitCaptures() {
       };
     });
     const { data } = await applyCaptures(items);
+    console.log('[capture] apply 成功响应:', data);
     endpoints.value = data.endpoints || {};
     showToast(`已应用 ${data.applied} 个抓包端点`, 'ok');
     captures.value = [];
     // 刷新任务列表的失败不能掩盖「应用成功」：独立 catch，仅告警不弹错误
     load().catch((e) => console.warn('[capture] 任务列表刷新失败（不影响已应用结果）', e));
   } catch (e) {
+    // 把真实错误暴露出来，便于区分「网络错误」与「HTTP 错误」
     const status = e.response?.status;
-    const msg = e.response?.data?.message || (status ? `应用失败（HTTP ${status}）` : '应用失败');
+    const serverMsg = e.response?.data?.message || e.response?.data?.error;
+    const netErr = !e.response; // 无响应对象 = 网络层失败（请求没到达/没返回）
+    const msg = netErr
+      ? `应用失败（网络错误：${e.message || '请求未收到响应'}）`
+      : `应用失败（HTTP ${status}${serverMsg ? '：' + serverMsg : ''}）`;
+    console.error('[capture] apply 失败:', e);
     showToast(msg, 'err');
   } finally {
     applying.value = false;
