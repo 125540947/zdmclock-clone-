@@ -127,18 +127,43 @@ export function createApp() {
     res.type('html').send(BAOLIAO_IMPORT_HTML);
   });
 
-  // 生产环境：托管前端构建产物（单进程对外）
-  // 对前端资源强制 no-cache，避免浏览器/反向代理缓存旧 JS bundle 导致
-  // "代码已更新但页面仍跑旧逻辑" 的诡异问题（抓包导入「应用失败」反复出现的根因）。
-  if (config.nodeEnv === 'production' && fs.existsSync(config.webDist)) {
+  // 托管前端构建产物（单进程对外）。
+  // 对所有前端响应强制 no-store，并给 index.html 里的资源 URL 追加「构建戳」查询参数，
+  // 彻底杜绝浏览器/反向代理缓存旧 JS/CSS 导致“代码已更新但页面仍跑旧逻辑”
+  // 的诡异问题（抓包导入「应用失败」反复出现的根因）：
+  //   - no-cache 只是“重新校验”，缓存仍可能用 304 命中旧的 index.html；
+  //   - no-store 要求任何缓存都不得存储；再叠加 ?v=<构建戳> 使每次部署的资源 URL 都变化，
+  //     连不规范的代理缓存也能绕开。
+  if (fs.existsSync(config.webDist)) {
     app.use(
       express.static(config.webDist, {
-        setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache')
+        // index:false 让根路径 "/" 落到下方兜底中间件，以便注入构建戳；
+        // 真实资源文件（/assets/*）仍由静态中间件直接服务。
+        index: false,
+        setHeaders: (res) => res.setHeader('Cache-Control', 'no-store, must-revalidate')
       })
     );
+    // SPA 兜底：读取 index.html，给 /assets/* 注入 ?v=<构建戳>，保证每次部署都拉最新资源
     app.get('*', (req, res) => {
-      res.setHeader('Cache-Control', 'no-cache');
-      res.sendFile(path.join(config.webDist, 'index.html'));
+      const htmlPath = path.join(config.webDist, 'index.html');
+      fs.readFile(htmlPath, 'utf8', (err, html) => {
+        if (err) {
+          res.status(404).send('前端未构建：请先 npm run build');
+          return;
+        }
+        let stamp = '0';
+        try {
+          stamp = String(Math.floor(fs.statSync(htmlPath).mtimeMs));
+        } catch {
+          /* ignore */
+        }
+        const busted = html.replace(
+          /(href|src)="(\/assets\/[^"?]+)"/g,
+          (_m, a, u) => `${a}="${u}?v=${stamp}"`
+        );
+        res.setHeader('Cache-Control', 'no-store, must-revalidate');
+        res.type('html').send(busted);
+      });
     });
   }
 
