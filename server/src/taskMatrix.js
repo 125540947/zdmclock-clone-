@@ -22,7 +22,7 @@ export const CUSTOM_TASK_DEFS = [
   { type: 'lottery', name: '每日抽奖', icon: '🎰', builtin: true, desc: '已内置青龙社区逆向端点（jsonp_draw）；active_id 自动从 smzdm 转盘专题页获取，开启即运行，无需手填' },
   { type: 'turntable', name: '转盘抽奖', icon: '🎡', builtin: true, desc: '已内置青龙社区逆向端点（jsonp_draw）；active_id 自动获取（含会员/值会员双转盘），无需手填' },
   { type: 'crowdtest', name: '全民众测', icon: '🧪', builtin: true, desc: '已内置：自动发现全民众测活动并完成能量值任务（无需 crowd_id）；也可填 crowd_id 走"申请具体商品"' },
-  { type: 'follow', name: '自动关注', icon: '➕', builtin: true, desc: '已内置青龙社区逆向端点（dingyue-api 关注用户/栏目/品牌，app 签名）；填 target（用户名/栏目名/品牌名）即可运行，无需抓包' },
+  { type: 'follow', name: '自动关注', icon: '➕', builtin: true, desc: '已内置青龙社区逆向端点（dingyue-api 关注用户/栏目/品牌，app 签名）；填 target（用户名/栏目名/品牌名）即可运行，无需抓包。target 支持填数组，每次运行自动关注列表里的下一个（轮询），实现「每次适配」' },
   { type: 'share', name: '自动分享', icon: '🔗', builtin: true, desc: '已内置青龙社区逆向端点（user-api 分享流程 complete_share_rule/daily_reward/callback）；填 articleId 即可运行，无需抓包' },
   { type: 'dailyTasks', name: '每日任务', icon: '📋', builtin: true, desc: '已内置：自动领取每日任务奖励（list_v2 → activity_task_receive）' }
 ];
@@ -136,7 +136,20 @@ export async function runCustomEndpointTask(task, db, user, adapter = smzdm) {
   const strategy = REAL_STRATEGIES[task.type];
   const useBuiltin = strategy && (task.type === 'dailyTasks' || !hasCustomEndpoint);
   if (useBuiltin) {
-    const params = def && def.params && typeof def.params === 'object' ? def.params : {};
+    const params = def && def.params && typeof def.params === 'object' ? { ...def.params } : {};
+    // 「每次适配」：自动关注的 target 支持填数组，每次运行自动取列表里的下一个（轮询游标持久化在 db），
+    // 实现"每天自动关注不同对象"，无需每次手动改参数。单个字符串维持原固定关注行为。
+    if (task.type === 'follow' && Array.isArray(params.target)) {
+      if (params.target.length === 0) {
+        delete params.target; // 空数组视为未配置，走下方待配置分支
+      } else {
+        const ep = (db.settings.taskEndpoints.follow = db.settings.taskEndpoints.follow || {});
+        let cursor = Number.isInteger(ep._cursor) ? ep._cursor : 0;
+        if (cursor < 0 || cursor >= params.target.length) cursor = 0;
+        params.target = String(params.target[cursor]);
+        ep._cursor = (cursor + 1) % params.target.length;
+      }
+    }
     if (strategy.needsParam && !params[strategy.needsParam] && !params.topicUrl) {
       return {
         ok: false,

@@ -386,7 +386,7 @@ export const REAL_STRATEGIES = {
   follow: {
     handler: doFollow,
     needsParam: 'target',
-    paramHint: 'target（用户名/栏目名/品牌名），可选 type(user/tag/brand)、keywordId、method(create/destroy)'
+    paramHint: 'target（用户名/栏目名/品牌名），可填数组实现每次运行自动关注下一个（轮询）；可选 type(user/tag/brand)、keywordId、method(create/destroy)'
   },
   share: {
     handler: doShare,
