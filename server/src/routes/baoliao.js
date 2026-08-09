@@ -1,24 +1,38 @@
 import { Router } from 'express';
 import { load, persist, genId, mergeBaoliao, withWriteLock } from '../store.js';
 import { smzdm } from '../smzdm/adapter.js';
-import { authRequired, authRequiredOrQuery } from '../auth.js';
+import { config } from '../config.js';
+import {
+  authRequired,
+  authRequiredOrQuery,
+  mutationGuard,
+  getClientIp,
+  sameSegment,
+  isAdminRequest
+} from '../auth.js';
 import { normalizeArticleId } from '../smzdm/articleId.js';
 
 const router = Router();
 
 // 列表（可选 ?userId= 过滤；不传则返回全部）
-// 注意：读接口同样加 authRequired，保证 REQUIRE_AUTH=true 时不会泄露好价数据（与写接口一致）
+// 注意：读接口同样加 authRequired，保证 REQUIRE_AUTH=true 时不会泄露好价数据（与写接口一致）。
+// 开放模式下（P1-2）：非管理员访客仅可见「同 /24 网段」录入的好价，与 users 列表策略一致，
+// 避免匿名跨网段看到全部好价文本。
 router.get('/', authRequired, (req, res) => {
   const db = load();
   const { userId } = req.query;
   let list = db.baoliao.slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
   if (userId) list = list.filter((x) => x.userId === userId);
+  if (config.openMode && !isAdminRequest(req)) {
+    const viewerIp = getClientIp(req);
+    list = list.filter((x) => !x.recordedIp || sameSegment(viewerIp, x.recordedIp, 24));
+  }
   res.json({ items: list, total: list.length });
 });
 
 // 从 smzdm 抓取好价并合并进爆料箱（real 适配器抓真实列表；mock 返回样例数据）
-// 注意：必须定义在任何 /:id 路由之前，否则 "refresh" 会被当成 id 匹配
-router.post('/refresh', authRequired, async (req, res) => {
+// 注意：必须定义在任何 /:id 路由之前，否则 "refresh" 会被当成 id 匹配。开放模式下强制管理员（mutationGuard）。
+router.post('/refresh', mutationGuard, async (req, res) => {
   const db = load();
   const { limit } = req.body || {};
   const lim = Math.min(50, Math.max(1, Number(limit) || 20));
@@ -104,7 +118,7 @@ router.post('/', authRequired, async (req, res) => {
 });
 
 // 更新（标题/价格/分类/状态等）
-router.put('/:id', authRequired, async (req, res) => {
+router.put('/:id', mutationGuard, async (req, res) => {
   const db = load();
   const item = db.baoliao.find((x) => x.id === req.params.id);
   if (!item) return res.status(404).json({ error: 'not_found' });
@@ -123,7 +137,7 @@ router.put('/:id', authRequired, async (req, res) => {
 });
 
 // 删除
-router.delete('/:id', authRequired, async (req, res) => {
+router.delete('/:id', mutationGuard, async (req, res) => {
   const db = load();
   const idx = db.baoliao.findIndex((x) => x.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'not_found' });
@@ -135,7 +149,8 @@ router.delete('/:id', authRequired, async (req, res) => {
 });
 
 // 提交到 smzdm（调用适配器；mock 直接返回成功）
-router.post('/:id/submit', authRequired, async (req, res) => {
+// 真实动作类接口：开放模式下强制管理员（mutationGuard），避免匿名用任意 cookie 提交爆料（IDOR）。
+router.post('/:id/submit', mutationGuard, async (req, res) => {
   const db = load();
   const item = db.baoliao.find((x) => x.id === req.params.id);
   if (!item) return res.status(404).json({ error: 'not_found' });

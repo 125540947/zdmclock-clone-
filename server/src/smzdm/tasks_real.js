@@ -21,12 +21,18 @@ function removeTags(s) {
     .trim();
 }
 
-// 剥离 JSONP 响应外壳 callback({...})，取内部 JSON（纯函数）
+// 剥离 JSONP 响应外壳 callback({...})，取内部 JSON（纯函数）。
+// 加 try/catch：smzdm 挑战页 / HTML 片段会导致 JSON.parse 抛异常，上层若未捕获会变成 unhandledRejection（P1-11）。
 export function parseJsonp(text) {
   if (typeof text !== 'string') return text;
   const m = text.match(/\(([\s\S]*)\)\s*$/);
   const inner = m ? m[1] : text;
-  return JSON.parse(inner);
+  try {
+    return JSON.parse(inner);
+  } catch (e) {
+    // 失败不抛出：返回带标记的错误结构，调用方（doTurntable 等）按 error 字段处理
+    return { error: 'jsonp_parse_failed', raw: String(text).slice(0, 200) };
+  }
 }
 
 // 从奖励文案近似提取金币/碎银/经验数量（best-effort，仅统计接口字面提及的数值，

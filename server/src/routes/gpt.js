@@ -1,6 +1,6 @@
 import { Router } from 'express';
-import { load, persist } from '../store.js';
-import { authRequired } from '../auth.js';
+import { load, persist, withWriteLock } from '../store.js';
+import { authRequired, mutationGuard } from '../auth.js';
 import { generateReply } from '../gptAdapter.js';
 import { config } from '../config.js';
 
@@ -20,8 +20,9 @@ router.get('/config', authRequired, (req, res) => {
   res.json({ config: db.settings.gpt });
 });
 
-// 保存 GPT 配置（前端开关与提示词持久化到后端，不再仅是 localStorage）
-router.put('/config', authRequired, (req, res) => {
+// 保存 GPT 配置（前端开关与提示词持久化到后端，不再仅是 localStorage）。
+// 配置类写操作：开放模式下强制管理员（mutationGuard）。
+router.put('/config', mutationGuard, async (req, res) => {
   const db = load();
   const { enabled, target, tone, prompt } = req.body || {};
   const gpt = db.settings.gpt;
@@ -40,7 +41,7 @@ router.put('/config', authRequired, (req, res) => {
     }
     gpt.prompt = prompt;
   }
-  persist();
+  await withWriteLock(() => persist());
   res.json({ config: gpt });
 });
 
@@ -51,12 +52,12 @@ router.get('/drafts', authRequired, (req, res) => {
   res.json({ items: list, total: list.length });
 });
 
-router.delete('/drafts/:id', authRequired, (req, res) => {
+router.delete('/drafts/:id', mutationGuard, async (req, res) => {
   const db = load();
   const idx = (db.gptDrafts || []).findIndex((x) => x.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'not_found' });
   db.gptDrafts.splice(idx, 1);
-  persist();
+  await withWriteLock(() => persist());
   res.json({ ok: true });
 });
 

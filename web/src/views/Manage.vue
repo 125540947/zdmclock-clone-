@@ -17,6 +17,10 @@
         <span class="l"><span class="t">接口鉴权</span><span class="d">REQUIRE_AUTH</span></span>
         <span class="tag" :class="requireAuth ? 'on' : 'off'">{{ requireAuth ? '开启' : '关闭' }}</span>
       </div>
+      <div class="row">
+        <span class="l"><span class="t">开放模式</span><span class="d">OPEN_MODE（匿名可录入）</span></span>
+        <span class="tag" :class="openMode ? 'on' : 'off'">{{ openMode ? '开启' : '关闭' }}</span>
+      </div>
       <p class="muted" style="margin-bottom: 0">
         数据以 JSON 文件持久化于 <code>server/data/db.json</code>，无需外部数据库。
       </p>
@@ -53,17 +57,29 @@
 
 <script setup>
 import { ref, onMounted } from 'vue';
-import api from '../api/client.js';
+import api, { getAuthConfig } from '../api/client.js';
 
 const adapter = ref('mock');
 const requireAuth = ref(false);
+const openMode = ref(false);
 const running = ref(false);
 const log = ref([]);
 
 async function loadEnv() {
-  const { data } = await api.get('/admin/stats');
-  adapter.value = data.adapter;
-  // requireAuth 不直接暴露，这里用 health 推断无意义；前端仅展示，后端为准
+  try {
+    const { data } = await api.get('/admin/stats');
+    adapter.value = data.adapter;
+  } catch {
+    /* 接口不可用不影响其余展示 */
+  }
+  // 鉴权状态以 /auth/config 为准（P1-5）：避免 requireAuth 永远显示「关闭」误导
+  try {
+    const cfg = await getAuthConfig();
+    requireAuth.value = !!(cfg && cfg.requireAuth);
+    openMode.value = !!(cfg && cfg.openMode);
+  } catch {
+    /* 接口不可用时不覆盖默认 */
+  }
 }
 async function runAll() {
   running.value = true;

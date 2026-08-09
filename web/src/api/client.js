@@ -26,12 +26,18 @@ api.interceptors.request.use((cfg) => {
 
 // 全局 401 拦截：凭证失效时清掉本地 token 并广播「需要登录」事件，
 // 由 App.vue 的登录浮层接管。避免各页面各自处理鉴权。
+// 例外（P1-4）：开放模式下匿名调用「需管理员」的写/触发接口会收到 admin_token_required，
+// 这是预期的「无权」结果，不应弹登录浮层（避免误登出），交由调用方显示错误提示即可。
 api.interceptors.response.use(
   (resp) => resp,
   (err) => {
     if (err && err.response && err.response.status === 401) {
-      setToken(null);
-      window.dispatchEvent(new Event('zdm:unauthorized'));
+      const body = err.response.data || {};
+      const isExpectedNoPermission = body.error === 'admin_token_required';
+      if (!isExpectedNoPermission) {
+        setToken(null);
+        window.dispatchEvent(new Event('zdm:unauthorized'));
+      }
     }
     return Promise.reject(err);
   }

@@ -10,6 +10,36 @@
 
 import { config } from './config.js';
 
+// SSRF 防护（P0-2）：用户可控的 webhook（及 bark base）必须经过校验，
+// 仅允许公网 http/https，拒绝回环 / 私有 / 链路本地地址，防止在 OPEN_MODE 下被匿名
+// 配置 webhook=http://169.254.169.254/latest/meta-data/ 探测内网或读取云凭据。
+function isSafePushUrl(url) {
+  if (typeof url !== 'string' || !url.trim()) return false;
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+  const host = u.hostname.toLowerCase();
+  if (host === 'localhost' || host === '0.0.0.0' || host === '::1' || host === '[::1]') return false;
+  // 任何 IPv6 字面量（含内嵌）一律拒绝（推送端点均为公网域名，安全优先）
+  if (host.includes(':')) return false;
+  // 私有 IPv4 段
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (m) {
+    const p = m.slice(1, 5).map(Number);
+    if (p.some((x) => x > 255)) return false;
+    if (p[0] === 10) return false; // 10/8
+    if (p[0] === 127) return false; // 127/8
+    if (p[0] === 169 && p[1] === 254) return false; // 169.254/16 链路本地（云元数据）
+    if (p[0] === 172 && p[1] >= 16 && p[1] <= 31) return false; // 172.16/12
+    if (p[0] === 192 && p[1] === 168) return false; // 192.168/16
+  }
+  return true;
+}
+
 // 从 db.settings.push 解析推送设置；db 中缺省字段回退到环境变量（便于纯 env 部署）
 export function resolvePushSettings(db) {
   const p = (db && db.settings && db.settings.push) || {};

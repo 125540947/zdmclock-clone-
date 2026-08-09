@@ -6,7 +6,7 @@
         <div class="sub">共 {{ users.length }} 个 smzdm 账号</div>
       </div>
       <button class="btn ghost" @click="$router.push({ name: 'addCookies' })">+ 录入</button>
-      <button class="btn ghost" :disabled="checking" @click="checkAll">🍪 检测</button>
+      <button v-if="canWrite" class="btn ghost" :disabled="checking" @click="checkAll">🍪 检测</button>
     </header>
 
     <section class="card grab rise" style="animation-delay: 0.03s">
@@ -84,13 +84,13 @@
             <div v-else class="hint">
               沿用系统默认时间（{{ defaultTime }}），所有默认账号会在同一时刻签到。
             </div>
-            <button class="btn sm" :disabled="saving === u.id" @click="saveSched(u)">
+            <button v-if="canWrite" class="btn sm" :disabled="saving === u.id" @click="saveSched(u)">
               {{ saving === u.id ? '保存中…' : '保存' }}
             </button>
           </div>
         </div>
 
-        <div class="acc-actions">
+        <div v-if="canWrite" class="acc-actions">
           <button class="btn ghost sm" :disabled="busy === u.id" @click="refresh(u)">刷新资料</button>
           <button class="btn ghost sm" :disabled="!u.cookie || verifyState[u.id]?.loading" @click="verify(u)">🔍 自检</button>
           <button class="btn ghost sm danger" @click="remove(u)">删除</button>
@@ -125,9 +125,15 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, onMounted, inject, computed } from 'vue';
 import VerifyChart from '../components/VerifyChart.vue';
 import api, { updateUser, getClockDistribution, checkCookies, verifyReal, getCookieGrabberScript } from '../api/client.js';
+
+// 开放模式下匿名访客无改删权限（后端 mutationGuard 强制管理员），这里隐藏写/触发按钮，
+// 避免点击后收到 401（P1-4）。注入 App.vue 透传的 openMode / isAdmin。
+const openMode = inject('openMode', ref(false));
+const isAdmin = inject('isAdmin', ref(false));
+const canWrite = computed(() => !(openMode.value && !isAdmin.value));
 
 const users = ref([]);
 const busy = ref('');

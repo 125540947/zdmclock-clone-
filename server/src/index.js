@@ -18,6 +18,18 @@ import updateRoutes from './routes/update.js';
 import extremeLazyRoutes from './routes/extremeLazy.js';
 import { startScheduler, isSchedulerRunning } from './scheduler.js';
 
+// 全局未捕获异常兜底（P1-10）：best-effort 的异步推送/解析若遗漏 try/catch，
+// 可能触发 unhandledRejection / uncaughtException 导致进程退出。这里统一记录日志、
+// 避免静默崩进程；注意：仅记录不自动退出，保证主服务可用。
+process.on('unhandledRejection', (reason, promise) => {
+  // eslint-disable-next-line no-console
+  console.error('[zdmclock][未捕获 Promise 拒绝]', reason && reason.stack ? reason.stack : reason);
+});
+process.on('uncaughtException', (err) => {
+  // eslint-disable-next-line no-console
+  console.error('[zdmclock][未捕获异常]', err && err.stack ? err.stack : err);
+});
+
 // 好价批量导入页（同源、免构建）：服务端无法抓取 smzdm 好价（反爬挡死），
 // 改由用户浏览器导入。页面内嵌「拖拽书签」一键复制 smzdm 文章链接 + 粘贴导入文本框。
 // 注意：字符串内不含反引号/`${`/反斜杠，以便安全包裹在模板字符串中。

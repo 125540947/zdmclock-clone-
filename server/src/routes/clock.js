@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { load, todayStr, localDateStr } from '../store.js';
 import { runClockForUser } from '../taskRunner.js';
-import { authRequired } from '../auth.js';
+import { authRequired, mutationGuard } from '../auth.js';
 import { notify } from '../notifier.js';
 
 const router = Router();
@@ -57,8 +57,8 @@ router.get('/history', authRequired, (req, res) => {
   res.json({ total, page: p, pageSize: ps, list: enriched });
 });
 
-// 执行签到
-router.post('/do', authRequired, async (req, res) => {
+// 执行签到（真实动作）：开放模式下强制管理员（mutationGuard），避免匿名用任意 userId 签到（IDOR）。
+router.post('/do', mutationGuard, async (req, res) => {
   const { userId } = req.body || {};
   const db = load();
   const user = userId ? db.users.find((u) => u.id === userId) : db.users[0];

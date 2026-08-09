@@ -58,7 +58,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick } from 'vue';
+import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import api, { runExtremeLazy, getExtremeLazyRuns } from '../api/client.js';
 
 const running = ref(false);
@@ -68,6 +68,7 @@ const logs = ref([]);
 const progressPct = ref(0);
 const runs = ref([]);
 const logBox = ref(null);
+let pollTimer = null;
 
 function statusIcon(run) {
   if (run.status === 'done') return '✅';
@@ -111,7 +112,7 @@ async function launch() {
 }
 
 async function pollStatus() {
-  const interval = setInterval(async () => {
+  pollTimer = setInterval(async () => {
     try {
       const { data } = await getExtremeLazyRuns();
       const latest = (data.runs || [])[0];
@@ -129,7 +130,8 @@ async function pollStatus() {
         progressPct.value = 100;
         running.value = false;
         runningStep.value = '';
-        clearInterval(interval);
+        clearInterval(pollTimer);
+        pollTimer = null;
         await nextTick();
         if (logBox.value) logBox.value.scrollTop = logBox.value.scrollHeight;
       }
@@ -138,6 +140,13 @@ async function pollStatus() {
 }
 
 onMounted(loadRuns);
+// 离开页面时清理轮询定时器，避免内存泄漏与离屏轮询（P1-3）
+onBeforeUnmount(() => {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+});
 </script>
 
 <style scoped>

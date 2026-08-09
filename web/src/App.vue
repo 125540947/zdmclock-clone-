@@ -62,7 +62,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from 'vue';
+import { ref, onMounted, onBeforeUnmount, provide, computed } from 'vue';
 import { login, getAuthConfig } from './api/client.js';
 
 const nav = [
@@ -81,6 +81,13 @@ const busy = ref(false);
 const err = ref('');
 const openMode = ref(false);
 const adminMode = ref(false);
+
+// 是否为管理员（开放模式下持有有效 ADMIN_TOKEN 即视为管理员，可突破同网段/改删限制）。
+// 管理员登录后 App.vue 会 reload，localStorage 中已写入 zdm_admin_token，刷新时即生效。
+const isAdmin = computed(() => !!localStorage.getItem('zdm_admin_token'));
+// 透传给子视图：开放模式 + 非管理员 → 隐藏改删/配置等写按钮（P1-4）
+provide('openMode', openMode);
+provide('isAdmin', isAdmin);
 
 function onUnauthorized() {
   needsLogin.value = true;
