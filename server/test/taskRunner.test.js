@@ -9,7 +9,7 @@ process.env.DATA_DIR = path.join(os.tmpdir(), 'zdm-task-' + process.pid + '-' + 
 process.env.GPT_API_KEY = 'test-key'; // 使 config.gptEnabled=true，runGptBatch 真实路径可达
 process.env.CLOCK_STAGGER_MS = '0'; // 测试关闭错峰，保证批量用例快速且确定
 process.env.CLOCK_STAGGER_JITTER_MS = '0';
-const { runTask, collectArticleIds, resolveUsers, runClockForUser } = await import('../src/taskRunner.js');
+const { runTask, collectArticleIds, resolveUsers, runClockForUser, sampleArticleIds, computeSampleSize } = await import('../src/taskRunner.js');
 const { load } = await import('../src/store.js');
 const { config } = await import('../src/config.js');
 const { smzdm } = await import('../src/smzdm/adapter.js');
@@ -329,6 +329,61 @@ test('runClockForUser 检测到登录失效：标记 cookieExpired 并跳过后�
     config.clockRetry = prevRetry;
     config.clockRetryBaseMs = prevBase;
     smzdm.doClockIn = orig;
+  }
+});
+
+test('sampleArticleIds 返回不重复子集且全部来自原池（不修改原数组）', () => {
+  const ids = ['a', 'b', 'c', 'd', 'e'];
+  const sampled = sampleArticleIds(ids, 3, () => 0.99); // rng=0.99 决定洗牌顺序，取前 3
+  assert.equal(sampled.length, 3);
+  assert.equal(new Set(sampled).size, 3); // 不重复
+  assert.ok(sampled.every((x) => ids.includes(x)));
+  assert.equal(ids.length, 5); // 原数组未被改动
+});
+
+test('computeSampleSize：limit 受控、默认随机、空池封顶', () => {
+  assert.equal(computeSampleSize(10, 2), 2); // limit 优先生效
+  assert.equal(computeSampleSize(3, 50), 3); // limit 超过池大小 → 封顶池大小
+  assert.equal(computeSampleSize(0, 5), 0); // 空池 → 0
+  // 默认随机（无 limit）：落在 [3,12] 区间（config 默认）且不超过池大小
+  const r = computeSampleSize(100, undefined, () => 0.5);
+  assert.ok(r >= 3 && r <= 12);
+  // 池很小（2 条）时即便默认上限 12 也只取 2
+  assert.equal(computeSampleSize(2, undefined, () => 0), 2);
+});
+
+test('runEngagement baoliao 来源随机取样（不遍历全量）+ 拟人化延迟可关闭', async () => {
+  // 关闭延迟，保证用例快速且确定性（避免 2~15s 真实等待）
+  const prevMin = config.engagementDelayMinMs;
+  const prevMax = config.engagementDelayMaxMs;
+  const prevProb = config.engagementDelayLongProbability;
+  config.engagementDelayMinMs = 0;
+  config.engagementDelayMaxMs = 0;
+  config.engagementDelayLongProbability = 0;
+  const db = {
+    users: [{ id: 'u1', cookie: 'c' }],
+    baoliao: Array.from({ length: 8 }, (_, i) => ({ smzdmUrl: 'https://x/p/' + (100 + i) }))
+  };
+  const pool = ['100', '101', '102', '103', '104', '105', '106', '107'];
+  const called = [];
+  const orig = smzdm.doComment;
+  smzdm.doComment = async (cookie, opts) => {
+    called.push(opts.articleId);
+    return { count: 1, message: '评论成功' };
+  };
+  try {
+    // 任务 limit=3 → 从 8 篇中随机取样 3 篇（而非全量 8 篇）
+    const r = await runTask({ type: 'comment', articleSource: 'baoliao', limit: 3, name: '评论' }, db, {});
+    assert.equal(r.ok, true);
+    assert.equal(called.length, 3); // 仅 3 篇被操作
+    assert.equal(new Set(called).size, 3); // 不重复
+    assert.ok(called.every((x) => pool.includes(x))); // 取样全部来自池
+    assert.match(r.message, /从 8 篇中随机选取 3 篇/); // 结果标明抽样
+  } finally {
+    smzdm.doComment = orig;
+    config.engagementDelayMinMs = prevMin;
+    config.engagementDelayMaxMs = prevMax;
+    config.engagementDelayLongProbability = prevProb;
   }
 });
 

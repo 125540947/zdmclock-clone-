@@ -62,13 +62,38 @@ export function collectArticleIds(task, db, articleSource, overrideId) {
   return id ? [id] : [];
 }
 
+// 从数组中随机取 n 个不重复元素（Fisher-Yates 洗牌后取前 n），rng 可注入便于单测。
+export function sampleArticleIds(ids, n, rng = Math.random) {
+  const pool = ids.slice();
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  return pool.slice(0, Math.max(0, n));
+}
+
+// 计算 baoliao 来源的随机取样条数：
+// - 任务配置了 limit（1~50）→ 取 min(limit, 池大小)（上限受控、可复现）；
+// - 未配置 → 在 [engagementSampleDefaultMin, engagementSampleDefaultMax] 间随机取，封顶池大小；
+// 这样"每次随机选取、而非遍历全部"，模拟真人只挑部分好价互动。
+export function computeSampleSize(poolSize, limit, rng = Math.random) {
+  if (poolSize <= 0) return 0;
+  if (limit && Number.isFinite(Number(limit)) && Number(limit) > 0) {
+    return Math.min(poolSize, Math.max(1, Math.min(50, Math.floor(Number(limit)))));
+  }
+  const lo = Math.max(1, config.engagementSampleDefaultMin);
+  const hi = Math.max(lo, config.engagementSampleDefaultMax);
+  const r = lo + Math.floor(rng() * (hi - lo + 1));
+  return Math.min(poolSize, r);
+}
+
 // 评论 / 收藏 / 点赞：支持单篇（manual）或多篇（baoliao）批量执行
 async function runEngagement(task, db, user, opts) {
   const action = task.type; // 'comment' | 'favorite' | 'point'
   const articleSource = opts.articleSource || task.articleSource || 'manual';
   const safeCount = Math.min(COUNT_MAX, Math.max(1, Number(opts.count) || 1));
-  const articleIds = collectArticleIds(task, db, articleSource, opts.articleId);
-  if (!articleIds.length) {
+  const allIds = collectArticleIds(task, db, articleSource, opts.articleId);
+  if (!allIds.length) {
     return {
       ok: false,
       error: 'no_article',
@@ -78,13 +103,32 @@ async function runEngagement(task, db, user, opts) {
           : '请先填写目标文章ID或链接'
     };
   }
+  // baoliao 来源：不再全量遍历，改为从池中随机抽样若干条，模拟真人"只挑部分好价互动"。
+  // 取样条数由任务 limit 控制上限；未配置则按 [engagementSampleDefaultMin,Max] 随机取。
+  let articleIds = allIds;
+  const poolSize = allIds.length;
+  if (articleSource === 'baoliao') {
+    articleIds = sampleArticleIds(allIds, computeSampleSize(poolSize, task.limit));
+  }
   // baoliao 来源：每篇各执行 1 次（一篇一动作，避免刷量）；manual 可用 count 重复多次
   const perArticleCount = articleSource === 'baoliao' ? 1 : safeCount;
   let done = 0;
   let failed = 0;
   const errors = [];
   const results = [];
-  for (const aid of articleIds) {
+  for (let idx = 0; idx < articleIds.length; idx++) {
+    const aid = articleIds[idx];
+    // 拟人化不规则等待：每条操作之间随机延迟（首条不等待），偶发"长思考"停顿打破节奏，
+    // 避免固定频率被 smzdm 风控识别为批量脚本。
+    if (idx > 0) {
+      const baseSpan = Math.max(0, config.engagementDelayMaxMs - config.engagementDelayMinMs);
+      await sleep(jitterDelay(config.engagementDelayMinMs, baseSpan));
+      if (config.engagementDelayLongProbability > 0 && Math.random() < config.engagementDelayLongProbability) {
+        const longSpan = Math.max(0, config.engagementDelayLongMaxMs - config.engagementDelayMinMs);
+        await sleep(jitterDelay(config.engagementDelayMinMs, longSpan));
+      }
+      console.log('[smzdm-debug] engagement 拟人化等待后继续：第', idx + 1, '/', articleIds.length, '篇，articleId=', aid);
+    }
     try {
       const r =
         action === 'comment'
@@ -100,14 +144,17 @@ async function runEngagement(task, db, user, opts) {
     }
   }
   const total = articleIds.length;
+  // 抽样场景在结果里标明"从 N 篇中随机选取 M 篇"，便于核对（全量未抽样时不显示）
+  const sampledFrom =
+    articleSource === 'baoliao' && poolSize > total ? `（从 ${poolSize} 篇中随机选取 ${total} 篇）` : '';
   const message =
-    `共 ${total} 篇：成功 ${total - failed} 篇（${done} 次动作）` +
+    `共 ${total} 篇${sampledFrom}：成功 ${total - failed} 篇（${done} 次动作）` +
     (failed ? `，失败 ${failed} 篇：${errors.join('；')}` : '');
   const ok = failed === 0;
   return {
     ok,
     // scheduler / run 接口取 r.result.message 作为 lastResult
-    result: { success: ok, message, count: done, articleIds, partial: failed > 0 },
+    result: { success: ok, message, count: done, articleIds, poolSize, partial: failed > 0 },
     message
   };
 }
