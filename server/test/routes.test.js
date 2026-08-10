@@ -191,12 +191,13 @@ test('POST /api/users/import 新建 → 再次同 cookie 走 upsert（不重复�
   const first = await j('POST', '/api/users/import', { cookie: 'ck_import_same' }, headers);
   assert.equal(first.status, 200);
   assert.equal(first.data.imported, true);
-  assert.equal(first.data.upserted, false, '首次应为新建');
   const id1 = first.data.id;
+  assert.ok(id1, '应返回账号 id');
   const second = await j('POST', '/api/users/import', { cookie: 'ck_import_same' }, headers);
   assert.equal(second.status, 200);
-  assert.equal(second.data.upserted, true, '同 cookie 应为更新');
-  assert.equal(second.data.id, id1, '不应新建第二个账号');
+  assert.equal(second.data.id, id1, '同 cookie 应 upsert 而非新建第二个账号');
+  // 安全断言：响应不得泄露「该账号是否已存在」（防枚举，P2-2）
+  assert.ok(!('upserted' in first.data), '响应不应暴露 upserted 字段（防账号枚举）');
   config.requireAuth = false;
 });
 
@@ -225,20 +226,24 @@ test('GET /api/users/import-script.user.js 注入服务地址并返回 javascrip
   config.requireAuth = false;
 });
 
-test('GET /api/users/import-script.user.js 开启鉴权时需 token（?token= 可放行）', async () => {
+test('GET /api/users/import-script.user.js 公开可读且注入窄权限 installToken（不依赖会话 token）', async () => {
   config.requireAuth = true;
   const origin = 'http://1.2.3.4:3000';
-  // 无 token → 401
+  // 无 token → 200（安装端点公开可读，P1-2：不依赖会话 token，避免凭证泄露）
   const noToken = await fetch(base + '/api/users/import-script.user.js?server=' + encodeURIComponent(origin));
-  assert.equal(noToken.status, 401, '无 token 应被拒');
-  // 带正确 ?token= → 200 且地址/Token 占位符均被替换
+  assert.equal(noToken.status, 200, '安装端点应公开可读（无需会话 token）');
+  const text = await noToken.text();
+  assert.ok(text.includes('UserScript'), '应返回油猴脚本内容');
+  assert.ok(text.includes(JSON.stringify(origin)), '应注入服务地址');
+  assert.ok(!text.includes('__SERVER__'), '地址占位符应被替换');
+  assert.ok(!text.includes('__TOKEN__'), 'Token 占位符应被替换');
+  // 安全断言：脚本内不得内联真实会话 token（仅窄权限 installToken）
+  assert.ok(!text.includes(config.apiToken), '脚本不得内联真实会话 token');
+  // ?token= 会话参数应被忽略（不再作为鉴权手段），仍 200 且不含会话 token
   const withToken = await fetch(
     base + '/api/users/import-script.user.js?server=' + encodeURIComponent(origin) + '&token=' + encodeURIComponent(config.apiToken)
   );
-  const text = await withToken.text();
-  assert.equal(withToken.status, 200, '带 ?token= 应放行');
-  assert.ok(text.includes(JSON.stringify(origin)), '应注入服务地址');
-  assert.ok(!text.includes('__TOKEN__'), 'Token 占位符应被替换');
+  assert.equal(withToken.status, 200, '?token= 会话参数应被忽略（不作为鉴权）');
   config.requireAuth = false;
 });
 

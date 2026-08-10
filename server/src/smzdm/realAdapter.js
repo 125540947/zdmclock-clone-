@@ -383,7 +383,7 @@ export const realAdapter = {
       return await robotCheckIn(cookie);
     } catch (robotErr) {
       try {
-        return await webCheckIn(cookie);
+        return await realAdapter.webCheckIn(cookie);
       } catch {
         throw robotErr; // 抛出 robot 流程的原始错误（更可能是根因）
       }

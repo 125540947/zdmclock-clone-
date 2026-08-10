@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { load, withWriteLock } from '../store.js';
+import { load, withWriteLock, persist } from '../store.js';
 import { runExtremeLazy } from '../extremeLazy.js';
 import { authRequired } from '../auth.js';
 

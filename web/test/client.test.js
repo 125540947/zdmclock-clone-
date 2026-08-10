@@ -15,7 +15,7 @@ const { post, get, put, del, instance } = vi.hoisted(() => {
     get,
     put,
     delete: del,
-    interceptors: { response: { use: vi.fn() } }
+    interceptors: { request: { use: vi.fn() }, response: { use: vi.fn() } }
   };
   return { post, get, put, del, instance };
 });
