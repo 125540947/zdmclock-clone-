@@ -69,6 +69,7 @@ const BAOLIAO_IMPORT_HTML = `<!doctype html>
   <h3>② 粘贴并导入</h3>
   <p class="tip">Token（开启鉴权时需要，默认 <code>zdmclock</code>；未开启可留空）：</p>
   <p><input type="text" id="token" placeholder="API Token，可留空"></p>
+  <p><input type="text" id="channelId" placeholder="频道 ID（可选；好价贴必填真实频道，否则点赞/收藏会失败）"></p>
   <p><textarea id="links" placeholder="把 smzdm 文章链接粘贴到这里，每行一个，或任意含链接的文本"></textarea></p>
   <p><button id="imp">导入好价</button> <span class="tip">（链接形如 https://www.smzdm.com/p/123456789/ ）</span></p>
   <div id="msg"></div>
@@ -83,10 +84,11 @@ const BAOLIAO_IMPORT_HTML = `<!doctype html>
   btn.addEventListener('click',function(){
     var text=document.getElementById('links').value;
     var token=document.getElementById('token').value.trim();
+    var channelId=document.getElementById('channelId').value.trim();
     if(!text.trim()){msg.className='err';msg.textContent='请先粘贴链接';return;}
     var url='/api/baoliao/bulk'+(token?('?token='+encodeURIComponent(token)):'');
     btn.disabled=true;msg.className='';msg.textContent='导入中…';
-    fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text})})
+    fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text,channelId:channelId})})
       .then(function(r){return r.json().then(function(j){return {ok:r.ok,j:j};});})
       .then(function(o){btn.disabled=false;
         if(o.ok&&o.j.ok){msg.className='ok';msg.textContent='成功：解析 '+o.j.received+' 条，新增 '+o.j.added+' 条，列表共 '+o.j.total+' 条。现在可以去「自动任务」选「从好价列表取」了。';}

@@ -275,6 +275,20 @@ test('POST /api/baoliao/bulk items 形式 → 应用成功', async () => {
   assert.equal(data.received, 1);
 });
 
+// 好价贴 channel_id 服务端无法稳定取到（反爬），故需浏览器导入侧携带；
+// 验证全局默认 channelId 能写入导入的 baoliao 条目（点赞/收藏得以复用真实频道）。
+test('POST /api/baoliao/bulk 携带全局 channelId → 写入条目', async () => {
+  const { status } = await j('POST', '/api/baoliao/bulk', {
+    text: 'https://www.smzdm.com/p/12340000',
+    channelId: '99'
+  });
+  assert.equal(status, 200);
+  const list = await j('GET', '/api/baoliao');
+  const hit = list.data.items.find((x) => (x.smzdmUrl || x.url) === 'https://www.smzdm.com/p/12340000');
+  assert.ok(hit, '导入的条目应出现在列表');
+  assert.equal(hit.channelId, '99', '全局默认 channelId 应写入条目');
+});
+
 test('PUT /api/baoliao/:id 不存在 → 404', async () => {
   const { status } = await j('PUT', '/api/baoliao/nope', { title: 'x' });
   assert.equal(status, 404);

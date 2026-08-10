@@ -71,14 +71,18 @@ router.post('/bulk', authRequiredOrQuery, async (req, res) => {
     raw = body.text.split(/[\s,;]+/).filter(Boolean).map((u) => ({ url: u }));
   else if (typeof body === 'string' && body.trim())
     raw = body.split(/[\s,;]+/).filter(Boolean).map((u) => ({ url: u }));
+  const defaultChannelId = typeof body.channelId === 'string' && body.channelId.trim() ? body.channelId.trim().slice(0, 20) : '';
   const items = [];
   for (const it of raw) {
     const url = typeof it === 'string' ? it : String(it.url || it.smzdmUrl || '');
     const id = normalizeArticleId(url);
     if (!id) continue; // 跳过非 smzdm 文章链接
     const title = typeof it === 'object' && it.title ? String(it.title).trim() : '';
+    // 好价(Deal)贴的真实 channel_id 服务端无法稳定取到（article-api 对 Deal 返 104、www 被反爬），
+    // 故由浏览器导入侧携带：每条可单独带 channelId，缺省时回退到本次导入的全局默认频道。
+    const itemChannelId = typeof it === 'object' && it.channelId ? String(it.channelId).trim().slice(0, 20) : '';
     const full = `https://www.smzdm.com/p/${id}`;
-    items.push({ url: full, smzdmUrl: full, title: title || `文章 ${id}`, content: title });
+    items.push({ url: full, smzdmUrl: full, title: title || `文章 ${id}`, content: title, channelId: itemChannelId || defaultChannelId });
   }
   if (!items.length) {
     return res.status(400).json({ error: 'no_valid', message: '没有解析到有效的 smzdm 文章链接（需包含 /p/<数字>）' });
