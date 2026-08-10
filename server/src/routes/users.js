@@ -101,6 +101,13 @@ router.post('/', authRequired, async (req, res) => {
   if (user.schedMode === 'auto') {
     user.checkInTime = resolvedCheckInTime(user);
   }
+  // P1-1 容量防护：录入账号总数硬上限，防止 OPEN_MODE 匿名刷量或异常撑爆 db.json
+  if (db.users.length >= config.maxUsers) {
+    return res.status(429).json({
+      error: 'user_limit_reached',
+      message: `账号数已达上限（${config.maxUsers}），无法继续录入`
+    });
+  }
   db.users.push(user);
   await withWriteLock(() => persist());
   res.json({ ...user, cookie: maskCookie(user.cookie) });
@@ -125,6 +132,13 @@ router.post('/import', authRequired, async (req, res) => {
   const clean = (v, max = 64) => (typeof v === 'string' ? v.slice(0, max) : '');
   let user;
   if (!existed) {
+    // P1-1 容量防护：同上，仅在真正新增账号时拦截（已存在仅更新 cookie 不计数）
+    if (db.users.length >= config.maxUsers) {
+      return res.status(429).json({
+        error: 'user_limit_reached',
+        message: `账号数已达上限（${config.maxUsers}），无法继续录入`
+      });
+    }
     user = {
       id: genId('u'),
       smzdmId,

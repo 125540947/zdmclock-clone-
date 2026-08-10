@@ -4,6 +4,8 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
+import { flushPersist } from './store.js';
+import { rateLimit } from './middleware/rateLimit.js';
 import authRoutes from './routes/auth.js';
 import userRoutes from './routes/users.js';
 import clockRoutes from './routes/clock.js';
@@ -124,6 +126,13 @@ export function createApp() {
   });
 
   // API 路由
+  // P1-1：匿名暴露的高频写/认证接口加固定窗口限流（防爆破 / 防刷量撑爆 db）。
+  // 限流状态存内存，按访客 IP 计数；仅对 POST 生效（GET 不受影响）。
+  app.post('/api/auth/login', rateLimit({ windowMs: 60000, max: 10, message: '登录尝试过于频繁，请稍后再试' }));
+  app.post('/api/users', rateLimit({ windowMs: 60000, max: 20, message: '录入请求过于频繁，请稍后再试' }));
+  app.post('/api/users/import', rateLimit({ windowMs: 60000, max: 20, message: '导入请求过于频繁，请稍后再试' }));
+  app.post('/api/baoliao/bulk', rateLimit({ windowMs: 60000, max: 30, message: '好价导入过于频繁，请稍后再试' }));
+  app.use('/api/admin', rateLimit({ windowMs: 60000, max: 30, message: '管理接口请求过于频繁，请稍后再试' }));
   app.use('/api/auth', authRoutes);
   app.use('/api/users', userRoutes);
   app.use('/api/clock', clockRoutes);
@@ -202,6 +211,25 @@ const __filename = fileURLToPath(import.meta.url);
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === __filename;
 
 if (isMain) {
+  // 优雅退出：收到 SIGTERM/SIGINT（如 systemd restart）时，先把 debounce 窗口内的修改同步落盘，
+  // 再退出，避免合并写（persistSoon）延迟期内进程被杀导致最近改动丢失（P1-4 兜底）。
+  let stopping = false;
+  const gracefulStop = (sig) => {
+    if (stopping) return;
+    stopping = true;
+    // eslint-disable-next-line no-console
+    console.warn(`[zdmclock] 收到 ${sig}，正在落盘并退出…`);
+    try {
+      flushPersist();
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[zdmclock] flushPersist 失败', e && e.message);
+    }
+    process.exit(0);
+  };
+  process.on('SIGTERM', () => gracefulStop('SIGTERM'));
+  process.on('SIGINT', () => gracefulStop('SIGINT'));
+
   app.listen(config.port, () => {
     // R4：仅在 production 启动定时调度，避免开发态意外触发真实签到
     if (config.nodeEnv === 'production') {
@@ -241,6 +269,13 @@ if (isMain) {
     if (config.adminPasswordIsDefault && config.requireAuth && !config.trustProxyAuth) {
       // eslint-disable-next-line no-console
       console.warn('[zdmclock][安全] 仍在使用默认管理员密码 admin123，请尽快设置强 ADMIN_PASSWORD。');
+    }
+    if (config.openMode && !config.adminToken) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[zdmclock][安全] OPEN_MODE=true 但未设置 ADMIN_TOKEN —— 所有改/删/触发类操作对任何人都将拒绝' +
+          '（含持 API_TOKEN 者），开放模式将无法执行写操作。如需开放写能力，请设置强 ADMIN_TOKEN。'
+      );
     }
   });
 }

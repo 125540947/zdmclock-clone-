@@ -80,7 +80,7 @@ export function load() {
   ensureDir();
   if (!fs.existsSync(DB_FILE)) {
     cache = defaultData();
-    persist();
+    persistNow();
     return cache;
   }
   try {
@@ -178,16 +178,89 @@ export function load() {
     clockTask.cron = config.clockTaskCron;
     migrated = true;
   }
-  if (migrated) persist(); // 仅在实际发生迁移时落盘一次（启动期一次性）
+  // 启动期清理旧库超出的签到记录（内存截断），仅在实际发生迁移或截断时落盘一次
+  const capped = enforceClockCap();
+  if (migrated || capped) persistNow();
   return cache;
 }
 
-export function persist() {
+// 滚动上限（P1-4）：每个 userId 保留最近 N 条签到记录（按日期降序截断），防止 db.json 无限膨胀。
+// 返回是否发生截断（供 load 决定是否需启动期落盘一次）。
+function enforceClockCap() {
+  const cap = config.clockRecordsMaxPerUser;
+  const recs = cache && cache.clockRecords;
+  if (!Array.isArray(recs) || recs.length === 0 || !cap || cap <= 0) return false;
+  // 快速跳过：账号数 * cap 内基本不可能超限，避免无谓的分组/排序开销
+  const guard = (cache.users ? cache.users.length : 0) * cap + 64;
+  if (recs.length <= guard) return false;
+  const groups = new Map();
+  for (const r of recs) {
+    const k = r && r.userId != null ? String(r.userId) : '__null__';
+    let arr = groups.get(k);
+    if (!arr) {
+      arr = [];
+      groups.set(k, arr);
+    }
+    arr.push(r);
+  }
+  let total = 0;
+  for (const arr of groups.values()) {
+    if (arr.length > cap) {
+      arr.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+      arr.length = cap;
+    }
+    total += arr.length;
+  }
+  if (total < recs.length) {
+    cache.clockRecords = [].concat(...groups.values());
+    return true;
+  }
+  return false;
+}
+
+// 同步立即写（原子 tmp+rename）：用于启动初始化、数据迁移、关键配置落盘（需立即生效）。
+export function persistNow() {
   if (!cache) return; // 防御：load 之前调用不写空文件
+  enforceClockCap();
   ensureDir();
   const tmp = DB_FILE + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(cache, null, 2));
   fs.renameSync(tmp, DB_FILE);
+}
+
+function writeDbAsync() {
+  if (!cache) return Promise.resolve();
+  enforceClockCap();
+  ensureDir();
+  const tmp = DB_FILE + '.tmp';
+  return fs.promises
+    .writeFile(tmp, JSON.stringify(cache, null, 2))
+    .then(() => fs.promises.rename(tmp, DB_FILE));
+}
+
+let persistTimer = null;
+// 合并写（P1-4）：高频业务成功落账走这里，windowMs 内多次调用合并为一次异步写，
+// 减少 IO 次数、避免同步写大文件阻塞事件循环。
+export function persistSoon() {
+  if (persistTimer) return;
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    writeDbAsync().catch((e) => console.error('[store] persistSoon 写失败', e && e.message));
+  }, 1200);
+}
+
+// 进程退出兜底：同步立即落盘（SIGTERM/SIGINT 调用），确保 debounce 窗口内的修改不丢失。
+export function flushPersist() {
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  persistNow();
+}
+
+// 兼容入口：默认走合并写（高频业务无需等待落盘）；关键路径请用 persistNow。
+export function persist() {
+  persistSoon();
 }
 
 export function genId(prefix = 'id') {

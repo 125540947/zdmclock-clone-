@@ -45,6 +45,7 @@
 - **位置**：`server/src/index.js`（无 throttle 中间件）、`routes/auth.js:21`（登录）、`routes/users.js:67`、`routes/baoliao.js:64`（OPEN_MODE 匿名录入）
 - **问题**：登录用 `safeEqual` 防计时侧信道，但无失败锁定/限流；`ADMIN_PASSWORD`/`ADMIN_TOKEN` 存在默认值（`admin123`）。OPEN_MODE 下匿名可无限 `POST /users`/`/baoliao/bulk` 撑大 `db.json`（用户无上限，好价已限 500）。
 - **修复**：引 `express-rate-limit`；强制 `ADMIN_TOKEN` 最小长度；录入接口加频控与账号数上限。
+- **✅ 已落地（2026-08-10，commit 已推送）**：① 零依赖固定窗口限流中间件 `server/src/middleware/rateLimit.js`（按访客 IP 计数，避免引入 `express-rate-limit` 依赖漂移，契合项目 YAGNI 约定），在 `index.js` 对 `POST /api/auth/login`(60s/10)、`POST /api/users`(60s/20)、`POST /api/users/import`(60s/20)、`POST /api/baoliao/bulk`(60s/30)、`/api/admin`(60s/30) 装配；② `users.js` 的 `POST /` 与 `/import`（仅新增分支）加账号数硬上限 `config.maxUsers`（默认 500），超限返回 `429 user_limit_reached`；③ 启动告警补充：OPEN_MODE 且未设 `ADMIN_TOKEN` 时提示写操作将全部拒绝。默认弱口令告警此前已在 `index.js` 存在（`adminPasswordIsDefault`）。
 
 ### P1-2 会话 Token 泄露进 URL 与可分发脚本
 - **位置**：`web/src/views/Users.vue:158`（`installUrl` 拼 `?token=`）、`Users.vue:275-281`（`bake()` 把 token 烘焙进 `.user.js`）
@@ -60,6 +61,7 @@
 - **位置**：`server/src/store.js:185`（`persist()` 每次全量 `fs.writeFileSync`）、`runTask:424`/`runClockForUser:209` 每成功即持久化；`clockRecords` 无上限（仅 `baoliao`(500)/`gptDrafts`(200) 截断）
 - **问题**：`db.json` 随时间无限膨胀，`JSON.stringify`+同步写持续变慢并阻塞事件循环；调度器每分钟跑 `t_clock` 时尤为明显。
 - **修复**：① 合并写（tick 结束或 debounce 落盘一次）；② `clockRecords` 加滚动上限（如保留 365 天）；③ `JSON.stringify` 异步化/分表。
+- **✅ 已落地（2026-08-10，commit 已推送）**：`store.js` 重构持久化层——① `persist()` 改为 `persistSoon()`（1.2s 窗口合并写，异步 `fs.promises` 写，消除高频同步写阻塞事件循环）；新增 `persistNow()`（同步立即写，供启动初始化/迁移/关键配置）；新增 `flushPersist()`（同步兜底落盘，进程退出时调用）；② 新增 `enforceClockCap()`：按 `userId` 分组保留最近 `config.clockRecordsMaxPerUser`（默认 365）条，启动期清理旧库并在每次落盘前截断，DB 不再无限膨胀（未超限时 O(n) 快速跳过零成本）；③ 写 IO 异步化（仍保留同步 `persistNow` 供关键路径）。`index.js` 增加 SIGTERM/SIGINT 优雅退出 handler 调 `flushPersist()`，确保合并写窗口内的修改在 systemd restart 时不丢失。原 `withWriteLock(() => persist())` 调用方自动享受合并写且不阻塞写链。
 
 ### P1-5 时区错配导致签到时间判定偏移 / 漏签
 - **位置**：`server/src/taskRunner.js:366-395`（定时签到用 `zonedWallClock(config.tz)` 的 `nowMin`）vs `clockSchedule.js:78`（`resolvedCheckInTime` 返回服务器本地 HH:MM）+ 连续天数 `yesterdayStrTZ`(配置时区) vs 手动 `localYesterdayStr()`(本地)

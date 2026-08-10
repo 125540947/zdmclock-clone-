@@ -117,4 +117,10 @@ export const config = {
   // 实际取样数 = [min,max] 间随机整数（封顶为池大小），模拟真人"只挑部分好价互动"，而非全量遍历。
   engagementSampleDefaultMin: Number(process.env.ENGAGEMENT_SAMPLE_MIN || 3),
   engagementSampleDefaultMax: Number(process.env.ENGAGEMENT_SAMPLE_MAX || 12),
+  // 持久化与容量上限（P1-4）：
+  // - clockRecordsMaxPerUser：每个账号保留最近 N 条签到记录（按日期降序截断），防止 db.json 无限膨胀。
+  //   设为 0 可关闭截断（不推荐，仅调试用）。
+  clockRecordsMaxPerUser: Number(process.env.CLOCK_RECORDS_MAX_PER_USER || 365),
+  // - maxUsers：录入账号总数硬上限，防止 OPEN_MODE 匿名录入或恶意刷量撑爆 db（P1-1 容量防护）。
+  maxUsers: Number(process.env.MAX_USERS || 500),
 };
