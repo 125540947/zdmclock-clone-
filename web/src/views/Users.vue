@@ -156,7 +156,7 @@ const loadingScript = ref(false);
 // 一键安装链接：指向服务端注入好「服务地址 + 窄权限 INSTALL_TOKEN」的 .user.js，油猴导航到此即弹安装。
 // 链接不再携带会话 token（P1-2 修复）：浏览器直链本就无法带 Authorization 头，原用 ?token= 传入会话 token 会落入
 // 历史/Referer/日志；现改为服务端注入窄权限 INSTALL_TOKEN，URL 干净、泄露面更小。
-const installUrl = `/api/users/import-script.user.js?server=${encodeURIComponent(window.location.origin)}`;
+const installUrl = computed(() => `/api/users/import-script.user.js?server=${encodeURIComponent(window.location.origin)}`);
 const showScript = ref(false);
 
 

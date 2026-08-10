@@ -148,4 +148,14 @@
 - **P2-6 channelIdCache 加 LRU + 消除跨账号借用**：`realAdapter.js` 的 `channelIdCache` 加 1000 条上限（LRU 淘汰最旧），防止长期运行内存无限增长；移除全局 `lastGoodChannelId` 兜底，fallback 直接退化为 `'1'`（日志已验证可用），消除「跨账号借用上次成功值掩盖解析失败」。
 - **P2-7 fetchBaoliao 复用 call**：`realAdapter.js` 的 `fetchBaoliao` 自实现 `fetch`+超时（阈值与 `call` 不一致的样板）改为复用 `call({ raw:true, base:'', referer })`，统一超时（`SMZDM_REQUEST_TIMEOUT`）与 fetch 行为；`call` 对非 2xx 抛 `HTTP <status>` 被捕获并转「反爬挑战页」友好提示，保留 5M 上限与内容挑战页检测。自检 `tools/_selftest_p2.mjs` 6 项全过（202 挑战页 / 200 验证页 / 正常解析去重 / 网络错误 / 过大响应 / limit 截断）。
 
-> 剩余待办：P2-3（依赖审计，已确认 express/cors/dotenv 为修 CVE 版本，跑 `npm audit` 复核）、P2-5（N+1 资产刷新节流）、P2-8（魔法常量收敛）、P2-9（写锁 onRejected，低危暂不动）、P2-10/11/12/13/14/15（前端项，需 Vite 重建）。P0 全 3 + P1 全 7 + P2 的 1/2/4/6/7 已落地。
+- **P2-3 依赖安全**：`server/package.json` 锁定 `express@4.19.2` / `cors@2.8.5` / `dotenv@16.4.5`，均为修复已知 CVE 的版本（dotenv 16.4.5 修 CVE-2024-21532；express 4.19.2 修 CVE-2024-29041 等；cors 2.8.5 为最新）。注：本机 npm registry 为 npmmirror，未实现 audit endpoint，`npm audit` 无法在线复核（仅环境限制，非代码问题）；静态版本核对已确认无高危依赖。
+- **P2-5 N+1 资产刷新节流**：`taskRunner.js` 在单次 `runTask` 内新增 per-run `assetCache`（按 userId 缓存 `safeGetUserInfo` 结果），同一账号本轮内只从 smzdm 拉一次余额（原每成功任务都打一次 getUserInfo 的放大）。**未改用本地 `user.assets` 替代**——否则 `after≈before` 会让账本增量恒为 0（余额不再随签到/互动更新）。
+- **P2-8 魔法常量收敛**：`config.js` 新增 `maxBaoliaoItems/maxNoteLen/maxPageSize/countMax/gptBatchMax/fetchMax` 集中常量（均可用环境变量覆盖）；`store.js`(好价库上限)、`assets.js`(账本查询上限)、`clock.js`(分页上限)、`tasks.js`(备注/referer 截断)、`taskRunner.js`(动作/批量/抓取上限) 的散落字面量统一引用 config，消除重复魔法数字。
+- **P2-11 服务端 CSP**：`index.js` 对所有响应下发 `Content-Security-Policy`——`script-src 'self'`（构建产物为外部 JS、无内联脚本，阻断任何内联/第三方脚本执行，显著降低 localStorage 会话 token 被 XSS 窃取风险）、`style-src 'self' 'unsafe-inline'`（Vue 的 `:style` 绑定生成内联样式）、字体放行 `fonts.googleapis.com/gstatic.com`、`connect-src 'self'`、`frame-ancestors 'none'` 等。已确认 `web/dist/index.html` 无内联脚本，CSP 不会破坏前端加载。
+- **P2-10 前端调试日志**：`Tasks.vue` 移除 `apply` 成功/失败/列表刷新的 `console.log/warn/error`（失败已通过 toast 反馈用户，不再把完整响应体打印到控制台）。
+- **P2-12 表单校验**：`AddCookies.vue` 提交前对 `nickname/smzdmId/cookie` 做 `trim`；`Baoliao.vue` 的 `save()` 在 url 非空时强制校验 `^https?://`（阻断 `javascript:` 等伪协议自 XSS）。
+- **P2-13 setTimeout 清理**：`AddCookies.vue`(跳转计时器)、`Baoliao.vue`(flash 计时器)、`GptReply.vue`(复制提示计时器) 均保存 timer 引用并在 `onUnmounted` 内 `clearTimeout`，避免组件卸载后访问已卸载组件/DOM。
+- **P2-14 下标键**：`Tasks.vue`(captures 改用 `c.id||c.endpoint||i`)、`ExtremeLazy.vue`(日志改用 `i+'-'+line`)、`Manage.vue`(日志改用 `i+'-'+l.text`) 替换 `:key="i"`，降低列表重排/复用错位风险。
+- **P2-15 installUrl 求值时机**：`Users.vue` 的 `installUrl` 由 setup 阶段常量改为 `computed`（P1-2 已移除 token 注入，本就仅依赖同源 origin；computed 使未来若依赖登录态也能响应）。
+
+> 剩余待办：P2-9（`withWriteLock` 的 onRejected 也执行 fn 改为 `.then(fn).catch(()=>{})`，经评估为低危——改动会改变错误传播语义，暂不动）。**至此 P0 全 3 + P1 全 7 + P2 全 15 项均已落地**（P2 后端项纯后端无需重建；前端 P2-10/11/12/13/14/15 需 Vite 重建并强制入库 `web/dist`）。

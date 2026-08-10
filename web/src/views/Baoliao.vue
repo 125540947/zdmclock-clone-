@@ -88,7 +88,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 import { api, listBaoliao, createBaoliao, deleteBaoliao, submitBaoliao, refreshBaoliao } from '../api/client.js';
 
 const form = ref({ title: '', url: '', price: '', cat: '', content: '' });
@@ -101,11 +101,15 @@ const refreshing = ref(false);
 const msg = ref('');
 const msgType = ref('');
 
+// P2-13：flash 计时器保存引用，组件卸载时清理，避免卸载后修改已卸载组件状态
+let flashTimer = null;
 function flash(text, type = 'ok') {
   msg.value = text;
   msgType.value = type;
-  setTimeout(() => (msg.value = ''), 3000);
+  if (flashTimer) clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => (msg.value = ''), 3000);
 }
+onUnmounted(() => { if (flashTimer) clearTimeout(flashTimer); });
 function statusText(s) {
   return { draft: '草稿', submitted: '已提交', failed: '失败' }[s] || s;
 }
@@ -138,6 +142,11 @@ async function loadList() {
 
 async function save() {
   if (!form.value.title) return;
+  // P2-12：url 若填写则强制 https? 协议，阻断 javascript: 等伪协议造成的自 XSS
+  if (form.value.url && !/^https?:\/\//i.test(form.value.url)) {
+    flash('链接必须以 http(s):// 开头', 'err');
+    return;
+  }
   saving.value = true;
   try {
     await createBaoliao({ ...form.value });

@@ -27,7 +27,7 @@
     <section class="card rise log-card" style="animation-delay:.1s" v-if="logs.length">
       <h2>实时日志</h2>
       <div class="log-box" ref="logBox">
-        <div v-for="(line, i) in logs" :key="i" class="log-line" :class="{ dim: i < logs.length - 1 }">
+        <div v-for="(line, i) in logs" :key="i + '-' + line" class="log-line" :class="{ dim: i < logs.length - 1 }">
           {{ line }}
         </div>
       </div>

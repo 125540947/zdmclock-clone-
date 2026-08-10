@@ -103,7 +103,7 @@ router.get('/history', authRequired, (req, res) => {
   recs = [...recs].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const total = recs.length;
   const p = Math.max(1, Number(page) || 1);
-  const ps = Math.min(200, Math.max(1, Number(pageSize) || 30)); // b2：钳制分页上限，防放大
+  const ps = Math.min(config.maxPageSize, Math.max(1, Number(pageSize) || 30)); // b2：钳制分页上限，防放大
   const list = recs.slice((p - 1) * ps, p * ps);
   // 附带昵称
   const userMap = Object.fromEntries(db.users.map((u) => [u.id, u.nickname]));

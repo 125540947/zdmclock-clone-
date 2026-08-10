@@ -40,7 +40,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue';
+import { ref, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
 import api from '../api/client.js';
 import { useToast } from '../composables/useToast.js';
@@ -53,18 +53,22 @@ const autoRun = ref(true);
 const saving = ref(false);
 const { toast, toastType, showToast } = useToast();
 
+// P2-13：跳转计时器保存引用，组件卸载时清理，避免卸载后 router.push 访问已卸载组件
+let navTimer = null;
+onUnmounted(() => { if (navTimer) clearTimeout(navTimer); });
+
 
 async function submit() {
   saving.value = true;
   try {
     await api.post('/users', {
-      nickname: nickname.value,
-      smzdmId: smzdmId.value,
-      cookie: cookie.value,
+      nickname: nickname.value.trim(),
+      smzdmId: smzdmId.value.trim(),
+      cookie: cookie.value.trim(),
       autoRun: autoRun.value
     });
     showToast('账号已保存');
-    setTimeout(() => router.push({ name: 'users' }), 900);
+    navTimer = setTimeout(() => router.push({ name: 'users' }), 900);
   } catch (e) {
     showToast(e.response?.data?.message || '保存失败', 'err');
   } finally {

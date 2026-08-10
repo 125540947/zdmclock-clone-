@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { load } from '../store.js';
 import { summarizeAssets, dailyAssetSeries, assetByTask, recentLedger } from '../assetLedger.js';
 import { authRequired } from '../auth.js';
+import { config } from '../config.js';
 
 const router = Router();
 
@@ -28,7 +29,7 @@ router.get('/by-task', authRequired, (req, res) => {
 // 最近账本明细（含昵称）
 router.get('/ledger', authRequired, (req, res) => {
   const db = load();
-  const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 50));
+  const limit = Math.min(config.maxBaoliaoItems, Math.max(1, Number(req.query.limit) || 50));
   res.json({ list: recentLedger(db, limit) });
 });
 

@@ -3,6 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { load, persist, todayStr, withWriteLock } from '../store.js';
+import { config } from '../config.js';
 import { dbgLog } from '../log.js';
 import { runTask } from '../taskRunner.js';
 import { validateCron } from '../scheduler.js';
@@ -131,12 +132,12 @@ router.put('/endpoints', mutationGuard, async (req, res) => {
     method: String(method || 'POST').toUpperCase() === 'GET' ? 'GET' : 'POST',
     body: body ?? null,
     assetFields: af,
-    note: typeof note === 'string' ? note.slice(0, 500) : ''
+    note: typeof note === 'string' ? note.slice(0, config.maxNoteLen) : ''
   };
   if (jsonp) cfg.jsonp = true;
   if (robotToken) cfg.robotToken = true;
   if (tokenField && typeof tokenField === 'string') cfg.tokenField = tokenField.slice(0, 40);
-  if (referer && typeof referer === 'string') cfg.referer = referer.slice(0, 500);
+  if (referer && typeof referer === 'string') cfg.referer = referer.slice(0, config.maxNoteLen);
   if (headers && typeof headers === 'object') cfg.headers = headers;
   if (parsedParams) cfg.params = parsedParams;
   db.settings.taskEndpoints[type] = cfg;
@@ -205,13 +206,13 @@ router.post('/captures/apply', mutationGuard, async (req, res) => {
       method: String(it.method || 'POST').toUpperCase() === 'GET' ? 'GET' : 'POST',
       body: it.body ?? null,
       assetFields: af,
-      note: typeof it.note === 'string' ? it.note.slice(0, 500) : '抓包导入'
+      note: typeof it.note === 'string' ? it.note.slice(0, config.maxNoteLen) : '抓包导入'
     };
     if (it.jsonp) cfg.jsonp = true;
     if (it.robotToken) cfg.robotToken = true;
     if (it.tokenField && typeof it.tokenField === 'string') cfg.tokenField = it.tokenField.slice(0, 40);
     if (it.referer && typeof it.referer === 'string') {
-      const r = it.referer.slice(0, 500);
+      const r = it.referer.slice(0, config.maxNoteLen);
       if (!isSafePushUrl(r)) {
         skipped.push({ type, reason: 'referer 地址不安全（非公网），已跳过' });
         continue;

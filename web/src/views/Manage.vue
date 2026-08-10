@@ -38,7 +38,7 @@
         {{ running ? '执行中…' : '运行全部已启用任务' }}
       </button>
       <div v-if="log.length" class="log">
-        <div v-for="(l, i) in log" :key="i" class="log-line" :class="l.type">
+        <div v-for="(l, i) in log" :key="i + '-' + l.text" class="log-line" :class="l.type">
           <span class="dot"></span>{{ l.text }}
         </div>
       </div>

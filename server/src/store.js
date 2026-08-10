@@ -298,7 +298,7 @@ export function mergeBaoliao(items = []) {
     added += 1;
   }
   // R5：限制好价库上限，避免长期运行后 db.json 无限膨胀（超出部分丢弃最旧）
-  if (cache.baoliao.length > 500) cache.baoliao.length = 500;
+  if (cache.baoliao.length > config.maxBaoliaoItems) cache.baoliao.length = config.maxBaoliaoItems;
   return added;
 }
 

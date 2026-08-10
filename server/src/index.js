@@ -112,6 +112,26 @@ export function createApp() {
     ? process.env.CORS_ORIGIN.split(',').map((s) => s.trim()).filter(Boolean)
     : false;
   app.use(cors({ origin: corsOrigins }));
+  // P2-11：内容安全策略（CSP）。前端为 Vue SPA，构建产物均为外部 JS/CSS 文件（无内联脚本），
+  // 故 script-src 限定 'self' 即可阻断任何内联 / 第三方脚本执行，显著降低 localStorage 会话 token 被 XSS 窃取的风险。
+  // style-src 允许 'unsafe-inline'（Vue 的 :style 绑定会生成内联样式）；字体来自 Google Fonts 需放行对应源。
+  app.use((req, res, next) => {
+    res.setHeader(
+      'Content-Security-Policy',
+      [
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+        "font-src 'self' https://fonts.gstatic.com",
+        "img-src 'self' data: https:",
+        "connect-src 'self'",
+        "base-uri 'self'",
+        "form-action 'self'",
+        "frame-ancestors 'none'"
+      ].join('; ')
+    );
+    next();
+  });
   app.use(express.json());
 
   // 健康检查

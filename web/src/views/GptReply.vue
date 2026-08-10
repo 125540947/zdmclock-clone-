@@ -118,7 +118,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 import api from '../api/client.js';
 
 const KEY = 'zdm_gpt_reply';
@@ -272,13 +272,17 @@ async function delDraft(d) {
     /* ignore */
   }
 }
+// P2-13：复制提示计时器保存引用，组件卸载时清理，避免卸载后修改已卸载 DOM
+let copyTimer = null;
 function showCopy(id) {
   const el = document.getElementById('copied-' + id);
   if (el) {
     el.textContent = '已复制';
-    setTimeout(() => (el.textContent = '复制'), 1200);
+    if (copyTimer) clearTimeout(copyTimer);
+    copyTimer = setTimeout(() => (el.textContent = '复制'), 1200);
   }
 }
+onUnmounted(() => { if (copyTimer) clearTimeout(copyTimer); });
 
 onMounted(async () => {
   await load();

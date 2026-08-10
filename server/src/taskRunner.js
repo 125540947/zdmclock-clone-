@@ -41,9 +41,8 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // 避免逻辑重复。只负责「调用适配器执行动作」，不负责写库——
 // 由调用方根据返回结果更新 lastRun / lastResult / status。
 
-const COUNT_MAX = 5; // 防滥用：单次任务动作次数上限
-const GPT_BATCH_MAX = 10; // GPT 批量生成单次最多处理的好价条数
-const FETCH_MAX = 50; // 单次抓取好价条数上限
+// 单次任务动作次数 / GPT 批量条数 / 抓取条数上限现集中在 config（P2-8）：
+// config.countMax / config.gptBatchMax / config.fetchMax（原为此处局部常量，已迁移便于统一配置）
 
 // 采集目标文章 ID 列表：
 // - baoliao 来源：遍历 db.baoliao，从 smzdmUrl/url 提取文章 ID（去重）
@@ -92,7 +91,7 @@ export function computeSampleSize(poolSize, limit, rng = Math.random) {
 async function runEngagement(task, db, user, opts) {
   const action = task.type; // 'comment' | 'favorite' | 'point'
   const articleSource = opts.articleSource || task.articleSource || 'manual';
-  const safeCount = Math.min(COUNT_MAX, Math.max(1, Number(opts.count) || 1));
+  const safeCount = Math.min(config.countMax, Math.max(1, Number(opts.count) || 1));
   const allIds = collectArticleIds(task, db, articleSource, opts.articleId);
   if (!allIds.length) {
     return {
@@ -247,7 +246,7 @@ async function runGptBatch(task, db) {
   if (!db.settings.gpt.enabled) {
     return { ok: false, error: 'gpt_disabled', message: '请先在 GPT 自动回复页启用自动回复' };
   }
-  const limit = Math.min(GPT_BATCH_MAX, Math.max(1, Number(task.limit) || 3));
+  const limit = Math.min(config.gptBatchMax, Math.max(1, Number(task.limit) || 3));
   const items = (db.baoliao || [])
     .filter((it) => (it.title || it.content || '').trim() || normalizeArticleId(it.smzdmUrl || it.url || ''))
     .slice(0, limit);
@@ -320,7 +319,7 @@ async function runGptBatch(task, db) {
 
 // 好价真实抓取：调用适配器抓取 smzdm 公开好价列表，去重合并进 db.baoliao
 async function runFetch(task, db) {
-  const limit = Math.min(FETCH_MAX, Math.max(1, Number(task.limit) || 20));
+  const limit = Math.min(config.fetchMax, Math.max(1, Number(task.limit) || 20));
   let fetched;
   try {
     fetched = await smzdm.fetchBaoliao({ limit });
@@ -406,6 +405,7 @@ export async function runTask(task, db, opts = {}) {
   // 逐账号执行并聚合（clock / comment / favorite / point / 自定义端点任务）
   const parts = [];
   let okCount = 0;
+  const assetCache = new Map(); // P2-5：本轮内按账号缓存余额刷新结果，避免 N+1（同账号多任务只拉一次 smzdm）
   for (let i = 0; i < users.length; i++) {
     const user = users[i];
     const who = user.nickname || user.smzdmId || user.id;
@@ -429,7 +429,17 @@ export async function runTask(task, db, opts = {}) {
       }
       // A → B 联动：任一账号动作成功，统一刷新权威资产并写入共享账本（供资产仪表盘读取）
       if (r && r.ok) {
-        const after = assetAfter || (await safeGetUserInfo(user));
+        // P2-5：N+1 节流——同一账号在本轮内只从 smzdm 拉一次余额（per-run 缓存），
+        // 避免「每账号每成功任务都打一次 getUserInfo」的放大。注意：不可改用本地 user.assets 替代，
+        // 否则 after≈before 会导致账本增量恒为 0（余额不再随签到/互动更新）。
+        let after = assetAfter;
+        if (!after) {
+          after = assetCache.get(user.id);
+          if (!after) {
+            after = await safeGetUserInfo(user);
+            if (after) assetCache.set(user.id, after);
+          }
+        }
         await withWriteLock(() => {
           applyAssetEffect(db, user, task.type, task.name || taskNameOf(task.type), {
             // 有余额则以余额差落账（最准）；否则用动作显式增量（如抽奖返回的奖励）

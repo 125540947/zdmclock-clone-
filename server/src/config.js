@@ -131,4 +131,15 @@ export const config = {
   clockRecordsMaxPerUser: Number(process.env.CLOCK_RECORDS_MAX_PER_USER || 365),
   // - maxUsers：录入账号总数硬上限，防止 OPEN_MODE 匿名录入或恶意刷量撑爆 db（P1-1 容量防护）。
   maxUsers: Number(process.env.MAX_USERS || 500),
+  // 容量/截断上限（P2-8：收敛散落的魔法常量，集中可配、消除重复字面量）：
+  // - maxBaoliaoItems：好价库保留 / 账本返回条数上限
+  // - maxNoteLen：抓包备注 / referer 字符串截断上限（防超大字段撑爆 db）
+  // - maxPageSize：签到记录等分页每页上限
+  // - countMax/gptBatchMax/fetchMax：任务动作次数 / GPT 批量条数 / 抓取条数上限（原 taskRunner 局部常量）
+  maxBaoliaoItems: Number(process.env.MAX_BAOLIAO_ITEMS || 500),
+  maxNoteLen: Number(process.env.MAX_NOTE_LEN || 500),
+  maxPageSize: Number(process.env.MAX_PAGE_SIZE || 200),
+  countMax: Number(process.env.COUNT_MAX || 5),
+  gptBatchMax: Number(process.env.GPT_BATCH_MAX || 10),
+  fetchMax: Number(process.env.FETCH_MAX || 50),
 };

@@ -150,7 +150,7 @@
       <button class="btn ghost sm" :disabled="scanning" @click="scanCaptures">扫描 captures 目录</button>
       <div v-if="capHint" class="cap-hint-msg">{{ capHint }}</div>
       <div v-if="captures.length" class="cap-list">
-        <div v-for="(c, i) in captures" :key="i" class="cap-item">
+        <div v-for="(c, i) in captures" :key="c.id || c.endpoint || i" class="cap-item">
           <select class="input sm" v-model="c.type">
             <option v-for="opt in customTypeOptions" :key="opt" :value="opt">{{ opt }}</option>
           </select>
@@ -422,15 +422,14 @@ async function submitCaptures() {
       };
     });
     const res = await applyCaptures(items);
-    console.log('[capture] apply 成功响应:', res);
     endpoints.value = res.endpoints || {};
     // P2-3：把被忽略的 skipped 数组也反馈出来，避免「全部导入成功」的误导
     let applyMsg = `已应用 ${res.applied} 个抓包端点`;
     if (res.skipped && res.skipped.length) applyMsg += `，跳过 ${res.skipped.length} 个（已存在/内置/无效）`;
     showToast(applyMsg, 'ok');
     captures.value = [];
-    // 刷新任务列表的失败不能掩盖「应用成功」：独立 catch，仅告警不弹错误
-    load().catch((e) => console.warn('[capture] 任务列表刷新失败（不影响已应用结果）', e));
+    // 刷新任务列表的失败不能掩盖「应用成功」：独立 catch，仅静默不弹错误
+    load().catch(() => {});
   } catch (e) {
     // 把真实错误暴露出来，便于区分「网络错误」与「HTTP 错误」
     const status = e.response?.status;
@@ -439,7 +438,6 @@ async function submitCaptures() {
     const msg = netErr
       ? `应用失败（网络错误：${e.message || '请求未收到响应'}）`
       : `应用失败（HTTP ${status}${serverMsg ? '：' + serverMsg : ''}）`;
-    console.error('[capture] apply 失败:', e);
     showToast(msg, 'err');
   } finally {
     applying.value = false;
