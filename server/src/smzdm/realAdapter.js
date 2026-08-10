@@ -13,6 +13,7 @@
 
 import crypto from 'node:crypto';
 import { normalizeArticleId } from './articleId.js';
+import { isSafePushUrl } from '../notifier.js';
 
 const BASE = (process.env.SMZDM_BASE || 'https://www.smzdm.com').replace(/\/$/, '');
 const API_BASE = (process.env.SMZDM_API_BASE || 'https://user-api.smzdm.com').replace(/\/$/, '');
@@ -101,6 +102,9 @@ function headers(cookie, ua = UA) {
 // 扩展：raw（返回原始文本，供 JSONP 类接口）、referer / extraHeaders（抓包接口常需特定来源与头）
 export async function call(path, { method = 'GET', cookie, body, ua = UA, base = API_BASE, raw = false, referer, extraHeaders } = {}) {
   const url = path.startsWith('http') ? path : base + path;
+  // SSRF 纵深防御（P0-1）：拒绝任何指向私有/回环/链路本地地址的请求，
+  // 即使上层校验被绕过，call 作为统一出口也拦截内网探测（如云元数据 169.254.169.254）。
+  if (!isSafePushUrl(url)) throw new Error(`拒绝请求非公网地址（疑似 SSRF）@ ${url}`);
   const timeoutMs = Number(process.env.SMZDM_REQUEST_TIMEOUT || 10000);
   const init = {
     method,

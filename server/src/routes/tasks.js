@@ -5,8 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { load, persist, todayStr, withWriteLock } from '../store.js';
 import { runTask } from '../taskRunner.js';
 import { validateCron } from '../scheduler.js';
-import { authRequired } from '../auth.js';
-import { notify } from '../notifier.js';
+import { authRequired, mutationGuard } from '../auth.js';
+import { notify, isSafePushUrl } from '../notifier.js';
 import { CUSTOM_TYPES, CUSTOM_TASK_DEFS, TASK_TEMPLATES, REAL_STRATEGY_TYPES } from '../taskMatrix.js';
 
 const router = Router();
@@ -59,7 +59,7 @@ router.get('/templates', authRequired, (req, res) => {
 // 保存某任务类型的接口配置（抓包得到的真实 URL/参数/资产字段映射）。
 // endpoint 传空即清空（回到"待抓包"），但内置真实任务（REAL_STRATEGY_TYPES）允许仅存 params。
 // 仅允许 CUSTOM_TYPES。额外持久化 jsonp / robotToken / referer / headers / tokenField / params。
-router.put('/endpoints', authRequired, async (req, res) => {
+router.put('/endpoints', mutationGuard, async (req, res) => {
   const db = load();
   const { type, endpoint, method, body, assetFields, note, jsonp, robotToken, referer, headers, tokenField, params } = req.body || {};
   if (!CUSTOM_TYPES.includes(type)) {
@@ -91,6 +91,17 @@ router.put('/endpoints', authRequired, async (req, res) => {
 
   const isReal = REAL_STRATEGY_TYPES.has(type);
   const epEmpty = endpoint === '' || endpoint == null;
+
+  // SSRF 防护（P0-1）：endpoint / referer 必须为公网 http/https，拒绝内网/回环/链路本地，
+  // 防止匿名在 OPEN_MODE 下配置端点探测内网或读取云元数据（169.254.169.254）。
+  if (!epEmpty) {
+    if (!isSafePushUrl(String(endpoint))) {
+      return res.status(400).json({ error: 'unsafe_endpoint', message: 'endpoint 必须为公网 http/https 地址，禁止指向内网/回环/链路本地' });
+    }
+    if (referer && !isSafePushUrl(referer)) {
+      return res.status(400).json({ error: 'unsafe_referer', message: 'referer 必须为公网 http/https 地址' });
+    }
+  }
 
   // 非内置类型必须提供 endpoint；内置类型允许仅存 params（运行时走内置 handler，无需 endpoint）
   if (epEmpty && !isReal) {
@@ -147,7 +158,7 @@ router.get('/captures', authRequired, (req, res) => {
 // 应用抓包结果：把用户在 UI 中选定/调整后的端点配置写入 db.settings.taskEndpoints
 // 注意：dailyTasks 等多步内置任务即使导入端点也会被内置策略覆盖（taskMatrix 强制走内置流程），
 // 这类类型在此处跳过并明确告知，避免用户以为"导入失败"或产生无效配置。
-router.post('/captures/apply', authRequired, async (req, res) => {
+router.post('/captures/apply', mutationGuard, async (req, res) => {
   let db;
   try {
     db = load();
@@ -173,6 +184,10 @@ router.post('/captures/apply', authRequired, async (req, res) => {
       continue;
     }
     const endpoint = (it.endpoint || '').toString().slice(0, 2000).trim();
+    if (endpoint && !isSafePushUrl(endpoint)) {
+      skipped.push({ type, reason: '端点地址不安全（非公网），已跳过' });
+      continue;
+    }
     if (!endpoint) {
       skipped.push({ type, reason: '端点为空，已跳过' });
       continue;
@@ -193,7 +208,14 @@ router.post('/captures/apply', authRequired, async (req, res) => {
     if (it.jsonp) cfg.jsonp = true;
     if (it.robotToken) cfg.robotToken = true;
     if (it.tokenField && typeof it.tokenField === 'string') cfg.tokenField = it.tokenField.slice(0, 40);
-    if (it.referer && typeof it.referer === 'string') cfg.referer = it.referer.slice(0, 500);
+    if (it.referer && typeof it.referer === 'string') {
+      const r = it.referer.slice(0, 500);
+      if (!isSafePushUrl(r)) {
+        skipped.push({ type, reason: 'referer 地址不安全（非公网），已跳过' });
+        continue;
+      }
+      cfg.referer = r;
+    }
     if (it.headers && typeof it.headers === 'object') cfg.headers = it.headers;
     db.settings.taskEndpoints[type] = cfg;
     applied += 1;

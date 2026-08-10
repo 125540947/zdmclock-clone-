@@ -39,9 +39,11 @@ export const config = {
   // 无需 Token、无需登录、无需前置代理。用于「开放式录入系统」等受信任或隔离网络场景。
   // ⚠️ 高危操作（系统更新 requireAdmin，会执行 git pull + 重启）仍受 ADMIN_TOKEN 保护，不会被匿名放开。
   openMode: parseBool(process.env.OPEN_MODE, false),
-  // 信任代理（开启后 req.ip 取 X-Forwarded-For 真实访客 IP）：开放录入的「同IP段可见」依赖真实访客 IP，
-  // 故 OPEN_MODE 开启时默认信任代理（兼容 Cloudflare / 宝塔 / nginx 反代）；直连暴露可显式设 TRUST_PROXY=false 关闭。
-  trustProxy: parseBool(process.env.TRUST_PROXY, parseBool(process.env.OPEN_MODE, false)),
+  // 信任代理（开启后 req.ip 取 X-Forwarded-For 真实访客 IP）：开放录入的「同IP段可见」依赖真实访客 IP。
+  // ⚠️ 安全（P0-2）：不再因 OPEN_MODE 自动开启——否则匿名可伪造 X-Forwarded-For 命中同 /24 网段判定，
+  // 越权读取他人账号数据。仅在确有多层可信反代（Cloudflare/宝塔/nginx 已剥离客户端伪造的 XFF）时才显式设 TRUST_PROXY=true；
+  // 直连暴露保持默认 false，此时 req.ip 为真实套接字对端、不可伪造。
+  trustProxy: parseBool(process.env.TRUST_PROXY, false),
   apiToken: apiTokenFromEnv || crypto.randomBytes(24).toString('hex'),
   apiTokenIsDefault: !apiTokenFromEnv,
   // 独立管理员 Token（高危操作鉴权）。未配置时为空，由 requireAdmin 走兜底策略。

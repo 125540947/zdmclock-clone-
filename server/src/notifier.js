@@ -10,10 +10,10 @@
 
 import { config } from './config.js';
 
-// SSRF 防护（P0-2）：用户可控的 webhook（及 bark base）必须经过校验，
+// SSRF 防护：用户可控的 webhook（及 bark base）、任务自定义 endpoint / referer 都必须经过校验，
 // 仅允许公网 http/https，拒绝回环 / 私有 / 链路本地地址，防止在 OPEN_MODE 下被匿名
 // 配置 webhook=http://169.254.169.254/latest/meta-data/ 探测内网或读取云凭据。
-function isSafePushUrl(url) {
+export function isSafePushUrl(url) {
   if (typeof url !== 'string' || !url.trim()) return false;
   let u;
   try {
