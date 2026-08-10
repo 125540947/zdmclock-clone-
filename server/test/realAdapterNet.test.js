@@ -224,3 +224,81 @@ test('submitBaoliao：失败 → 抛错', async () => {
   installFetch(routerFetch(['/publish/articles/ajax_create', () => jsonResp({ error_code: 1, error_msg: '标题违规' })]));
   await assert.rejects(() => realAdapter.submitBaoliao('sess=abc', { title: 'x' }), /爆料失败/);
 });
+
+// ---------- 防御分支：额外奖励接口失败 → 静默跳过，不阻断主签到 ----------
+test('robotCheckIn：额外奖励接口失败 → 主签到仍成功', async () => {
+  installFetch(
+    routerFetch(
+      ['/robot/token', () => jsonResp({ error_code: 0, data: { token: 'T' } })],
+      ['/checkin/all_reward', () => ({ ok: false, status: 500, text: async () => '' })], // 触发 robotCheckinExtras 内部 catch（须放在 /checkin 之前，避免子串误匹配）
+      ['/checkin', () => jsonResp({ error_code: 0, data: { cgold: 2, daily_num: 1 } })]
+    )
+  );
+  const r = await realAdapter.doClockIn('sess=abc');
+  assert.equal(r.success, true, '额外奖励失败不应阻断签到');
+  assert.ok(!r.message.includes('额外'), '额外奖励失败时不拼接额外信息');
+});
+
+test('webCheckIn：额外奖励接口全失败 → 主签到仍成功', async () => {
+  installFetch(
+    routerFetch(
+      ['/user/checkin/jsonp_checkin', () => rawResp(jsonp({ error_code: 0, data: { cgold: 1 } }))],
+      ['/checkin/all_reward', () => ({ ok: false, status: 500, text: async () => '' })],
+      ['/checkin/extra_reward', () => ({ ok: false, status: 500, text: async () => '' })]
+    )
+  );
+  const r = await realAdapter.webCheckIn('sess=abc');
+  assert.equal(r.success, true, '额外奖励失败不应阻断网页签到');
+  assert.ok(!r.message.includes('额外'), '额外奖励失败时不拼接额外信息');
+});
+
+// ---------- 防御分支：fetchBaoliao 网络异常兜底（非反爬挑战页 202/40x/5xx） ----------
+test('fetchBaoliao：fetch 抛网络异常 → 抛「网络错误」文案', async () => {
+  installFetch(() => { throw new Error('socket hang up'); });
+  await assert.rejects(() => realAdapter.fetchBaoliao({ cookie: 'ck' }), /抓取好价网络错误/);
+});
+
+// ---------- 防御分支：channelIdCache LRU 淘汰最旧条目（CHANNEL_CACHE_MAX=1000） ----------
+test('resolveChannelId：缓存达上限后淘汰最旧条目', async () => {
+  let calls = 0;
+  installFetch((url) => {
+    const m = String(url).match(/\/article_detail\/(\d+)/);
+    if (m) { calls++; return jsonResp({ error_code: 0, data: { data: { article_channel_id: m[1] } } }); }
+    throw new Error('非预期: ' + url);
+  });
+  // 填满 0..1000（共 1001 条）；插入第 1000 条时 size 达上限，淘汰最旧的 '0'
+  for (let i = 0; i <= 1000; i++) {
+    const cid = await resolveChannelId(String(i), 'sess');
+    assert.equal(cid, String(i));
+  }
+  const afterFill = calls;
+  // '0' 已被淘汰 → 再次请求会重新拉取（+1）
+  const c0 = await resolveChannelId('0', 'sess');
+  assert.equal(c0, '0');
+  // '1000' 是最近写入 → 命中缓存（不再请求）
+  const c1000 = await resolveChannelId('1000', 'sess');
+  assert.equal(c1000, '1000');
+  assert.equal(calls, afterFill + 1, '仅被淘汰的 id 0 重新请求一次');
+});
+
+// ---------- doCheckinExtras（网页端点额外奖励，best-effort） ----------
+test('doCheckinExtras：成功端点计入奖励，失败端点静默跳过', async () => {
+  installFetch(
+    routerFetch(
+      ['/checkin/all_reward', () => rawResp(jsonp({ error_code: 0, data: { reward_msg: '获得<strong>5</strong>金币' } }))],
+      ['/checkin/extra_reward', () => ({ ok: false, status: 500, text: async () => '' })]
+    )
+  );
+  const r = await realAdapter.doCheckinExtras('sess=abc');
+  assert.deepEqual(r.rewards, ['获得 5 金币']);
+});
+
+// ---------- webCheckIn：error_code!=0 但提示已签到 → 软成功（435-436） ----------
+test('webCheckIn：error_code!=0 但提示已签到 → 软成功', async () => {
+  installFetch(routerFetch(
+    ['/user/checkin/jsonp_checkin', () => rawResp(jsonp({ error_code: 1, error_msg: '今日已签过' }))]
+  ));
+  const r = await realAdapter.webCheckIn('sess=abc');
+  assert.equal(r.success, true);
+  assert.match(r.message, /已签到|重复/);
+});
