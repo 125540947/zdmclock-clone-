@@ -175,6 +175,7 @@
 
 <script setup>
 import { ref, onMounted } from 'vue';
+import { useToast } from '../composables/useToast.js';
 import api, {
   getTaskEndpoints,
   saveTaskEndpoint,
@@ -186,8 +187,7 @@ import api, {
 const tasks = ref([]);
 const endpoints = ref({});
 const busy = ref('');
-const toast = ref('');
-const toastType = ref('ok');
+const { toast, toastType, showToast } = useToast();
 const expandedId = ref('');
 const templates = ref({});
 const form = ref({
@@ -221,11 +221,6 @@ const applying = ref(false);
 const capHint = ref('');
 const customTypeOptions = ['lottery', 'turntable', 'crowdtest', 'follow', 'share', 'dailyTasks'];
 
-function showToast(m, t = 'ok') {
-  toast.value = m;
-  toastType.value = t;
-  setTimeout(() => (toast.value = ''), 2400);
-}
 
 async function load() {
   const [{ data }, ep] = await Promise.all([api.get('/tasks'), getTaskEndpoints()]);
@@ -429,7 +424,10 @@ async function submitCaptures() {
     const res = await applyCaptures(items);
     console.log('[capture] apply 成功响应:', res);
     endpoints.value = res.endpoints || {};
-    showToast(`已应用 ${res.applied} 个抓包端点`, 'ok');
+    // P2-3：把被忽略的 skipped 数组也反馈出来，避免「全部导入成功」的误导
+    let applyMsg = `已应用 ${res.applied} 个抓包端点`;
+    if (res.skipped && res.skipped.length) applyMsg += `，跳过 ${res.skipped.length} 个（已存在/内置/无效）`;
+    showToast(applyMsg, 'ok');
     captures.value = [];
     // 刷新任务列表的失败不能掩盖「应用成功」：独立 catch，仅告警不弹错误
     load().catch((e) => console.warn('[capture] 任务列表刷新失败（不影响已应用结果）', e));

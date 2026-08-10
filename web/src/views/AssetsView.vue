@@ -107,6 +107,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue';
+import { useToast } from '../composables/useToast.js';
 import {
   getAssetsSummary,
   getAssetsDaily,
@@ -121,8 +122,7 @@ const summary = ref(null);
 const daily = ref([]);
 const byTask = ref([]);
 const ledger = ref([]);
-const toast = ref('');
-const toastType = ref('ok');
+const { toast, toastType, showToast } = useToast();
 
 // SVG 折线图尺寸
 const W = 340, H = 150, padL = 8, padR = 8, padT = 12, padB = 18;
@@ -143,9 +143,10 @@ const todayTotal = computed(() => {
   const t = summary.value?.totals;
   // 取当日各用户 today 之和
   const users = summary.value?.users || [];
-  const g = users.reduce((a, u) => a + (u.today.gold || 0), 0);
-  const s = users.reduce((a, u) => a + (u.today.silver || 0), 0);
-  const e = users.reduce((a, u) => a + (u.today.exp || 0), 0);
+  // P2-6：无当日数据的用户 today 可能为 null，加可选链 + 默认值避免 NaN/报错
+  const g = users.reduce((a, u) => a + (u.today?.gold ?? 0), 0);
+  const s = users.reduce((a, u) => a + (u.today?.silver ?? 0), 0);
+  const e = users.reduce((a, u) => a + (u.today?.exp ?? 0), 0);
   return { gold: g, silver: s, exp: e };
 });
 
@@ -176,11 +177,6 @@ function buildLine(values) {
 function setDays(d) {
   days.value = d;
   load();
-}
-function showToast(m, t = 'ok') {
-  toast.value = m;
-  toastType.value = t;
-  setTimeout(() => (toast.value = ''), 2400);
 }
 
 async function load() {

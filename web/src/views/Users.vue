@@ -128,6 +128,7 @@
 import { ref, reactive, onMounted, inject, computed } from 'vue';
 import VerifyChart from '../components/VerifyChart.vue';
 import api, { updateUser, getClockDistribution, checkCookies, verifyReal, getCookieGrabberScript } from '../api/client.js';
+import { useToast } from '../composables/useToast.js';
 
 // 开放模式下匿名访客无改删权限（后端 mutationGuard 强制管理员），这里隐藏写/触发按钮，
 // 避免点击后收到 401（P1-4）。注入 App.vue 透传的 openMode / isAdmin。
@@ -139,8 +140,7 @@ const users = ref([]);
 const busy = ref('');
 const saving = ref('');
 const checking = ref(false);
-const toast = ref('');
-const toastType = ref('ok');
+const { toast, toastType, showToast } = useToast();
 const openSched = reactive({});
 const draft = reactive({});
 const verifyState = reactive({});
@@ -158,11 +158,6 @@ const loadingScript = ref(false);
 const installUrl = `/api/users/import-script.user.js?server=${encodeURIComponent(window.location.origin)}&token=${encodeURIComponent(localStorage.getItem('zdm_token') || '')}`;
 const showScript = ref(false);
 
-function showToast(m, t = 'ok') {
-  toast.value = m;
-  toastType.value = t;
-  setTimeout(() => (toast.value = ''), 2400);
-}
 
 async function load() {
   const { data } = await api.get('/users');

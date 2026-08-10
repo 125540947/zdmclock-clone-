@@ -43,6 +43,7 @@
 <script setup>
 import { ref, onMounted } from 'vue';
 import api from '../api/client.js';
+import { useToast } from '../composables/useToast.js';
 
 const props = defineProps({
   taskId: { type: String, required: true },
@@ -54,14 +55,8 @@ const props = defineProps({
 const task = ref(null);
 const count = ref(1);
 const busy = ref(false);
-const toast = ref('');
-const toastType = ref('ok');
+const { toast, toastType, showToast } = useToast();
 
-function showToast(m, t = 'ok') {
-  toast.value = m;
-  toastType.value = t;
-  setTimeout(() => (toast.value = ''), 2400);
-}
 
 async function load() {
   const { data } = await api.get('/tasks');

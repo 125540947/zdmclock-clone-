@@ -22,6 +22,15 @@ const WEB_BASE = (process.env.SMZDM_WEB_BASE || 'https://zhiyou.smzdm.com').repl
 // 点赞/收藏接口必填文章真实 channel_id，此端点可返回 data.data.channel_id。
 const ARTICLE_API_BASE = (process.env.SMZDM_ARTICLE_API_BASE || 'https://article-api.smzdm.com').replace(/\/$/, '');
 
+// 调试日志开关：默认关闭（生产静默）。设 SMZDM_DEBUG=1 打开，排查真实签到链路时用。
+// P2-7 修复：原 [smzdm-debug] console.log 在生产环境噪音大且会打印 cookie 长度等内部信息，
+// 改为受环境变量控制的调试级日志，避免污染生产日志与泄露敏感字段。
+const SMZDM_DEBUG = process.env.SMZDM_DEBUG === '1';
+function dbgLog(...args) {
+  if (!SMZDM_DEBUG) return;
+  console.log(...args);
+}
+
 // 社区逆向得到的签名密钥与客户端标识（失效时用抓包值覆盖）
 const SIGN_KEY = process.env.SMZDM_SIGN_KEY || 'apr1$AwP!wRRT$gJ/q.X24poeBInlUJC';
 const APP_SK = process.env.SMZDM_SK || 'ierkM0OZZbsuBKLoAgQ6OJneLMXBQXmzX+LXkNTuKch8Ui2jGlahuFyWIzBiDq/L';
@@ -214,13 +223,13 @@ export async function resolveChannelId(articleId, cookie) {
       method: 'GET',
       data: { comment_flow: '', hashcode: '', lastest_update_time: '', uhome: 0, imgmode: 0, article_channel_id: 0, h5hash: '' }
     });
-    console.log('[smzdm-debug] resolveChannelId article-api raw:', JSON.stringify(json).slice(0, 600), 'articleId=', articleId);
+    dbgLog('[smzdm-debug] resolveChannelId article-api raw:', JSON.stringify(json).slice(0, 600), 'articleId=', articleId);
     // 社区 getArticleDetail 返回 data.data.<article_channel_id>（字段名是 article_channel_id，不是 channel_id）
     const c = json?.data?.data?.article_channel_id ?? json?.data?.data?.channel_id ??
               json?.data?.article_channel_id ?? json?.data?.channel_id ?? json?.article_channel_id ?? json?.channel_id;
     if (c != null) cid = String(c);
   } catch (e) {
-    console.log('[smzdm-debug] resolveChannelId article-api failed:', e.message, 'articleId=', articleId);
+    dbgLog('[smzdm-debug] resolveChannelId article-api failed:', e.message, 'articleId=', articleId);
   }
   // 2) www 文章页（带 Cookie）正则兜底（好价/Deal 贴主要靠这条）
   if (!cid) {
@@ -229,16 +238,16 @@ export async function resolveChannelId(articleId, cookie) {
       // 兼容 channel_id / channelId（驼峰）/ 有无引号 / 数值紧接等多种写法
       const m = text.match(/channel_?id["']?\s*[:=]\s*["']?(\d+)/i);
       if (m) cid = m[1];
-      console.log('[smzdm-debug] resolveChannelId www cid=', cid, 'articleId=', articleId, 'cookieLen=', (cookie || '').length);
+      dbgLog('[smzdm-debug] resolveChannelId www cid=', cid, 'articleId=', articleId, 'cookieLen=', (cookie || '').length);
     } catch (e) {
-      console.log('[smzdm-debug] resolveChannelId www failed:', e.message, 'articleId=', articleId);
+      dbgLog('[smzdm-debug] resolveChannelId www failed:', e.message, 'articleId=', articleId);
     }
   }
   // 3) 兜底：取不到（部分 JS 渲染页面静态 HTML 无 channel_id 字段）则复用上一次成功值，
   //    仍无则退化为 '1'（日志已验证 channel_id=1 亦可被 smzdm 接受为有效）。
   if (!cid) {
     cid = lastGoodChannelId || '1';
-    console.log('[smzdm-debug] resolveChannelId fallback use=', cid, 'articleId=', articleId, '(article-api/www 均未取到真实 channel_id)');
+    dbgLog('[smzdm-debug] resolveChannelId fallback use=', cid, 'articleId=', articleId, '(article-api/www 均未取到真实 channel_id)');
   }
   if (cid) {
     lastGoodChannelId = cid;
@@ -282,7 +291,7 @@ async function getRobotToken(cookie) {
     body: { f: 'android', v: APP_V, weixin: 1, time: ts, sign }
   });
   // [诊断] 不论成败都打印，便于排查签名/Cookie 是否被 smzdm 拒绝
-  console.log('[smzdm-debug] /robot/token error_code=', json?.error_code, 'error_msg=', json?.error_msg, 'hasToken=', !!json?.data?.token, 'cookieLen=', (cookie || '').length);
+  dbgLog('[smzdm-debug] /robot/token error_code=', json?.error_code, 'error_msg=', json?.error_msg, 'hasToken=', !!json?.data?.token, 'cookieLen=', (cookie || '').length);
   if (Number(json?.error_code) !== 0) throw new Error('获取 token 失败：' + (json?.error_msg || '未知'));
   return json.data?.token;
 }
@@ -296,7 +305,7 @@ async function robotCheckIn(cookie) {
   const sign = md5Sign(`f=android&sk=${APP_SK}&time=${ts}&token=${token}&v=${APP_V}&weixin=1&key=${SIGN_KEY}`);
   const body = { f: 'android', v: APP_V, sk: APP_SK, weixin: 1, time: ts, token, sign };
   const json = await call('/checkin', { method: 'POST', cookie, ua: ANDROID_UA, base: API_BASE, body });
-  console.log('[smzdm-debug] robot /checkin raw:', JSON.stringify(json).slice(0, 1200), 'cookieLen=', (cookie || '').length);
+  dbgLog('[smzdm-debug] robot /checkin raw:', JSON.stringify(json).slice(0, 1200), 'cookieLen=', (cookie || '').length);
   const ec = Number(json?.error_code ?? json?.errorCode);
   const msg = String(json?.error_msg || json?.errorMsg || json?.message || '');
   if (ec === 0) {
@@ -401,7 +410,7 @@ export const realAdapter = {
     });
     const json = parseJsonp(text);
     // [诊断] 打印 smzdm 真实返回，确认网页端点是否真签成（error_code=0 即成功）
-    console.log('[smzdm-debug] web /jsonp_checkin raw:', JSON.stringify(json).slice(0, 1200), 'cookieLen=', (cookie || '').length);
+    dbgLog('[smzdm-debug] web /jsonp_checkin raw:', JSON.stringify(json).slice(0, 1200), 'cookieLen=', (cookie || '').length);
     const ec = Number(json?.error_code ?? json?.errorCode);
     const msg = String(json?.error_msg || json?.errorMsg || json?.message || '');
     if (ec === 0) {
@@ -471,7 +480,7 @@ export const realAdapter = {
         method: 'GET', cookie, ua, base: WEB_BASE, raw: true
       });
       const json = typeof text === 'string' ? parseJsonp(text) : text;
-      console.log('[smzdm-debug] comment raw:', JSON.stringify(json).slice(0, 800), 'articleId=', articleId, 'cookieLen=', (cookie || '').length);
+      dbgLog('[smzdm-debug] comment raw:', JSON.stringify(json).slice(0, 800), 'articleId=', articleId, 'cookieLen=', (cookie || '').length);
       if (isSoftSuccess(json)) { last = json; continue; } // 请勿重复提交/已评论 = 软成功
       assertOk(json, '评论');
       last = json;
@@ -505,7 +514,7 @@ export const realAdapter = {
       uas.add(ua);
       const signed = signFormData({ id: articleId, channel_id: channelId, token: extractSess(cookie), touchstone_event: touchstone });
       last = await req(ENDPOINTS.favorite, { method: 'POST', cookie, ua, body: signed, base: API_BASE });
-      console.log('[smzdm-debug] favorite raw:', JSON.stringify(last).slice(0, 800), 'articleId=', articleId, 'channelId=', channelId, 'cookieLen=', (cookie || '').length);
+      dbgLog('[smzdm-debug] favorite raw:', JSON.stringify(last).slice(0, 800), 'articleId=', articleId, 'channelId=', channelId, 'cookieLen=', (cookie || '').length);
       if (isSoftSuccess(last)) { last = last; continue; } // 已收藏/已经收藏 = 软成功
       assertOk(last, '收藏');
     }
@@ -539,7 +548,7 @@ export const realAdapter = {
       uas.add(ua);
       const signed = signFormData({ id: articleId, channel_id: channelId, token: extractSess(cookie), touchstone_event: touchstone });
       last = await req(ENDPOINTS.point, { method: 'POST', cookie, ua, body: signed, base: API_BASE });
-      console.log('[smzdm-debug] point raw:', JSON.stringify(last).slice(0, 800), 'articleId=', articleId, 'channelId=', channelId, 'cookieLen=', (cookie || '').length);
+      dbgLog('[smzdm-debug] point raw:', JSON.stringify(last).slice(0, 800), 'articleId=', articleId, 'channelId=', channelId, 'cookieLen=', (cookie || '').length);
       if (isSoftSuccess(last)) { last = last; continue; } // 已赞/已经点赞 = 软成功
       assertOk(last, '点赞');
     }
@@ -588,11 +597,11 @@ export const realAdapter = {
       throw new Error('抓取好价网络错误：' + e.message);
     }
     if (!resp.ok) {
-      console.log('[smzdm-debug] fetchBaoliao HTTP', resp.status);
+      dbgLog('[smzdm-debug] fetchBaoliao HTTP', resp.status);
       throw new Error(`抓取好价 HTTP ${resp.status}：smzdm 已对服务端启用反爬拦截（挑战页），服务端无法自动抓取好价。请改用浏览器导入：打开 /baoliao-import 页面，用页面里的书签一键复制 smzdm 文章链接，粘贴导入即可。`);
     }
     const html = await resp.text();
-    console.log('[smzdm-debug] fetchBaoliao http=', resp.status, 'htmlLen=', html.length);
+    dbgLog('[smzdm-debug] fetchBaoliao http=', resp.status, 'htmlLen=', html.length);
     // smzdm 对服务端 IP 启用反爬挑战页（典型 HTTP 202 + ~209 字节风控页，或 200 但内容为空/验证页），
     // 此时页面里没有任何 /p/ 链接，继续往下只会得到空列表。明确报错并引导用浏览器导入，避免误导用户以为"刷新成功却没数据"。
     if (resp.status === 202 || html.length < 600 || /验证|challenge|anti.?bot|访问验证|<title>验证/i.test(html)) {
@@ -621,8 +630,8 @@ export const realAdapter = {
         content: rawTitle
       });
     }
-    if (!items.length) { console.log('[smzdm-debug] fetchBaoliao 解析到 0 条（页面结构可能已变更），htmlLen=', html.length); throw new Error('未能从页面解析到好价文章（页面结构可能已变更）'); }
-    console.log('[smzdm-debug] fetchBaoliao 解析到', items.length, '条');
+    if (!items.length) { dbgLog('[smzdm-debug] fetchBaoliao 解析到 0 条（页面结构可能已变更），htmlLen=', html.length); throw new Error('未能从页面解析到好价文章（页面结构可能已变更）'); }
+    dbgLog('[smzdm-debug] fetchBaoliao 解析到', items.length, '条');
     return { ok: true, items, page };
   }
 };

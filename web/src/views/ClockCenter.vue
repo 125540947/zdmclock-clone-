@@ -35,17 +35,12 @@
 <script setup>
 import { ref, onMounted } from 'vue';
 import api from '../api/client.js';
+import { useToast } from '../composables/useToast.js';
 
 const accounts = ref([]);
 const busy = ref('');
-const toast = ref('');
-const toastType = ref('ok');
+const { toast, toastType, showToast } = useToast();
 
-function showToast(m, t = 'ok') {
-  toast.value = m;
-  toastType.value = t;
-  setTimeout(() => (toast.value = ''), 2400);
-}
 
 async function load() {
   const { data } = await api.get('/users');

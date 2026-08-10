@@ -35,7 +35,8 @@ api.interceptors.response.use(
       const body = err.response.data || {};
       const isExpectedNoPermission = body.error === 'admin_token_required';
       if (!isExpectedNoPermission) {
-        setToken(null);
+        // P2-1：真正的 401（非预期的「无权写」）需同时清除管理员令牌，避免残留越权态
+        setToken(null, null);
         window.dispatchEvent(new Event('zdm:unauthorized'));
       }
     }

@@ -43,6 +43,7 @@
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import api from '../api/client.js';
+import { useToast } from '../composables/useToast.js';
 
 const router = useRouter();
 const nickname = ref('');
@@ -50,14 +51,8 @@ const smzdmId = ref('');
 const cookie = ref('');
 const autoRun = ref(true);
 const saving = ref(false);
-const toast = ref('');
-const toastType = ref('ok');
+const { toast, toastType, showToast } = useToast();
 
-function showToast(m, t = 'ok') {
-  toast.value = m;
-  toastType.value = t;
-  setTimeout(() => (toast.value = ''), 2600);
-}
 
 async function submit() {
   saving.value = true;

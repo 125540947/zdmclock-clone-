@@ -17,16 +17,6 @@
       </div>
     </section>
 
-    <section class="card rise" style="animation-delay:0.1s" v-if="rest.length">
-      <p class="card-title">🧩 其余模块（占位）</p>
-      <div class="grid">
-        <button v-for="m in rest" :key="m" class="mod ghost" @click="$router.push('/p/' + m)">
-          <span class="mi">🧩</span>
-          <span class="mn">{{ m }}</span>
-        </button>
-      </div>
-    </section>
-
     <p class="foot">自动任务已支持定时调度（cron），在「自动任务」中启用的任务会按计划自动执行。</p>
   </div>
 </template>
@@ -53,8 +43,6 @@ const built = [
   { name: 'manage', label: '运行台', icon: '🛠️' },
   { name: 'admin', label: '管理后台', icon: '📊' }
 ];
-// 原站其余路由中无独立功能对应的（占位承接）—— 已清理空壳页，此处留空
-const rest = [];
 </script>
 
 <style scoped>

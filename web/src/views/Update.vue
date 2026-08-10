@@ -75,6 +75,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import api, { getUpdateStatus, checkUpdateRepo, applyUpdateRepo } from '../api/client.js';
+import { useToast } from '../composables/useToast.js';
 
 const state = ref({
   channel: 'native',
@@ -96,8 +97,7 @@ const checkResult = ref(null);
 const applyLog = ref([]);
 const willRestart = ref(false);
 const applyError = ref('');
-const toast = ref('');
-const toastType = ref('ok');
+const { toast, toastType, showToast } = useToast();
 let pollTimer = null;
 
 const channelLabel = computed(() => (state.value.channel === 'docker' ? 'Docker' : '原生 Node'));
@@ -118,11 +118,6 @@ const canApply = computed(
     !(state.value.apply && state.value.apply.status === 'running')
 );
 
-function showToast(m, t = 'ok') {
-  toast.value = m;
-  toastType.value = t;
-  setTimeout(() => (toast.value = ''), 2600);
-}
 
 // 把后端错误码翻译成可读文案（含 H2 新增的 admin_token_required）
 function errText(e) {

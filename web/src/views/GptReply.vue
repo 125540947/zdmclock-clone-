@@ -176,7 +176,7 @@ async function genReply() {
   } catch (e) {
     replyErr.value = e.response?.data?.message || '生成失败';
   } finally {
-    genBusy.value = '';
+    genBusy.value = false;
   }
 }
 
@@ -253,7 +253,7 @@ async function runBatch() {
   } catch (e) {
     runErr.value = e.response?.data?.message || '生成失败';
   } finally {
-    runBusy.value = '';
+    runBusy.value = false;
   }
 }
 async function copyDraft(d) {
