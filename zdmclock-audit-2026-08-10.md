@@ -139,4 +139,13 @@
 - **P1-6 解析去重**：新建 `server/src/smzdm/parse.js` 收敛 `parseJsonp`/`removeTags`/`extractReward`；`realAdapter`/`tasks_real`/`taskMatrix`/`extremeLazy` 共用；`parseJsonp` 修复 `)]}'`+`callback()` 漏解外壳、`extremeLazy.collectArticleIds` 改用 `normalizeArticleId`。
 - **P1-2 会话 Token 不泄露（含前端重建）**：见上文 P1-2 落地说明。`config.js` 新增 `installToken`；`auth.js` 新增 `authRequiredOrInstall`；`users.js` 两个脚本路由公开并注入 `installToken`（`POST /import` 改用 `authRequiredOrInstall`）；前端 `installUrl` 去 `&token=`、`bake()` 仅注入服务地址。需 Vite build + 入库 `web/dist`（本环境已 `npm install` 并完成构建）。
 
-> 剩余待办：P2-1~15（P2-9 写锁 onRejected 经评估为低危、暂不改动以免改变错误传播语义）。P0 全 3 项 + P1 全 7 项均已落地（P0-3/1/2 已推送；P1-3/7、P1-4/1、P1-5/6、P1-2 待推送）。
+## 九、P2 部分修复追加（2026-08-10 续）
+本环境无可用 GitHub 凭据，以下提交落本地、待推送（凭据可用后 `git push` 即生效；均为纯后端改动，无需前端重建）：
+
+- **P2-1 泛化错误回显**：`baoliao.js` / `tasks.js` / `users.js` 的 5xx/502 响应 `message` 由原始 `e.message` 改为泛化文案（如「读取数据失败，请稍后重试」），细节仅落 `dbgLog`（新增 import）；保留 `error` 码供前端分支。消除内部路径/账号细节泄露给匿名前端。
+- **P2-2 移除账号枚举**：`users.js` 的 `POST /import` 响应移除 `upserted` 布尔（暴露「该账号是否已录入」），前端不依赖该字段（无回归）。
+- **P2-4 persist 包写锁**：`tasks.js` 手动 run 成功/异常路径的裸 `persist()` 改为 `await withWriteLock(() => persist())`，消除绕过串行写锁的全量快照写。
+- **P2-6 channelIdCache 加 LRU + 消除跨账号借用**：`realAdapter.js` 的 `channelIdCache` 加 1000 条上限（LRU 淘汰最旧），防止长期运行内存无限增长；移除全局 `lastGoodChannelId` 兜底，fallback 直接退化为 `'1'`（日志已验证可用），消除「跨账号借用上次成功值掩盖解析失败」。
+- **P2-7 fetchBaoliao 复用 call**：`realAdapter.js` 的 `fetchBaoliao` 自实现 `fetch`+超时（阈值与 `call` 不一致的样板）改为复用 `call({ raw:true, base:'', referer })`，统一超时（`SMZDM_REQUEST_TIMEOUT`）与 fetch 行为；`call` 对非 2xx 抛 `HTTP <status>` 被捕获并转「反爬挑战页」友好提示，保留 5M 上限与内容挑战页检测。自检 `tools/_selftest_p2.mjs` 6 项全过（202 挑战页 / 200 验证页 / 正常解析去重 / 网络错误 / 过大响应 / limit 截断）。
+
+> 剩余待办：P2-3（依赖审计，已确认 express/cors/dotenv 为修 CVE 版本，跑 `npm audit` 复核）、P2-5（N+1 资产刷新节流）、P2-8（魔法常量收敛）、P2-9（写锁 onRejected，低危暂不动）、P2-10/11/12/13/14/15（前端项，需 Vite 重建）。P0 全 3 + P1 全 7 + P2 的 1/2/4/6/7 已落地。

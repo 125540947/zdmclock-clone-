@@ -3,6 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { load, persist, todayStr, withWriteLock } from '../store.js';
+import { dbgLog } from '../log.js';
 import { runTask } from '../taskRunner.js';
 import { validateCron } from '../scheduler.js';
 import { authRequired, mutationGuard } from '../auth.js';
@@ -163,7 +164,8 @@ router.post('/captures/apply', mutationGuard, async (req, res) => {
   try {
     db = load();
   } catch (e) {
-    return res.status(500).json({ error: 'load_failed', message: '读取数据库失败：' + e.message });
+    dbgLog('[tasks] 读取数据库失败：', e.message);
+    return res.status(500).json({ error: 'load_failed', message: '读取数据失败，请稍后重试' });
   }
   const { items } = req.body || {};
   if (!Array.isArray(items) || !items.length) {
@@ -230,7 +232,8 @@ router.post('/captures/apply', mutationGuard, async (req, res) => {
   try {
     await withWriteLock(() => persist());
   } catch (e) {
-    return res.status(500).json({ error: 'persist_failed', message: '保存失败：' + e.message });
+    dbgLog('[tasks] 保存失败：', e.message);
+    return res.status(500).json({ error: 'persist_failed', message: '保存失败，请稍后重试' });
   }
   res.json({ ok: true, applied, skipped, endpoints: db.settings.taskEndpoints });
 });
@@ -302,15 +305,16 @@ router.post('/:id/run', authRequired, async (req, res) => {
     t.lastRun = todayStr();
     t.lastResult = r.result.message;
     t.status = 'done';
-    persist();
+    await withWriteLock(() => persist());
     notify(db, { title: `✅ 任务完成 · ${t.name}`, message: r.result.message }).catch(() => {});
     res.json({ ok: true, result: r.result });
   } catch (e) {
     notify(db, { title: `❌ 任务异常 · ${t.name}`, message: e.message }).catch(() => {});
     t.lastResult = e.message;
     t.status = 'error';
-    persist();
-    res.status(502).json({ error: 'adapter_error', message: e.message });
+    await withWriteLock(() => persist());
+    dbgLog('[tasks] 任务执行异常：', e.message);
+    res.status(502).json({ error: 'adapter_error', message: '任务执行异常，请稍后重试' });
   }
 });
 

@@ -53,7 +53,7 @@ router.post('/refresh', mutationGuard, async (req, res) => {
     res.json({ ok: true, fetched: items.length, added, total: db.baoliao.length });
   } catch (e) {
     dbgLog('[baoliao] refresh 失败：', e.message);
-    res.status(502).json({ error: 'fetch_failed', message: e.message });
+    res.status(502).json({ error: 'fetch_failed', message: '好价抓取失败，请稍后重试或查看服务端日志' });
   }
 });
 
@@ -184,7 +184,8 @@ router.post('/:id/submit', mutationGuard, async (req, res) => {
     item.lastResult = e.message;
     item.updatedAt = new Date().toISOString();
     await withWriteLock(() => persist());
-    res.status(502).json({ error: 'adapter_error', message: e.message });
+    dbgLog('[baoliao] 任务执行异常：', e.message);
+    res.status(502).json({ error: 'adapter_error', message: '任务执行异常，请稍后重试' });
   }
 });
 

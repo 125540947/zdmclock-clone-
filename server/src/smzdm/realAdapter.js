@@ -210,10 +210,16 @@ export async function appRequest(path, { cookie, data = {}, method = 'POST', bas
 // 取返回 data.data.channel_id。该端点属 APP 接口家族，服务端带登录 Cookie 即可用（无 www 反爬墙）。
 // 兜底：article-api 取不到时，用 www 文章页（带 Cookie）正则提取 channel_id。
 // 结果按 articleId 缓存，避免对同一条文章重复请求。
+const CHANNEL_CACHE_MAX = 1000; // P2-6：限制缓存上限，防止长期运行内存无限增长（LRU 淘汰最旧）
 const channelIdCache = new Map();
-// 最近一次成功解析到的 channel_id（smzdm 对点赞/收藏的 channel_id 不做严格校验，
-// 只要是非 0 的有效数字即可；故取不到时复用上一次成功值，保证全部文章可操作）。
-let lastGoodChannelId = null;
+// 写入时若已达上限则淘汰最旧条目（Map 保序，首个即最早插入）
+function setChannelCache(articleId, cid) {
+  if (channelIdCache.size >= CHANNEL_CACHE_MAX && !channelIdCache.has(articleId)) {
+    const oldest = channelIdCache.keys().next().value;
+    if (oldest !== undefined) channelIdCache.delete(oldest);
+  }
+  channelIdCache.set(articleId, cid);
+}
 
 export async function resolveChannelId(articleId, cookie) {
   if (!articleId) return null;
@@ -248,15 +254,15 @@ export async function resolveChannelId(articleId, cookie) {
       dbgLog('[smzdm-debug] resolveChannelId www failed:', e.message, 'articleId=', articleId);
     }
   }
-  // 3) 兜底：取不到（部分 JS 渲染页面静态 HTML 无 channel_id 字段）则复用上一次成功值，
-  //    仍无则退化为 '1'（日志已验证 channel_id=1 亦可被 smzdm 接受为有效）。
+  // 3) 兜底：取不到（部分 JS 渲染页面静态 HTML 无 channel_id 字段）则退化为 '1'。
+  //    注：不再复用"上一次成功值"做跨账号兜底——channel_id 按文章固定，且日志已验证
+  //    channel_id=1 亦可被 smzdm 接受为有效（P2-6：消除跨账号借用掩盖解析失败）。
   if (!cid) {
-    cid = lastGoodChannelId || '1';
-    dbgLog('[smzdm-debug] resolveChannelId fallback use=', cid, 'articleId=', articleId, '(article-api/www 均未取到真实 channel_id)');
+    cid = '1';
+    dbgLog('[smzdm-debug] resolveChannelId fallback use=1 articleId=', articleId, '(article-api/www 均未取到真实 channel_id)');
   }
   if (cid) {
-    lastGoodChannelId = cid;
-    channelIdCache.set(articleId, cid);
+    setChannelCache(articleId, cid);
   }
   return cid;
 }
@@ -569,32 +575,24 @@ export const realAdapter = {
   // - 任何网络异常 / 超时 / 超大响应都被捕获，调用方据此友好提示。
   async fetchBaoliao({ cookie, limit = 20, page = 1 } = {}) {
     const url = (process.env.SMZDM_BAOLIAO_URL || BASE + '/').replace(/\/$/, '') + `/?page=${page}`;
-    const timeoutMs = Number(process.env.SMZDM_REQUEST_TIMEOUT || 10000);
-    let resp;
+    // P2-7：复用 call() 统一 fetch + 超时（SMZDM_REQUEST_TIMEOUT，默认 10s），消除与 call 重复的样板。
+    // call 在非 2xx 时抛 `HTTP <status> @ <url>`，挑战页多为 202，统一转反爬引导提示。
+    let html;
     try {
-      resp = await fetch(url, {
-        headers: headers(cookie, pickUA()),
-        redirect: 'follow',
-        signal: AbortSignal.timeout(timeoutMs)
-      });
+      html = await call(url, { method: 'GET', cookie, ua: pickUA(), base: '', raw: true, referer: BASE + '/' });
     } catch (e) {
-      if (e?.name === 'TimeoutError' || e?.name === 'AbortError') {
-        throw new Error(`抓取好价超时（>${timeoutMs}ms），可能被风控或网络不通`);
+      if (/HTTP (202|40[13]|429|5\d\d)/.test(e.message)) {
+        dbgLog('[smzdm-debug] fetchBaoliao 非 2xx（疑似反爬挑战页）：', e.message);
+        throw new Error('抓取好价失败：smzdm 已对服务端启用反爬拦截（返回挑战页），服务端无法自动抓取好价。请改用浏览器导入：打开 /baoliao-import 页面，用页面里的书签一键复制 smzdm 文章链接，粘贴导入即可。');
       }
       throw new Error('抓取好价网络错误：' + e.message);
     }
-    if (!resp.ok) {
-      dbgLog('[smzdm-debug] fetchBaoliao HTTP', resp.status);
-      throw new Error(`抓取好价 HTTP ${resp.status}：smzdm 已对服务端启用反爬拦截（挑战页），服务端无法自动抓取好价。请改用浏览器导入：打开 /baoliao-import 页面，用页面里的书签一键复制 smzdm 文章链接，粘贴导入即可。`);
-    }
-    const html = await resp.text();
-    dbgLog('[smzdm-debug] fetchBaoliao http=', resp.status, 'htmlLen=', html.length);
+    if (html.length > 5_000_000) throw new Error('好价列表响应过大，已拒绝（疑似异常响应）');
     // smzdm 对服务端 IP 启用反爬挑战页（典型 HTTP 202 + ~209 字节风控页，或 200 但内容为空/验证页），
     // 此时页面里没有任何 /p/ 链接，继续往下只会得到空列表。明确报错并引导用浏览器导入，避免误导用户以为"刷新成功却没数据"。
-    if (resp.status === 202 || html.length < 600 || /验证|challenge|anti.?bot|访问验证|<title>验证/i.test(html)) {
+    if (html.length < 600 || /验证|challenge|anti.?bot|访问验证|<title>验证/i.test(html)) {
       throw new Error('抓取好价失败：smzdm 已对服务端启用反爬拦截（返回挑战页），服务端无法自动抓取好价。请改用浏览器导入：打开 /baoliao-import 页面，用页面里的书签一键复制 smzdm 文章链接，粘贴导入即可。');
     }
-    if (html.length > 5_000_000) throw new Error('好价列表响应过大，已拒绝（疑似异常响应）');
     // 抽取文章卡片：捕获 /p/<id> 链接与相邻标题文本（容忍标签嵌套）
     const cardRe = /href="\/p\/(\d+)"[^>]*>([\s\S]*?)<\/a>/gi;
     const seen = new Set();

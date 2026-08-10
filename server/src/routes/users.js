@@ -6,6 +6,7 @@ import { load, persist, genId, withWriteLock } from '../store.js';
 import { smzdm } from '../smzdm/adapter.js';
 import { config } from '../config.js';
 import { authRequired, authRequiredOrInstall, maskCookie, getClientIp, sameSegment, isAdminRequest, mutationGuard } from '../auth.js';
+import { dbgLog } from '../log.js';
 import { resolvedCheckInTime } from '../clockSchedule.js';
 import { resetRisk } from '../riskControl.js';
 
@@ -171,7 +172,7 @@ router.post('/import', authRequiredOrInstall, async (req, res) => {
     user.smzdmId = user.smzdmId || smzdmId;
   }
   await withWriteLock(() => persist());
-  res.json({ ...user, cookie: maskCookie(user.cookie), imported: true, upserted: existed });
+  res.json({ ...user, cookie: maskCookie(user.cookie), imported: true });
 });
 
 // 返回油猴抓取脚本「模板」源码（__SERVER__ / __TOKEN__ 占位符由服务端注入）。
@@ -287,7 +288,8 @@ router.get('/:id/smzdm', authRequired, async (req, res) => {
     const info = await smzdm.getUserInfo(u.cookie);
     res.json(info);
   } catch (e) {
-    res.status(502).json({ error: 'adapter_error', message: e.message });
+    dbgLog('[users] 获取账号资料失败：', e.message);
+    res.status(502).json({ error: 'adapter_error', message: '账号操作失败，请稍后重试' });
   }
 });
 
@@ -306,7 +308,8 @@ router.post('/:id/refresh', authRequired, async (req, res) => {
     await withWriteLock(() => persist());
     res.json({ ok: true, info });
   } catch (e) {
-    res.status(502).json({ error: 'adapter_error', message: e.message });
+    dbgLog('[users] 刷新账号资料失败：', e.message);
+    res.status(502).json({ error: 'adapter_error', message: '账号操作失败，请稍后重试' });
   }
 });
 
