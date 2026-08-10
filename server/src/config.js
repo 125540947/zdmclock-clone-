@@ -19,6 +19,10 @@ const apiTokenFromEnv = process.env.API_TOKEN || null;
 // 独立的管理员 Token：用于「系统更新」等高危操作，与通用 API_TOKEN 隔离（H2 修复）。
 // 未显式设置时为空（走兜底：要求通用 API_TOKEN 且 REQUIRE_AUTH 开启，绝不匿名放行）。
 const adminTokenFromEnv = process.env.ADMIN_TOKEN || null;
+// 窄权限「安装令牌」：仅用于油猴脚本自动推送 Cookie（POST /users/import），
+// 与通用 API_TOKEN / 独立 ADMIN_TOKEN 完全隔离。泄露后仅能新增/更新被录入的 smzdm 账号，
+// 无法读取或删除已有数据；改 .env 的 INSTALL_TOKEN 即可立即吊销。默认空。
+const installTokenFromEnv = process.env.INSTALL_TOKEN || null;
 
 export const config = {
   port: Number(process.env.PORT || 3000),
@@ -49,6 +53,10 @@ export const config = {
   // 独立管理员 Token（高危操作鉴权）。未配置时为空，由 requireAdmin 走兜底策略。
   adminToken: adminTokenFromEnv,
   adminTokenIsDefault: !adminTokenFromEnv,
+  // 窄权限安装令牌（见 installTokenFromEnv）。默认空：OPEN_MODE 下 /users/import 本就匿名可调用；
+  // REQUIRE_AUTH 下若未显式配置，油猴脚本将无法自动推送（避免把全权限 API_TOKEN 写进可分发脚本）。
+  installToken: installTokenFromEnv,
+  installTokenIsDefault: !installTokenFromEnv,
   smzdmAdapter: process.env.SMZDM_ADAPTER || 'mock',
   // real 适配器对外请求超时（毫秒），避免 smzdm 挂起时 Promise 永久 pending
   smzdmRequestTimeout: Number(process.env.SMZDM_REQUEST_TIMEOUT || 10000),

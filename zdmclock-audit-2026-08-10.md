@@ -51,6 +51,7 @@
 - **位置**：`web/src/views/Users.vue:158`（`installUrl` 拼 `?token=`）、`Users.vue:275-281`（`bake()` 把 token 烘焙进 `.user.js`）
 - **问题**：真实会话 token 进 URL（落入浏览器历史/Referer/访问日志），且被固化进可一键安装的用户脚本（浏览器明文留存，外泄即等同凭证泄露）。
 - **修复**：安装脚本改用一次性/可吊销的安装令牌或 POST 获取；URL 不携带真实会话 token，脚本内不固化用户会话 token。
+- **✅ 已落地（2026-08-10 续，commit 待生成/待推送）**：引入独立窄权限 `INSTALL_TOKEN`（env，默认空，scope 仅 `POST /users/import`，与 API/Admin/会话 token 完全隔离、改 .env 即吊销）；两个脚本路由（`/import-script`、`/import-script.user.js`）改为公开并注入 `config.installToken`，**不再注入会话 token、移除 `?token=` 查询**（URL 不再携带任何 token，消除历史/Referer/日志泄露面）；`POST /users/import` 鉴权由 `authRequired` 升级为 `authRequiredOrInstall`（接受 apiToken/adminToken/installToken）；前端 `installUrl` 去除 `&token=`、`bake()` 仅注入服务地址、不再固化会话 token。自检 12 项通过（含路由集成：脚本注入 installToken、忽略 `?token=` 会话、无残留 `__TOKEN__` 占位符）。需前端重建（Vite build + 入库 bundle）。
 
 ### P1-3 GPT 批量生成长期持有全局写锁，阻塞签到
 - **位置**：`server/src/taskRunner.js:262`（`runGptBatch` 在 `withWriteLock` 内对每条草稿 `await generateReply`）
@@ -136,5 +137,6 @@
 
 - **P1-5 时区一致性**：`taskRunner.js` 定时签到分支 `schedToday`/`schedYesterday` 统一走 `todayStrTZ`/`yesterdayStrTZ`（commit 待生成）。
 - **P1-6 解析去重**：新建 `server/src/smzdm/parse.js` 收敛 `parseJsonp`/`removeTags`/`extractReward`；`realAdapter`/`tasks_real`/`taskMatrix`/`extremeLazy` 共用；`parseJsonp` 修复 `)]}'`+`callback()` 漏解外壳、`extremeLazy.collectArticleIds` 改用 `normalizeArticleId`。
+- **P1-2 会话 Token 不泄露（含前端重建）**：见上文 P1-2 落地说明。`config.js` 新增 `installToken`；`auth.js` 新增 `authRequiredOrInstall`；`users.js` 两个脚本路由公开并注入 `installToken`（`POST /import` 改用 `authRequiredOrInstall`）；前端 `installUrl` 去 `&token=`、`bake()` 仅注入服务地址。需 Vite build + 入库 `web/dist`（本环境已 `npm install` 并完成构建）。
 
-> 剩余待办：P1-2（会话 Token 进 URL/可分发脚本，需前端重建）、P2-1~15（P2-9 写锁 onRejected 经评估为低危、暂不改动以免改变错误传播语义）。
+> 剩余待办：P2-1~15（P2-9 写锁 onRejected 经评估为低危、暂不改动以免改变错误传播语义）。P0 全 3 项 + P1 全 7 项均已落地（P0-3/1/2 已推送；P1-3/7、P1-4/1、P1-5/6、P1-2 待推送）。

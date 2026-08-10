@@ -153,9 +153,10 @@ const autoWindow = ref('08:00~10:59');
 const defaultTime = ref('09:00');
 const scriptText = ref('');
 const loadingScript = ref(false);
-// 一键安装链接：指向服务端注入好「服务地址 + Token」的 .user.js，油猴导航到此即弹安装。
-// 开启鉴权时浏览器直链无法带 Authorization 头，故把已登录会话的 token 作为 ?token= 传入（脚本本身就会含该 token）。
-const installUrl = `/api/users/import-script.user.js?server=${encodeURIComponent(window.location.origin)}&token=${encodeURIComponent(localStorage.getItem('zdm_token') || '')}`;
+// 一键安装链接：指向服务端注入好「服务地址 + 窄权限 INSTALL_TOKEN」的 .user.js，油猴导航到此即弹安装。
+// 链接不再携带会话 token（P1-2 修复）：浏览器直链本就无法带 Authorization 头，原用 ?token= 传入会话 token 会落入
+// 历史/Referer/日志；现改为服务端注入窄权限 INSTALL_TOKEN，URL 干净、泄露面更小。
+const installUrl = `/api/users/import-script.user.js?server=${encodeURIComponent(window.location.origin)}`;
 const showScript = ref(false);
 
 
@@ -269,15 +270,12 @@ onMounted(async () => {
   }
 });
 
-// ===== 油猴抓取脚本：复制 / 查看（客户端把服务地址 + Token 注入模板）=====
-// 把模板里的 __SERVER__ / __TOKEN__ 占位符替换为当前访问地址与已登录会话的 Token，
-// 这样用户无需在油猴菜单里手填，复制出去的脚本开箱即用。
+// ===== 油猴抓取脚本：复制 / 查看（客户端仅注入服务地址；Token 由服务端注入窄权限 INSTALL_TOKEN）=====
+// 把模板里的 __SERVER__ 占位符替换为当前访问地址；__TOKEN__ 已由服务端在 /import-script(.user.js) 注入
+// 为窄权限 INSTALL_TOKEN（非会话 token，见 P1-2 修复），前端不再接触、也不固化任何会话令牌。
 function bake(raw) {
   const origin = window.location.origin;
-  const token = localStorage.getItem('zdm_token') || '';
-  return String(raw)
-    .replace(/__SERVER__/g, JSON.stringify(origin))
-    .replace(/__TOKEN__/g, JSON.stringify(token));
+  return String(raw).replace(/__SERVER__/g, JSON.stringify(origin));
 }
 async function ensureScript() {
   if (scriptText.value) return;

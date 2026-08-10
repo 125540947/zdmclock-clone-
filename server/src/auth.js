@@ -30,6 +30,18 @@ export function authRequiredOrQuery(req, res, next) {
   return res.status(401).json({ error: 'unauthorized', message: '缺少或无效的 Token' });
 }
 
+// 录入接口专用：除通用 API_TOKEN / 独立 ADMIN_TOKEN 外，额外接受窄权限 INSTALL_TOKEN（Bearer 或 ?token= 二选一）。
+// 油猴脚本自动推送 Cookie（POST /users/import）使用 INSTALL_TOKEN，避免把全权限会话/API token 固化进可分发脚本（P1-2 修复）。
+export function authRequiredOrInstall(req, res, next) {
+  if (config.openMode || !config.requireAuth) return next();
+  const h = req.headers.authorization || '';
+  const bearer = h.startsWith('Bearer ') ? h.slice(7) : '';
+  const q = String(req.query.token || '');
+  const candidates = [config.apiToken, config.adminToken, config.installToken].filter(Boolean);
+  if (candidates.some((c) => (bearer && safeEqual(bearer, c)) || (q && safeEqual(q, c)))) return next();
+  return res.status(401).json({ error: 'unauthorized', message: '缺少或无效的 Token' });
+}
+
 // 管理级 / 高危操作鉴权（H2 修复）：用于「系统更新」等会执行 git pull + 重启的接口。
 // 关键差异：不受 REQUIRE_AUTH=false 影响——更新接口永远需要鉴权，绝不匿名放行。
 // 优先级：

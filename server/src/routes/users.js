@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { load, persist, genId, withWriteLock } from '../store.js';
 import { smzdm } from '../smzdm/adapter.js';
 import { config } from '../config.js';
-import { authRequired, authRequiredOrQuery, maskCookie, getClientIp, sameSegment, isAdminRequest, mutationGuard } from '../auth.js';
+import { authRequired, authRequiredOrInstall, maskCookie, getClientIp, sameSegment, isAdminRequest, mutationGuard } from '../auth.js';
 import { resolvedCheckInTime } from '../clockSchedule.js';
 import { resetRisk } from '../riskControl.js';
 
@@ -115,7 +115,7 @@ router.post('/', authRequired, async (req, res) => {
 
 // 自动抓取导入（油猴脚本等自动工具调用）：按 smzdmId upsert。
 // 与 POST / 的区别：同名账号（同一 smzdmId）只更新 cookie，不重复建号。
-router.post('/import', authRequired, async (req, res) => {
+router.post('/import', authRequiredOrInstall, async (req, res) => {
   const { cookie, nickname } = req.body || {};
   if (typeof cookie !== 'string' || !cookie.trim()) {
     return res.status(400).json({ error: 'missing_cookie', message: 'cookie 必填且为字符串' });
@@ -174,33 +174,34 @@ router.post('/import', authRequired, async (req, res) => {
   res.json({ ...user, cookie: maskCookie(user.cookie), imported: true, upserted: existed });
 });
 
-// 返回油猴抓取脚本「模板」源码（含 __SERVER__ / __TOKEN__ 占位符，前端「复制 / 查看」降级用）。
-// 该模板不含任何服务端密钥，且本接口本身就不带鉴权依赖，故设为公开可读，
-// 以便前端用纯 <a download> 直链 / 文本复制——HTTP（非 HTTPS/localhost）下也能稳定触发。
-// 真正免去手动配置的是下方的 /import-script.user.js 一键安装版。
+// 返回油猴抓取脚本「模板」源码（__SERVER__ / __TOKEN__ 占位符由服务端注入）。
+// 公开可读（与下方 .user.js 一致），但注入的 __TOKEN__ 仅为窄权限 INSTALL_TOKEN（非会话 token，见 P1-2 修复）。
 router.get('/import-script', (req, res) => {
   try {
     const code = fs.readFileSync(SCRIPT_PATH, 'utf8');
-    res.type('text/javascript').send(code);
+    const server = String(req.protocol + '://' + (req.headers.host || ''));
+    const baked = code
+      .replace(/__SERVER__/g, JSON.stringify(server))
+      .replace(/__TOKEN__/g, JSON.stringify(config.installToken || ''));
+    res.type('text/javascript').send(baked);
   } catch {
     res.status(404).json({ error: 'not_found', message: '脚本文件不存在（请确认 tools/cookie-grabber.user.js）' });
   }
 });
 
-// 一键安装版脚本：把服务地址 + Token 直接注入模板，用户无需在油猴菜单里手动填写。
+// 一键安装版脚本：把服务地址 + 窄权限 INSTALL_TOKEN 注入模板，用户无需在油猴菜单里手动填写。
 // URL 以 .user.js 结尾且返回 text/javascript，浏览器导航到此链接时油猴会自动弹出安装对话框。
+// 安全（P1-2 修复）：① 本接口公开可读，但注入的 __TOKEN__ 仅为窄权限 INSTALL_TOKEN（scope 仅 POST /users/import），
+//    绝不写入用户会话 token；② 链接不再携带 ?token= 查询参数，消除浏览器历史/Referer/访问日志泄露面。
 // - server：优先取前端通过 ?server= 传入的真实访问地址（穿透反代/HTTPS 也正确）；缺省回退 Host 头拼接。
-// - token ：优先取前端通过 ?token= 传入的已登录会话 Token（一键安装直链由前端注入）；缺省回退 config.apiToken。
-// 鉴权（authRequiredOrQuery）：开启 REQUIRE_AUTH 时，允许 Bearer 头或 ?token= 查询参数二选一。
-//   浏览器直接导航 .user.js 无法带 Authorization 头，故前端把已登录会话的 token 作为 ?token= 传入；
-//   该 token 本就会写进脚本用于自动推送 Cookie，用 query 传不增加额外泄露面，从而「一键安装」在开启鉴权时也可用。
-router.get('/import-script.user.js', authRequiredOrQuery, (req, res) => {
+// - token ：注入 config.installToken（窄权限；REQUIRE_AUTH 下未配置则为空，脚本自动推送会 401——此时请改用「录入账号」页手动录入）。
+router.get('/import-script.user.js', (req, res) => {
   try {
     const code = fs.readFileSync(SCRIPT_PATH, 'utf8');
     const server = String(
       req.query.server || `${req.protocol}://${req.headers.host || ''}`
     );
-    const token = String(req.query.token || config.apiToken || '');
+    const token = config.installToken || '';
     const baked = code
       .replace(/__SERVER__/g, JSON.stringify(server))
       .replace(/__TOKEN__/g, JSON.stringify(token));
