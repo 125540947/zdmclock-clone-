@@ -280,7 +280,14 @@ export function mergeBaoliao(items = []) {
     if (!it || typeof it !== 'object') continue;
     const url = String(it.smzdmUrl || it.url || '').trim();
     if (!/^https?:\/\//i.test(url)) continue; // 只接受合法 http(s) 链接
-    if (cache.baoliao.some((x) => (x.smzdmUrl || x.url || '') === url)) continue;
+    const existing = cache.baoliao.find((x) => (x.smzdmUrl || x.url || '') === url);
+    if (existing) {
+      // 幂等：重导相同链接时刷新可覆盖的元数据（channelId 等），避免每次都要先清空旧好价才能更新频道。
+      // 仅当本次明确携带 channelId 时才覆盖，避免误清空已有值。
+      if (it.channelId) existing.channelId = String(it.channelId).slice(0, 20);
+      existing.updatedAt = now;
+      continue;
+    }
     cache.baoliao.unshift({
       id: genId('bl'),
       userId: null,

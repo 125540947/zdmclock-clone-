@@ -40,6 +40,20 @@ test('mergeBaoliao 新增并按 smzdmUrl 去重', () => {
   assert.equal(db.baoliao.length, 1);
 });
 
+test('mergeBaoliao 重导相同链接幂等更新 channelId（不新增、不覆盖原标题）', () => {
+  const db = load();
+  db.baoliao.length = 0;
+  mergeBaoliao([{ smzdmUrl: 'https://www.smzdm.com/p/111', title: 'A' }]);
+  assert.equal(db.baoliao.length, 1);
+  assert.equal(db.baoliao[0].channelId, '');
+  // 重导携带 channelId=3（导入页曾填过频道 ID）
+  const b = mergeBaoliao([{ smzdmUrl: 'https://www.smzdm.com/p/111', channelId: '3', title: 'A2' }]);
+  assert.equal(b, 0, '重导不应新增');
+  assert.equal(db.baoliao.length, 1);
+  assert.equal(db.baoliao[0].channelId, '3', '重导应刷新 channelId');
+  assert.equal(db.baoliao[0].title, 'A', '未携带 title 时不覆盖原标题');
+});
+
 test('mergeBaoliao 缺 smzdmUrl 时回退 url 字段', () => {
   const db = load();
   db.baoliao.length = 0;
