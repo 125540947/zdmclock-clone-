@@ -121,7 +121,7 @@
 > 本报告为只读审计（2026-08-10 初版）。
 
 ## 七、P0 修复追加（2026-08-10 续）
-用户要求落地 P0，已实施并通过自检（commit 已 push 至 `origin/main`，未改前端、无需重建）：
+用户要求落地 P0，已实施并通过自检（commit `34af60f` 已提交本地，待推送——当前环境无可用 GitHub 凭据、推送被 401 拒绝；凭据可用后 `git push` 即生效；未改前端、无需重建）：
 - **P0-1 端点 SSRF**：`notifier.js` 导出 `isSafePushUrl`；`routes/tasks.js` 的 `PUT /endpoints` 与 `POST /captures/apply` 改 `mutationGuard`（OPEN_MODE 下须 `ADMIN_TOKEN`），并对 `endpoint`/`referer` 做 `isSafePushUrl` 校验（非法返回 `unsafe_endpoint`/`unsafe_referer`，captures 应用则跳过并注明原因）；`realAdapter.js` 的 `call` 增加 SSRF 纵深防御（统一出口拒绝私有/回环/链路本地地址，即使上层被绕过也拦住 `169.254.169.254` 等内网探测）。自检：`isSafePushUrl` 对 9 个私有/回环/链路本地用例全部拦截、4 个公网用例全部放行；`call('http://169.254.169.254/...')` 在 `fetch` 前即抛「拒绝请求非公网地址」。
 - **P0-2 XFF 伪造**：`config.js` 的 `trustProxy` 不再由 `OPEN_MODE` 自动开启（默认 `false`），仅在确有多层可信反代时显式 `TRUST_PROXY=true`。直连暴露下 `req.ip` 为真实套接字对端、不可伪造，匿名无法借 XFF 命中同 /24 读他人数据。
 - P1/P2 暂未实施，待后续排期。

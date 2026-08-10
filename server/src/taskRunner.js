@@ -15,6 +15,7 @@ import {
 } from './riskControl.js';
 import { runCustomEndpointTask, CUSTOM_TYPES } from './taskMatrix.js';
 import { applyAssetEffect, taskNameOf } from './assetLedger.js';
+import { dbgLog } from './log.js';
 
 const CUSTOM_SET = new Set(CUSTOM_TYPES);
 
@@ -127,7 +128,7 @@ async function runEngagement(task, db, user, opts) {
         const longSpan = Math.max(0, config.engagementDelayLongMaxMs - config.engagementDelayMinMs);
         await sleep(jitterDelay(config.engagementDelayMinMs, longSpan));
       }
-      console.log('[smzdm-debug] engagement 拟人化等待后继续：第', idx + 1, '/', articleIds.length, '篇，articleId=', aid);
+      dbgLog('[smzdm-debug] engagement 拟人化等待后继续：第', idx + 1, '/', articleIds.length, '篇，articleId=', aid);
     }
     try {
       const r =
@@ -259,48 +260,52 @@ async function runGptBatch(task, db) {
   let failed = 0;
   const errors = [];
   const drafts = [];
-  await withWriteLock(async () => {
-    for (const item of items) {
-      const text =
-        `文章：${item.smzdmUrl || item.url || ''}\n` +
-        `标题：${item.title || ''}\n内容：${item.content || ''}`;
-      try {
-        const reply = await generateReply({
-          text,
-          tone: db.settings.gpt.tone,
-          prompt: db.settings.gpt.prompt
-        });
-        const aid = normalizeArticleId(item.smzdmUrl || item.url || '');
-        const draft = {
-          id: genId('gd'),
-          sourceItemId: item.id,
-          articleId: aid,
-          content: reply,
-          status: 'generated',
-          autoPost: false,
-          createdAt: new Date().toISOString()
-        };
-        if (task.autoPost && aid && user) {
-          try {
-            await smzdm.doComment(user.cookie, { count: 1, articleId: aid, content: reply });
-            draft.status = 'posted';
-            draft.autoPost = true;
-            posted += 1;
-          } catch (e) {
-            draft.status = 'post_failed';
-            errors.push(`文章 ${aid} 自动发布失败：${e.message}`);
-          }
+  // P1-3：LLM 生成与自动发布（网络 IO，最多 10 条 LLM 往返）在写锁外完成，
+  // 避免独占全局写链、阻塞并发签到（runClockForUser → withWriteLock）。最后一次性持锁落账。
+  for (const item of items) {
+    const text =
+      `文章：${item.smzdmUrl || item.url || ''}\n` +
+      `标题：${item.title || ''}\n内容：${item.content || ''}`;
+    try {
+      const reply = await generateReply({
+        text,
+        tone: db.settings.gpt.tone,
+        prompt: db.settings.gpt.prompt
+      });
+      const aid = normalizeArticleId(item.smzdmUrl || item.url || '');
+      const draft = {
+        id: genId('gd'),
+        sourceItemId: item.id,
+        articleId: aid,
+        content: reply,
+        status: 'generated',
+        autoPost: false,
+        createdAt: new Date().toISOString()
+      };
+      if (task.autoPost && aid && user) {
+        try {
+          await smzdm.doComment(user.cookie, { count: 1, articleId: aid, content: reply });
+          draft.status = 'posted';
+          draft.autoPost = true;
+          posted += 1;
+        } catch (e) {
+          draft.status = 'post_failed';
+          errors.push(`文章 ${aid} 自动发布失败：${e.message}`);
         }
-        db.gptDrafts.unshift(draft);
-        // R5：限制草稿上限，避免长期运行后 db.json 无限膨胀
-        if (db.gptDrafts.length > 200) db.gptDrafts.length = 200;
-        drafts.push(draft);
-        gen += 1;
-      } catch (e) {
-        failed += 1;
-        errors.push(`「${item.title || item.id}」生成失败：${e.message}`);
       }
+      drafts.push(draft);
+      gen += 1;
+    } catch (e) {
+      failed += 1;
+      errors.push(`「${item.title || item.id}」生成失败：${e.message}`);
     }
+  }
+  // 一次性持锁落账：仅此处的 db 写入与 persist 进入串行写链，
+  // 保持与原行为一致（按生成顺序 unshift，最新草稿在头部）。
+  await withWriteLock(() => {
+    for (const d of drafts) db.gptDrafts.unshift(d);
+    // R5：限制草稿上限，避免长期运行后 db.json 无限膨胀
+    if (db.gptDrafts.length > 200) db.gptDrafts.length = 200;
     persist();
   });
   if (gen === 0) {

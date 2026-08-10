@@ -10,6 +10,7 @@ import {
   sameSegment,
   isAdminRequest
 } from '../auth.js';
+import { dbgLog } from '../log.js';
 import { normalizeArticleId } from '../smzdm/articleId.js';
 
 const router = Router();
@@ -37,10 +38,10 @@ router.post('/refresh', mutationGuard, async (req, res) => {
   const { limit } = req.body || {};
   const lim = Math.min(50, Math.max(1, Number(limit) || 20));
   try {
-    console.log('[baoliao] refresh 开始：limit=', lim);
+    dbgLog('[baoliao] refresh 开始：limit=', lim);
     const fetched = await smzdm.fetchBaoliao({ limit: lim });
     const items = (fetched && fetched.items) || [];
-    console.log('[baoliao] refresh 完成：fetched=', items.length);
+    dbgLog('[baoliao] refresh 完成：fetched=', items.length);
     if (!items.length) {
       return res.status(502).json({ error: 'no_items', message: '未抓取到好价（页面结构可能已变更或被风控）' });
     }
@@ -51,7 +52,7 @@ router.post('/refresh', mutationGuard, async (req, res) => {
     });
     res.json({ ok: true, fetched: items.length, added, total: db.baoliao.length });
   } catch (e) {
-    console.log('[baoliao] refresh 失败：', e.message);
+    dbgLog('[baoliao] refresh 失败：', e.message);
     res.status(502).json({ error: 'fetch_failed', message: e.message });
   }
 });
