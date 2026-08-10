@@ -54,12 +54,18 @@ export function collectArticleIds(task, db, articleSource, overrideId) {
       const raw = item.smzdmUrl || item.url || '';
       if (!raw) continue;
       const aid = normalizeArticleId(raw);
-      if (aid && !ids.includes(aid)) ids.push(aid);
+      if (aid && !ids.some((x) => x.id === aid)) {
+        // 携带条目自身的 channelId（若浏览器导入时已解析），供点赞/收藏 APP 接口使用，
+        // 避免服务端在反爬下取不到好价/Deal 贴真实频道而退化成 '1'。
+        ids.push({ id: aid, channelId: item.channelId ? String(item.channelId) : '' });
+      }
     }
     return ids;
   }
   const id = (overrideId && String(overrideId).trim()) || (task.articleId && String(task.articleId).trim()) || '';
-  return id ? [id] : [];
+  // manual 来源：仅当使用任务自身 articleId 时才透传 task.channelId（overrideId 为一次性指定，不应套用任务频道）
+  const usingTaskArticle = !(overrideId && String(overrideId).trim());
+  return id ? [{ id, channelId: usingTaskArticle && task.channelId ? String(task.channelId) : '' }] : [];
 }
 
 // 从数组中随机取 n 个不重复元素（Fisher-Yates 洗牌后取前 n），rng 可注入便于单测。
@@ -117,7 +123,9 @@ async function runEngagement(task, db, user, opts) {
   const errors = [];
   const results = [];
   for (let idx = 0; idx < articleIds.length; idx++) {
-    const aid = articleIds[idx];
+    const entry = articleIds[idx];
+    const aid = entry.id;
+    const chId = entry.channelId || null;
     // 拟人化不规则等待：每条操作之间随机延迟（首条不等待），偶发"长思考"停顿打破节奏，
     // 避免固定频率被 smzdm 风控识别为批量脚本。
     if (idx > 0) {
@@ -134,8 +142,8 @@ async function runEngagement(task, db, user, opts) {
         action === 'comment'
           ? await smzdm.doComment(user.cookie, { count: perArticleCount, articleId: aid })
           : action === 'favorite'
-          ? await smzdm.doFavorite(user.cookie, { count: perArticleCount, articleId: aid })
-          : await smzdm.doPoint(user.cookie, { count: perArticleCount, articleId: aid });
+          ? await smzdm.doFavorite(user.cookie, { count: perArticleCount, articleId: aid, channelId: chId })
+          : await smzdm.doPoint(user.cookie, { count: perArticleCount, articleId: aid, channelId: chId });
       done += r.count || 1;
       results.push(r.message);
     } catch (e) {

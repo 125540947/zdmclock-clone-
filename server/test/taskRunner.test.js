@@ -23,18 +23,21 @@ function mockFetchOnce(body) {
   globalThis.fetch = async () => ({ ok: true, json: async () => body });
 }
 
-test('collectArticleIds baoliao 来源提取并去重', () => {
+test('collectArticleIds baoliao 来源提取并去重，携带条目 channelId', () => {
   const db = { baoliao: [
-    { smzdmUrl: 'https://x/p/111' },
+    { smzdmUrl: 'https://x/p/111', channelId: '10' },
     { url: 'https://x/p/222' },
-    { smzdmUrl: 'https://x/p/111' }
+    { smzdmUrl: 'https://x/p/111', channelId: '10' }
   ] };
-  assert.deepEqual(collectArticleIds({ type: 'comment' }, db, 'baoliao', ''), ['111', '222']);
+  assert.deepEqual(collectArticleIds({ type: 'comment' }, db, 'baoliao', ''), [
+    { id: '111', channelId: '10' },
+    { id: '222', channelId: '' }
+  ]);
 });
 
-test('collectArticleIds manual 来源：overrideId 优先于 task.articleId', () => {
-  assert.deepEqual(collectArticleIds({ articleId: '888' }, {}, 'manual', '999'), ['999']);
-  assert.deepEqual(collectArticleIds({ articleId: '888' }, {}, 'manual', ''), ['888']);
+test('collectArticleIds manual 来源：overrideId 优先于 task.articleId，透传 task.channelId', () => {
+  assert.deepEqual(collectArticleIds({ articleId: '888', channelId: '7' }, {}, 'manual', '999'), [{ id: '999', channelId: '' }]);
+  assert.deepEqual(collectArticleIds({ articleId: '888', channelId: '7' }, {}, 'manual', ''), [{ id: '888', channelId: '7' }]);
   assert.deepEqual(collectArticleIds({ articleId: '' }, {}, 'manual', ''), []);
 });
 

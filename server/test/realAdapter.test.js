@@ -13,7 +13,8 @@ import {
   signFormData,
   pickUA,
   actionJitter,
-  extractSess
+  extractSess,
+  resolveChannelId
 } from '../src/smzdm/realAdapter.js';
 
 // ---- call() 依赖全局 fetch，统一 mock ----
@@ -212,6 +213,29 @@ test('doPoint：点赞成功（data.msg 提示，error_code=0 即成功）', asy
   assert.equal(r.success, true);
   assert.equal(gotBody.channel_id, '3');
   assert.ok(gotBody.sign);
+});
+
+test('resolveChannelId：preferredChannelId 直接复用，不发起网络请求', async () => {
+  // 不注入 fetch；preferred 命中即短路返回，绝不走到 article-api/www 解析
+  const cid = await resolveChannelId('999', 'sess=x', '42');
+  assert.equal(cid, '42');
+});
+
+test('doFavorite：传入 channelId 透传给真实 resolveChannelId 并短路复用', async () => {
+  let gotBody = null;
+  const callImpl = async (path, opts) => {
+    gotBody = opts.body;
+    return { error_code: 0 };
+  };
+  // 不注入 resolveChannelIdImpl → 走真实 resolveChannelId，preferredChannelId 命中即短路，不发起网络解析
+  const r = await realAdapter.doFavorite('sess=abc', {
+    articleId: '555',
+    channelId: '42',
+    callImpl,
+    sleepImpl: async () => {}
+  });
+  assert.equal(r.success, true);
+  assert.equal(gotBody.channel_id, '42', '应直接使用传入的 channelId，不重新解析');
 });
 
 test('submitBaoliao：成功返回链接', async () => {

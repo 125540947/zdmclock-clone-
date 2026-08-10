@@ -221,8 +221,26 @@ function setChannelCache(articleId, cid) {
   channelIdCache.set(articleId, cid);
 }
 
-export async function resolveChannelId(articleId, cookie) {
+// 退化 channel_id=1 是好价/Deal 互动失败的高危点（该贴真实频道≠1，smzdm 会拒为"无效的评论类型"）。
+// 去重告警一次，便于在普通日志（无需 SMZDM_DEBUG）中直接发现"取数失败→退化"这一根因。
+const degradedWarned = new Set();
+function warnDegradedChannel(articleId) {
+  if (degradedWarned.has(articleId)) return;
+  degradedWarned.add(articleId);
+  console.warn(
+    `[smzdm] 文章 ${articleId} 的 channel_id 取数失败，已退化使用 '1'（好价/Deal 贴真实频道≠1，可能被 smzdm 拒绝；建议从浏览器导入时携带真实 channel_id）`
+  );
+}
+
+export async function resolveChannelId(articleId, cookie, preferredChannelId = null) {
   if (!articleId) return null;
+  // 优先使用上层显式提供的真实 channel_id（如浏览器导入时已解析、或任务配置手动指定），
+  // 避免服务端在数据中心 IP 反爬下取数失败而退化成 '1'（好价/Deal 贴真实频道≠1，会被 smzdm 拒为"无效的评论类型"）。
+  if (preferredChannelId && String(preferredChannelId).trim()) {
+    const cid = String(preferredChannelId).trim();
+    setChannelCache(articleId, cid);
+    return cid;
+  }
   if (channelIdCache.has(articleId)) return channelIdCache.get(articleId);
   let cid = null;
   // 1) article-api 文章详情（GET + 社区签名，与 user-api 同机制）。
@@ -260,6 +278,7 @@ export async function resolveChannelId(articleId, cookie) {
   if (!cid) {
     cid = '1';
     dbgLog('[smzdm-debug] resolveChannelId fallback use=1 articleId=', articleId, '(article-api/www 均未取到真实 channel_id)');
+    warnDegradedChannel(articleId);
   }
   if (cid) {
     setChannelCache(articleId, cid);
@@ -488,7 +507,8 @@ export const realAdapter = {
     const articleId = normalizeArticleId(opts.articleId);
     if (!articleId) throw new Error('收藏需要 articleId（请在自动任务里填写目标文章ID或链接）');
     // 点赞/收藏 APP 接口必填文章真实 channel_id；传 '0' 会被 smzdm 拒绝为"无效的评论类型"。
-    const channelId = await resolveCid(articleId, cookie);
+    // 若上层（浏览器导入/任务配置）已提供真实 channel_id，则直接复用，跳过脆弱的服务端取数。
+    const channelId = await resolveCid(articleId, cookie, opts.channelId || null);
     if (!channelId) throw new Error('收藏失败：无法解析文章频道ID（channel_id），请确认 Cookie 有效且该文章存在');
     const count = Math.min(Math.max(1, Number(opts.count) || 1), 5);
     let last;
@@ -509,7 +529,11 @@ export const realAdapter = {
       last = await req(ENDPOINTS.favorite, { method: 'POST', cookie, ua, body: signed, base: API_BASE });
       dbgLog('[smzdm-debug] favorite raw:', JSON.stringify(last).slice(0, 800), 'articleId=', articleId, 'channelId=', channelId, 'cookieLen=', (cookie || '').length);
       if (isSoftSuccess(last)) { last = last; continue; } // 已收藏/已经收藏 = 软成功
-      assertOk(last, '收藏');
+      try {
+        assertOk(last, '收藏');
+      } catch (e) {
+        throw new Error(`${e.message}（已用 channel_id=${channelId}）`);
+      }
     }
     return { success: true, message: `收藏成功 ×${count}（文章 ${articleId}）`, count, articleId, uas: [...uas] };
   },
@@ -521,7 +545,8 @@ export const realAdapter = {
     const articleId = normalizeArticleId(opts.articleId);
     if (!articleId) throw new Error('点赞需要 articleId（请在自动任务里填写目标文章ID或链接）');
     // 点赞 APP 接口必填文章真实 channel_id；传 '0' 会被 smzdm 拒绝为"无效的评论类型"。
-    const channelId = await resolveCid(articleId, cookie);
+    // 若上层（浏览器导入/任务配置）已提供真实 channel_id，则直接复用，跳过脆弱的服务端取数。
+    const channelId = await resolveCid(articleId, cookie, opts.channelId || null);
     if (!channelId) throw new Error('点赞失败：无法解析文章频道ID（channel_id），请确认 Cookie 有效且该文章存在');
     const count = Math.min(Math.max(1, Number(opts.count) || 1), 5);
     let last;
@@ -543,7 +568,11 @@ export const realAdapter = {
       last = await req(ENDPOINTS.point, { method: 'POST', cookie, ua, body: signed, base: API_BASE });
       dbgLog('[smzdm-debug] point raw:', JSON.stringify(last).slice(0, 800), 'articleId=', articleId, 'channelId=', channelId, 'cookieLen=', (cookie || '').length);
       if (isSoftSuccess(last)) { last = last; continue; } // 已赞/已经点赞 = 软成功
-      assertOk(last, '点赞');
+      try {
+        assertOk(last, '点赞');
+      } catch (e) {
+        throw new Error(`${e.message}（已用 channel_id=${channelId}）`);
+      }
     }
     return { success: true, message: `点赞成功 ×${count}（文章 ${articleId}）`, count, articleId, uas: [...uas] };
   },

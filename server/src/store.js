@@ -291,6 +291,7 @@ export function mergeBaoliao(items = []) {
       content: String(it.content || '').slice(0, 2000),
       status: 'fetched',
       smzdmUrl: url,
+      channelId: String(it.channelId || '').slice(0, 20),
       lastResult: '',
       createdAt: now,
       updatedAt: now
