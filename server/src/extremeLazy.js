@@ -11,6 +11,8 @@ import { smzdm } from './smzdm/adapter.js';
 import { generateReply } from './gptAdapter.js';
 import { applyAssetEffect, taskNameOf } from './assetLedger.js';
 import { notify } from './notifier.js';
+import { normalizeArticleId } from './smzdm/articleId.js';
+import { removeTags, extractReward } from './smzdm/parse.js';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const JITTER_MIN = 600;
@@ -20,29 +22,17 @@ function jitter() {
   return JITTER_MIN + Math.floor(Math.random() * (JITTER_MAX - JITTER_MIN + 1));
 }
 
-// 收集文章 ID 列表
+// 收集文章 ID 列表（与 taskRunner.collectArticleIds 统一用 normalizeArticleId，
+// 避免极端懒人流水线与其他路径对同一文章抽出不同 ID 导致互动/分享定位错乱）
 function collectArticleIds(db) {
   const ids = [];
   for (const item of db.baoliao || []) {
     const raw = item.smzdmUrl || item.url || '';
     if (!raw) continue;
-    const m = raw.match(/\/p\/(\d+)/);
-    if (m && !ids.includes(m[1])) ids.push(m[1]);
+    const aid = normalizeArticleId(raw);
+    if (aid && !ids.includes(aid)) ids.push(aid);
   }
   return ids;
-}
-
-// 从响应中提取奖励文案（best-effort）
-function extractReward(text) {
-  const t = String(text || '').replace(/<[^<]+?>/g, ' ').replace(/\s+/g, ' ').trim();
-  let gold = 0, silver = 0, exp = 0;
-  const g = t.match(/(\d+(?:\.\d+)?)\s*(?:金币|金豆)/);
-  if (g) gold += parseFloat(g[1]) || 0;
-  const s = t.match(/(\d+(?:\.\d+)?)\s*(?:碎银|碎银子)/);
-  if (s) silver += parseFloat(s[1]) || 0;
-  const e = t.match(/(\d+(?:\.\d+)?)\s*点?\s*经验/) || t.match(/经验[+：:]\s*(\d+(?:\.\d+)?)/);
-  if (e) exp += parseFloat(e[1]) || 0;
-  return { gold, silver, exp };
 }
 
 export async function runExtremeLazy(opts = {}) {

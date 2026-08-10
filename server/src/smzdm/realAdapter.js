@@ -14,6 +14,7 @@
 import crypto from 'node:crypto';
 import { normalizeArticleId } from './articleId.js';
 import { isSafePushUrl } from '../notifier.js';
+import { parseJsonp, removeTags } from './parse.js';
 
 const BASE = (process.env.SMZDM_BASE || 'https://www.smzdm.com').replace(/\/$/, '');
 const API_BASE = (process.env.SMZDM_API_BASE || 'https://user-api.smzdm.com').replace(/\/$/, '');
@@ -260,26 +261,8 @@ export async function resolveChannelId(articleId, cookie) {
   return cid;
 }
 
-function removeTags(s) {
-  return String(s || '')
-    .replace(/<[^<]+?>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-// 解析 smzdm 网页签到返回：兼容纯 JSON、JSONP 包裹（callback({...})）与 Angular 风格 )]}' 前缀
-export function parseJsonp(text) {
-  if (typeof text !== 'string') return text;
-  let t = text.trim();
-  const wrap = t.match(/^[a-zA-Z_$][\w$]*\s*\(([\s\S]*)\)\s*;?\s*$/);
-  if (wrap) t = wrap[1];
-  t = t.replace(/^\)\]\}',?\s*/, '');
-  try {
-    return JSON.parse(t);
-  } catch {
-    return {};
-  }
-}
+// removeTags / parseJsonp 已抽到 ./parse.js（P1-6 共用，含 )]}' 前缀处理），此处仅 re-export 保持兼容
+export { parseJsonp, removeTags };
 
 // normalizeArticleId 已抽到 ./articleId.js 供 taskRunner 共用，这里 re-export 保持兼容
 export { normalizeArticleId };

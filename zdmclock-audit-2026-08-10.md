@@ -67,6 +67,7 @@
 - **位置**：`server/src/taskRunner.js:366-395`（定时签到用 `zonedWallClock(config.tz)` 的 `nowMin`）vs `clockSchedule.js:78`（`resolvedCheckInTime` 返回服务器本地 HH:MM）+ 连续天数 `yesterdayStrTZ`(配置时区) vs 手动 `localYesterdayStr()`(本地)
 - **问题**：`ZDM_TZ ≠ 'local'` 时，`umin <= nowMin` 比较差一个时区偏移，账号可能在错误时刻签到或永不命中；连续天数偶发错 1 天。
 - **修复**：签到时间比较与「昨天」基准统一用同一时区折算（用 `yesterdayStrTZ`/`todayStrTZ` 贯穿手动与定时）。
+- **✅ 已落地（2026-08-10 续）**：`taskRunner.js` 定时签到分支的 `schedToday` 与 `schedYesterday` 统一走 `todayStrTZ`/`yesterdayStrTZ` 同族函数（`yesterdayStrTZ` 内部即对 today 回退一天），消除原 `schedToday=z.date`（`zonedWallClock` 路径）与 `schedYesterday=yesterdayStrTZ`（另一路径）在跨日边界可能差一天、导致连续天数偶发错 1 天的问题。分钟级比较仍用 `zonedWallClock().getHours/Minutes`，与日期判定同一时区基准。
 
 ### P1-6 代码重复与实现分叉（可维护性 + 正确性漂移）
 - **位置**：
@@ -74,6 +75,7 @@
   - `removeTags`+`extractReward`：`tasks_real.js:17/40` 与 `extremeLazy.js:37/36` 完全重复
   - `collectArticleIds` 分叉：`taskRunner.js:50` 用 `normalizeArticleId`，`extremeLazy.js:24` 用裸正则 `/\/p\/(\d+)/`，同一文章可能抽出不同 ID
 - **修复**：抽公共模块（如 `smzdm/parse.js`、`util/text.js`），统一 JSONP/文章 ID 解析，消除行为不一致。
+- **✅ 已落地（2026-08-10 续）**：新建 `server/src/smzdm/parse.js` 收敛 `parseJsonp`/`removeTags`/`extractReward` 为唯一实现；`realAdapter`/`tasks_real`/`taskMatrix`/`extremeLazy` 改 import 共用。`parseJsonp` 增强为「先去 Angular )]}' 前缀、再解 JSONP 外壳」，修复旧 `realAdapter` 在 `)]}'`+`callback()` 形态下漏解外壳、把挑战页当失败外的缺陷；`taskMatrix.parseJsonp` 保留抛错契约（解析失败抛友好错误，避免 `assetFields` 取空误判「执行成功」）。`extremeLazy.collectArticleIds` 改用 `normalizeArticleId`，与 `taskRunner` 同一抽取逻辑，杜绝同一文章抽出不同 ID。
 
 ### P1-7 生产环境调试日志无级别开关
 - **位置**：`server/src/taskRunner.js:130`、`routes/baoliao.js:40/43/54` 为无条件 `console.log`（非 `dbgLog`）
@@ -127,3 +129,12 @@
 - **P0-1 端点 SSRF**：`notifier.js` 导出 `isSafePushUrl`；`routes/tasks.js` 的 `PUT /endpoints` 与 `POST /captures/apply` 改 `mutationGuard`（OPEN_MODE 下须 `ADMIN_TOKEN`），并对 `endpoint`/`referer` 做 `isSafePushUrl` 校验（非法返回 `unsafe_endpoint`/`unsafe_referer`，captures 应用则跳过并注明原因）；`realAdapter.js` 的 `call` 增加 SSRF 纵深防御（统一出口拒绝私有/回环/链路本地地址，即使上层被绕过也拦住 `169.254.169.254` 等内网探测）。自检：`isSafePushUrl` 对 9 个私有/回环/链路本地用例全部拦截、4 个公网用例全部放行；`call('http://169.254.169.254/...')` 在 `fetch` 前即抛「拒绝请求非公网地址」。
 - **P0-2 XFF 伪造**：`config.js` 的 `trustProxy` 不再由 `OPEN_MODE` 自动开启（默认 `false`），仅在确有多层可信反代时显式 `TRUST_PROXY=true`。直连暴露下 `req.ip` 为真实套接字对端、不可伪造，匿名无法借 XFF 命中同 /24 读他人数据。
 - P1/P2 暂未实施，待后续排期。
+
+## 八、P1-5 / P1-6 修复追加（2026-08-10 续）
+
+与 P0-1/2 同理，本环境无可用 GitHub 凭据，以下提交已落本地、待推送（凭据可用后 `git push` 即生效；均为纯后端改动，无需前端重建）：
+
+- **P1-5 时区一致性**：`taskRunner.js` 定时签到分支 `schedToday`/`schedYesterday` 统一走 `todayStrTZ`/`yesterdayStrTZ`（commit 待生成）。
+- **P1-6 解析去重**：新建 `server/src/smzdm/parse.js` 收敛 `parseJsonp`/`removeTags`/`extractReward`；`realAdapter`/`tasks_real`/`taskMatrix`/`extremeLazy` 共用；`parseJsonp` 修复 `)]}'`+`callback()` 漏解外壳、`extremeLazy.collectArticleIds` 改用 `normalizeArticleId`。
+
+> 剩余待办：P1-2（会话 Token 进 URL/可分发脚本，需前端重建）、P2-1~15（P2-9 写锁 onRejected 经评估为低危、暂不改动以免改变错误传播语义）。

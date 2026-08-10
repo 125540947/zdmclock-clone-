@@ -372,8 +372,12 @@ export async function runTask(task, db, opts = {}) {
     const z = zonedWallClock(new Date(), config.tz);
     const nowHM = fmtHM(z.getHours(), z.getMinutes());
     const nowMin = z.getHours() * 60 + z.getMinutes();
-    schedToday = z.date;
+    // P1-5：schedToday 与 schedYesterday 统一走 todayStrTZ / yesterdayStrTZ 同族函数，
+    // 保证"今天"与"昨天"由同一时区折算逻辑得出（yesterdayStrTZ 内部即对 today 回退一天），
+    // 消除原 schedToday=z.date（zonedWallClock 路径）与 schedYesterday=yesterdayStrTZ（另一路径）
+    // 在跨日边界可能差一天、导致连续天数偶发错 1 天的问题。分钟比较仍用 z 的墙钟，保持一致。
     const useTZ = config.tz && config.tz !== 'local';
+    schedToday = useTZ ? todayStrTZ(config.tz) : todayStr();
     schedYesterday = useTZ ? yesterdayStrTZ(config.tz) : localYesterdayStr();
     const doneToday = new Set(
       db.clockRecords.filter((r) => r.date === schedToday).map((r) => r.userId)

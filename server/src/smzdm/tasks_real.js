@@ -9,47 +9,15 @@
 // 数据互通（A → B）：执行结果返回给 taskMatrix / taskRunner，统一写入资产账本供仪表盘读取。
 
 import { call, appRequest, realAdapter } from './realAdapter.js';
+import { parseJsonp, removeTags, extractReward } from './parse.js';
 
 const ANDROID_XRW = { 'x-requested-with': 'com.smzdm.client.android' };
 const M_REFERER = 'https://m.smzdm.com/';
 const DINGYUE_BASE = 'https://dingyue-api.smzdm.com';
 
-function removeTags(s) {
-  return String(s || '')
-    .replace(/<[^<]+?>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-// 剥离 JSONP 响应外壳 callback({...})，取内部 JSON（纯函数）。
-// 加 try/catch：smzdm 挑战页 / HTML 片段会导致 JSON.parse 抛异常，上层若未捕获会变成 unhandledRejection（P1-11）。
-export function parseJsonp(text) {
-  if (typeof text !== 'string') return text;
-  const m = text.match(/\(([\s\S]*)\)\s*$/);
-  const inner = m ? m[1] : text;
-  try {
-    return JSON.parse(inner);
-  } catch (e) {
-    // 失败不抛出：返回带标记的错误结构，调用方（doTurntable 等）按 error 字段处理
-    return { error: 'jsonp_parse_failed', raw: String(text).slice(0, 200) };
-  }
-}
-
-// 从奖励文案近似提取金币/碎银/经验数量（best-effort，仅统计接口字面提及的数值，
-// 绝不做假数据；用于资产账本的近似记账）。返回 { gold, silver, exp }
-export function extractReward(text) {
-  const t = removeTags(text || ''); // 先去 HTML 标签（奖励文案常含 <strong>5</strong>金币）
-  let gold = 0;
-  let silver = 0;
-  let exp = 0;
-  const g = t.match(/(\d+(?:\.\d+)?)\s*(?:金币|金豆)/);
-  if (g) gold += parseFloat(g[1]) || 0;
-  const s = t.match(/(\d+(?:\.\d+)?)\s*(?:碎银|碎银子)/);
-  if (s) silver += parseFloat(s[1]) || 0;
-  const e = t.match(/(\d+(?:\.\d+)?)\s*点?\s*经验/) || t.match(/经验[+：:]\s*(\d+(?:\.\d+)?)/);
-  if (e) exp += parseFloat(e[1]) || 0;
-  return { gold, silver, exp };
-}
+// removeTags / extractReward / parseJsonp 已抽到 ./parse.js（P1-6 共用，含 )]}' 前缀处理），
+// 此处 re-export 保持对外 API 兼容（taskMatrix 等仍从本模块引用 extractReward）。
+export { parseJsonp, extractReward, removeTags };
 
 function randomCallback() {
   const n = Math.floor(100000000 + Math.random() * 900000000);

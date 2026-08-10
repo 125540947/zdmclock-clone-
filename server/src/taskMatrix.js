@@ -10,6 +10,7 @@
 
 import { smzdm } from './smzdm/adapter.js';
 import { REAL_STRATEGIES, REAL_STRATEGY_TYPES, extractReward } from './smzdm/tasks_real.js';
+import { parseJsonp as parseJsonpSafe } from './smzdm/parse.js';
 
 // 供 routes/tasks.js 等直接从 taskMatrix 引用真实策略集合
 export { REAL_STRATEGIES, REAL_STRATEGY_TYPES };
@@ -81,13 +82,13 @@ export function extractAsset(json, af = {}) {
   };
 }
 
-// 剥离 JSONP 响应外壳：形如 `callback({...})` 或 `jQuery123({...})` 提取内部 JSON。
-// 纯函数，便于单测；无法解析时抛出。
+// 剥离 JSONP 响应外壳：委托共享 parseJsonp（含 )]}' 前缀处理与失败兜底）。
+// 保留本模块的"抛错"契约：runCustomEndpointTask 在 try/catch 中据此抛出友好错误，
+// 避免把解析失败的响应误判为"执行成功"（assetFields 取不到字段会返回 message='执行成功'）。
 export function parseJsonp(text) {
-  if (typeof text !== 'string') return text;
-  const m = text.match(/\(([\s\S]*)\)\s*$/);
-  const inner = m ? m[1] : text;
-  return JSON.parse(inner);
+  const r = parseJsonpSafe(text);
+  if (r && r.error) throw new Error('JSONP 响应解析失败：' + String(text).slice(0, 80));
+  return r;
 }
 
 // 渲染请求体：支持对象或 JSON 字符串，并把占位符替换为账号信息
