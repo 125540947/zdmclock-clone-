@@ -69,6 +69,8 @@ const progressPct = ref(0);
 const runs = ref([]);
 const logBox = ref(null);
 let pollTimer = null;
+let watchdogTimer = null;
+let currentRunId = null;
 
 function statusIcon(run) {
   if (run.status === 'done') return '✅';
@@ -96,42 +98,77 @@ async function loadRuns() {
   } catch { /* ignore */ }
 }
 
+// 统一清理轮询与看门狗定时器
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+  if (watchdogTimer) {
+    clearTimeout(watchdogTimer);
+    watchdogTimer = null;
+  }
+}
+
 async function launch() {
   if (running.value || launching.value) return;
   launching.value = true;
-  logs.value = [];
+  runningStep.value = '正在启动…';
   progressPct.value = 5;
+  // 关键修复：捕获 POST 结果（含后端返回的本次 runId）。
+  // 旧逻辑在 POST 失败后仍无条件置 running=true，导致面板永久「执行中」。
   try {
-    await runExtremeLazy();
-  } catch { /* ignore */ }
+    const data = await runExtremeLazy();
+    currentRunId = (data && data.taskId) || null;
+  } catch (e) {
+    launching.value = false;
+    runningStep.value = '';
+    progressPct.value = 0;
+    logs.value = ['启动失败：' + (e?.response?.data?.message || e.message || '网络错误，请确认已登录')];
+    return;
+  }
   launching.value = false;
   running.value = true;
-  runningStep.value = '开始执行…';
+  runningStep.value = '执行中（通常 1–2 分钟）';
   progressPct.value = 10;
+  logs.value = [];
   pollStatus();
+  // 看门狗：若 8 分钟内仍未见本任务结束（含后端极端异常/卡死），主动解除转圈，
+  // 避免面板永久假死。这是 UX 兜底，不影响后端真实执行。
+  watchdogTimer = setTimeout(() => {
+    if (running.value) {
+      running.value = false;
+      runningStep.value = '';
+      progressPct.value = 100;
+      logs.value = ['执行已超过 8 分钟无响应，已停止等待。请刷新页面，或到下方「历史记录」查看结果。'];
+      stopPolling();
+    }
+  }, 8 * 60 * 1000);
 }
 
 async function pollStatus() {
   pollTimer = setInterval(async () => {
     try {
       const { data } = await getExtremeLazyRuns();
-      const latest = (data.runs || [])[0];
-      if (!latest) return;
-      runs.value = data.runs;
-      if (latest.status === 'running') {
-        logs.value = latest.logs || [];
-        const steps = (latest.result?.steps || []).filter((s) => s.ok).length;
-        const total = (latest.result?.steps || []).length;
-        progressPct.value = total > 0 ? Math.round(10 + (steps / total) * 80) : 20;
+      const all = data.runs || [];
+      runs.value = all;
+      // 关键修复：只盯「本次启动的任务」（currentRunId），不被别的（更新/并发）run 干扰；
+      // 未拿到 runId 时退化为看最新一条，行为与旧逻辑一致。
+      const target = currentRunId ? all.find((r) => r.id === currentRunId) : all[0];
+      if (!target) return; // 记录可能被滚出最近 20 条，继续等下一次轮询
+      if (target.status === 'running') {
+        logs.value = target.logs || [];
+        const steps = (target.result?.steps || []).filter((s) => s.ok).length;
+        const total = (target.result?.steps || []).length;
+        progressPct.value = total > 0 ? Math.round(10 + (steps / total) * 80) : Math.min(80, progressPct.value + 2);
         await nextTick();
         if (logBox.value) logBox.value.scrollTop = logBox.value.scrollHeight;
       } else {
-        logs.value = latest.logs || [];
+        logs.value = target.logs || [];
         progressPct.value = 100;
         running.value = false;
         runningStep.value = '';
-        clearInterval(pollTimer);
-        pollTimer = null;
+        stopPolling();
         await nextTick();
         if (logBox.value) logBox.value.scrollTop = logBox.value.scrollHeight;
       }
@@ -140,12 +177,9 @@ async function pollStatus() {
 }
 
 onMounted(loadRuns);
-// 离开页面时清理轮询定时器，避免内存泄漏与离屏轮询（P1-3）
+// 离开页面时清理轮询与看门狗定时器，避免内存泄漏与离屏轮询（P1-3）
 onBeforeUnmount(() => {
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
+  stopPolling();
 });
 </script>
 
