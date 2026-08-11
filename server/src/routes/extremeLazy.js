@@ -26,8 +26,8 @@ router.post('/run', authRequired, async (req, res) => {
     persist();
   });
 
-  // 后台异步执行（不阻塞 HTTP 响应）
-  runExtremeLazy()
+  // 后台异步执行（不阻塞 HTTP 响应）；传入 runRecord 以便实时写回日志
+  runExtremeLazy({}, runRecord)
     .then((result) => {
       const rec = db.settings.extremeLazyRuns.find((r) => r.id === taskId);
       if (rec) {

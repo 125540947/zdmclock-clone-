@@ -35,14 +35,17 @@ function collectArticleIds(db) {
   return ids;
 }
 
-export async function runExtremeLazy(opts = {}) {
+export async function runExtremeLazy(opts = {}, record = null) {
   const db = load();
   const logs = [];
   const results = { steps: [], totalOk: 0, totalFail: 0 };
 
   function log(msg) {
     const ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-    logs.push(`[${ts}] ${msg}`);
+    const line = `[${ts}] ${msg}`;
+    logs.push(line);
+    // 实时写回运行记录，使前端「实时日志」在运行途中即可看到逐步进度（便于区分「慢」与「卡」）
+    if (record && Array.isArray(record.logs)) record.logs.push(line);
   }
 
   function stepResult(name, ok, detail) {
