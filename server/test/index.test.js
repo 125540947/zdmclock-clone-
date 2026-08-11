@@ -41,13 +41,24 @@ async function j(method, url, body, headers = {}) {
   const text = await res.text();
   let data = null;
   try { data = JSON.parse(text); } catch { /* 可能为非 JSON */ }
-  return { status: res.status, text, data };
+  return { status: res.status, text, data, headers: Object.fromEntries(res.headers) };
 }
 
 test('GET /baoliao-import 返回同源导入页（含标题）', async () => {
   const r = await j('GET', '/baoliao-import');
   assert.equal(r.status, 200);
   assert.match(r.text, /好价批量导入/);
+});
+
+test('GET /baoliao-import 注入 per-request nonce 放行内联脚本', async () => {
+  const r = await j('GET', '/baoliao-import');
+  const csp = r.headers['content-security-policy'] || r.headers['Content-Security-Policy'];
+  assert.ok(csp, '应返回 CSP 头');
+  const m = csp.match(/script-src 'self' 'nonce-([^']+)'/);
+  assert.ok(m, 'script-src 应含 nonce');
+  const nonce = m[1];
+  assert.match(r.text, new RegExp('nonce="' + nonce.replace(/[+/=]/g, '\\$&') + '"'), '页面内联脚本应使用同一 nonce');
+  assert.ok(!r.text.includes('__NONCE__'), '占位符应已被替换');
 });
 
 test('GET / 经 SPA 兜底并给 /assets/* 注入 ?v=<构建戳>', async () => {

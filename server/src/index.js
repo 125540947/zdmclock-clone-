@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'node:path';
 import fs from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 import { flushPersist } from './store.js';
@@ -69,22 +70,49 @@ const BAOLIAO_IMPORT_HTML = `<!doctype html>
   <h3>② 粘贴并导入</h3>
   <p class="tip">Token（开启鉴权时需要，默认 <code>zdmclock</code>；未开启可留空）：</p>
   <p><input type="text" id="token" placeholder="API Token，可留空"></p>
-  <p><input type="text" id="channelId" placeholder="频道 ID（可选；好价贴必填真实频道，否则点赞/收藏会失败）"></p>
+  <p><input type="text" id="channelId" placeholder="频道 ID（可选；好价贴必填真实频道，否则点赞/收藏会失败）">
+  <button type="button" id="remember" style="background:#2b6cb0">📌 记住</button>
+  <button type="button" id="forget" style="background:#888">清除</button>
+  <span id="remembered" class="tip"></span></p>
   <p><textarea id="links" placeholder="把 smzdm 文章链接粘贴到这里，每行一个，或任意含链接的文本"></textarea></p>
   <p><button id="imp">导入好价</button> <span class="tip">（链接形如 https://www.smzdm.com/p/123456789/ ）</span></p>
   <div id="msg"></div>
 </div>
-<script>
+<script nonce="__NONCE__">
 (function(){
+  var CH_KEY='zdmclock.channelId';
   var bm=document.getElementById('bm');
   var bk="javascript:(function(){var L=[].slice.call(document.querySelectorAll('a')).filter(function(a){return a.href&&a.href.indexOf('/p/')!==-1;}).map(function(a){return a.href;}).filter(function(v,i,arr){return arr.indexOf(v)===i;});var sep=String.fromCharCode(10);var t=L.join(sep);function sh(){window.prompt('已抓取 '+L.length+' 条，请复制：',t);}try{if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(function(){alert('已复制 '+L.length+' 条好价链接，去 zdmclock 粘贴导入');},sh);}else{sh();}}catch(e){sh();}})();";
   bm.href=bk;
   var btn=document.getElementById('imp');
   var msg=document.getElementById('msg');
+  var cid=document.getElementById('channelId');
+  var rememberBtn=document.getElementById('remember');
+  var forgetBtn=document.getElementById('forget');
+  var remembered=document.getElementById('remembered');
+  function showRemembered(){
+    var v=localStorage.getItem(CH_KEY);
+    remembered.textContent=v?('📌 已记住频道：'+v+'（存于本浏览器，刷新不丢）'):'（未记住，刷新后需重填）';
+  }
+  function saveRemembered(){
+    if(cid.value.trim()){localStorage.setItem(CH_KEY,cid.value.trim());msg.className='ok';msg.textContent='已记住频道 '+cid.value.trim()+'，下次自动填入。';}
+    else{localStorage.removeItem(CH_KEY);msg.className='';msg.textContent='频道 ID 为空，已取消记住。';}
+    showRemembered();
+  }
+  function forget(){
+    localStorage.removeItem(CH_KEY);cid.value='';msg.className='';msg.textContent='已清除记住的频道。';showRemembered();
+  }
+  // 输入时即时记住 + 页面加载恢复
+  cid.addEventListener('input',function(){if(cid.value.trim())localStorage.setItem(CH_KEY,cid.value.trim());showRemembered();});
+  rememberBtn.addEventListener('click',saveRemembered);
+  forgetBtn.addEventListener('click',forget);
+  var saved=localStorage.getItem(CH_KEY);
+  if(saved){cid.value=saved;}
+  showRemembered();
   btn.addEventListener('click',function(){
     var text=document.getElementById('links').value;
     var token=document.getElementById('token').value.trim();
-    var channelId=document.getElementById('channelId').value.trim();
+    var channelId=cid.value.trim();
     if(!text.trim()){msg.className='err';msg.textContent='请先粘贴链接';return;}
     var url='/api/baoliao/bulk'+(token?('?token='+encodeURIComponent(token)):'');
     btn.disabled=true;msg.className='';msg.textContent='导入中…';
@@ -169,8 +197,25 @@ export function createApp() {
   app.use('/api/extreme-lazy', extremeLazyRoutes);
 
   // 好价批量导入页（同源、免构建；服务端抓不到 smzdm 好价，改由浏览器导入）
+  // 该页内嵌可信的「拖拽书签 + 粘贴导入」脚本（服务端生成），需通过 nonce 放行内联脚本——
+  // 全局 CSP 默认 script-src 'self' 会拦截内联脚本导致导入按钮失效，故此处用 per-request nonce 单独放行。
   app.get('/baoliao-import', (req, res) => {
-    res.type('html').send(BAOLIAO_IMPORT_HTML);
+    const nonce = randomBytes(16).toString('base64');
+    res.setHeader(
+      'Content-Security-Policy',
+      [
+        "default-src 'self'",
+        "script-src 'self' 'nonce-" + nonce + "'",
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+        "font-src 'self' https://fonts.gstatic.com",
+        "img-src 'self' data: https:",
+        "connect-src 'self'",
+        "base-uri 'self'",
+        "form-action 'self'",
+        "frame-ancestors 'none'"
+      ].join('; ')
+    );
+    res.type('html').send(BAOLIAO_IMPORT_HTML.replace('__NONCE__', nonce));
   });
 
   // 托管前端构建产物（单进程对外）。
