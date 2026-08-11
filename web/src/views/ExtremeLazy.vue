@@ -71,6 +71,22 @@ const logBox = ref(null);
 let pollTimer = null;
 let watchdogTimer = null;
 let currentRunId = null;
+let lastLogLen = 0;
+
+// 进度感知看门狗：只要「实时日志」持续有新行（后端在推进），就不断续命；
+// 仅当 8 分钟无任何新日志（真卡死）才解除转圈，且不覆盖已有日志以便定位卡点。
+function armWatchdog() {
+  if (watchdogTimer) clearTimeout(watchdogTimer);
+  watchdogTimer = setTimeout(() => {
+    if (running.value) {
+      running.value = false;
+      runningStep.value = '';
+      progressPct.value = 100;
+      logs.value = [...logs.value, '⚠️ 已超过 8 分钟无新日志，疑似卡死，已停止等待。请刷新页面或到下方「历史记录」查看结果。'];
+      stopPolling();
+    }
+  }, 8 * 60 * 1000);
+}
 
 function statusIcon(run) {
   if (run.status === 'done') return '✅';
@@ -132,18 +148,9 @@ async function launch() {
   runningStep.value = '执行中（通常 1–2 分钟）';
   progressPct.value = 10;
   logs.value = [];
+  lastLogLen = 0;
   pollStatus();
-  // 看门狗：若 8 分钟内仍未见本任务结束（含后端极端异常/卡死），主动解除转圈，
-  // 避免面板永久假死。这是 UX 兜底，不影响后端真实执行。
-  watchdogTimer = setTimeout(() => {
-    if (running.value) {
-      running.value = false;
-      runningStep.value = '';
-      progressPct.value = 100;
-      logs.value = ['执行已超过 8 分钟无响应，已停止等待。请刷新页面，或到下方「历史记录」查看结果。'];
-      stopPolling();
-    }
-  }, 8 * 60 * 1000);
+  armWatchdog();
 }
 
 async function pollStatus() {
@@ -158,6 +165,8 @@ async function pollStatus() {
       if (!target) return; // 记录可能被滚出最近 20 条，继续等下一次轮询
       if (target.status === 'running') {
         logs.value = target.logs || [];
+        const ll = (target.logs || []).length;
+        if (ll > lastLogLen) { lastLogLen = ll; armWatchdog(); }
         const steps = (target.result?.steps || []).filter((s) => s.ok).length;
         const total = (target.result?.steps || []).length;
         progressPct.value = total > 0 ? Math.round(10 + (steps / total) * 80) : Math.min(80, progressPct.value + 2);
