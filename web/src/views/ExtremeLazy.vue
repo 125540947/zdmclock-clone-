@@ -109,8 +109,8 @@ function fmtDur(start, end) {
 
 async function loadRuns() {
   try {
-    const { data } = await getExtremeLazyRuns();
-    runs.value = data.runs || [];
+    const res = await getExtremeLazyRuns();
+    runs.value = res.runs || [];
   } catch { /* ignore */ }
 }
 
@@ -156,8 +156,7 @@ async function launch() {
 async function pollStatus() {
   pollTimer = setInterval(async () => {
     try {
-      const { data } = await getExtremeLazyRuns();
-      const all = data.runs || [];
+      const { runs: all } = await getExtremeLazyRuns();
       runs.value = all;
       // 关键修复：只盯「本次启动的任务」（currentRunId），不被别的（更新/并发）run 干扰；
       // 未拿到 runId 时退化为看最新一条，行为与旧逻辑一致。
