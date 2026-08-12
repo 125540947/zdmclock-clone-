@@ -3,19 +3,21 @@
 //
 // 用法：
 //   app.post('/api/auth/login', rateLimit({ windowMs: 60000, max: 10 }), loginHandler)
-//   app.post('/api/users', rateLimit({ windowMs: 60000, max: 20, key: (r) => 'users:' + getClientIp(r) }), userHandler)
+//   app.post('/api/users', rateLimit({ windowMs: 60000, max: 20 }), userHandler)
 //
 // 行为：
-//   - 按 key（默认取 req.ip）在 windowMs 内计数，超过 max 返回 429 + Retry-After。
+//   - 按 key（默认取网络层 req.ip，不可伪造）在 windowMs 内计数，超过 max 返回 429 + Retry-After。
 //   - 仅对指定 HTTP 方法生效（默认 POST）。
 //   - 限流状态存内存 Map，进程重启即清零（足够抵御在线爆破，无需分布式）。
-import { getClientIp } from '../auth.js';
+//
+// 安全约束：默认 key 一律使用 req.ip（套接字对端 IP），不依赖 getClientIp/X-Forwarded-For，
+//   以免在 trustProxy=true 时攻击者伪造 XFF 绕过限流（与 P0-2 XFF 伪造同源隐患）。
 
 export function rateLimit({
   windowMs = 60000,
   max = 20,
   methods = ['POST'],
-  key = (req) => getClientIp(req) || req.ip || 'unknown',
+  key = (req) => req.ip || 'unknown',
   message = '请求过于频繁，请稍后再试'
 } = {}) {
   const hits = new Map(); // key -> { count, resetAt }
