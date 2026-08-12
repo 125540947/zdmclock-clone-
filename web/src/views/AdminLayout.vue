@@ -33,6 +33,12 @@ import { useRouter } from 'vue-router';
 const router = useRouter();
 const sections = [
   { name: 'admin', label: '总览', icon: '📊' },
+  { name: 'admin-accounts', label: '账号管理', icon: '👤' },
+  { name: 'admin-add', label: '录入账号', icon: '🔑' },
+  { name: 'admin-tasks', label: '自动任务', icon: '⚙️' },
+  { name: 'admin-manage', label: '运行台', icon: '🛠️' },
+  { name: 'admin-baoliao', label: '好价爆料', icon: '📣' },
+  { name: 'admin-lazy', label: '极端偷懒', icon: '🚀' },
   { name: 'distribution', label: '签到分布', icon: '📈' },
   { name: 'update', label: '系统更新', icon: '⬆️' },
   { name: 'notify', label: '推送通知', icon: '🔔' }

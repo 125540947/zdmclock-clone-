@@ -36,7 +36,18 @@ const routes = [
     component: AdminLayout,
     meta: { requiresAdmin: true, adminArea: true },
     children: [
+      // 总览 + 运营分析（保留）
       { path: '', name: 'admin', component: Admin, meta: { title: '总览', icon: '📊' } },
+      // 账号类：保持对开放模式匿名可访问（requiresAdmin 显式覆盖为 false），
+      // 同时保留顶层 /users、/addCookies 供匿名底部导航直达。
+      { path: 'accounts', name: 'admin-accounts', component: Users, meta: { title: '账号管理', icon: '👤', requiresAdmin: false } },
+      { path: 'add', name: 'admin-add', component: AddCookies, meta: { title: '录入账号', icon: '🔑', requiresAdmin: false } },
+      // 运营管控：仅管理员
+      { path: 'tasks', name: 'admin-tasks', component: Tasks, meta: { title: '自动任务', icon: '⚙️' } },
+      { path: 'manage', name: 'admin-manage', component: Manage, meta: { title: '运行台', icon: '🛠️' } },
+      { path: 'baoliao', name: 'admin-baoliao', component: Baoliao, meta: { title: '好价爆料', icon: '📣' } },
+      { path: 'lazy', name: 'admin-lazy', component: ExtremeLazy, meta: { title: '极端偷懒', icon: '🚀' } },
+      // 数据分析 + 设置（保留）
       { path: 'distribution', name: 'distribution', component: ClockDistribution, meta: { title: '签到分布', icon: '📈' } },
       { path: 'update', name: 'update', component: Update, meta: { title: '系统更新', icon: '⬆️' } },
       { path: 'notify', name: 'notify', component: Notify, meta: { title: '推送通知', icon: '🔔' } }
