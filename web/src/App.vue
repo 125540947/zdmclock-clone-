@@ -8,8 +8,8 @@
   </div>
 
   <nav class="bottom-nav">
-    <router-link
-      v-for="n in nav"
+      <router-link
+      v-for="n in visibleNav"
       :key="n.name"
       :to="{ name: n.name }"
       class="nav-item"
@@ -69,7 +69,7 @@ const nav = [
   { name: 'userclock', label: '签到', icon: '📅' },
   { name: 'tasks', label: '任务', icon: '⚙️' },
   { name: 'users', label: '账号', icon: '👤' },
-  { name: 'admin', label: '后台', icon: '📊' },
+  { name: 'admin', label: '后台', icon: '📊', requiresAdmin: true },
   { name: 'more', label: '更多', icon: '🧭' },
   { name: 'lazy', label: '偷懒', icon: '🚀' }
 ];
@@ -88,6 +88,8 @@ const isAdmin = computed(() => !!localStorage.getItem('zdm_admin_token'));
 // 透传给子视图：开放模式 + 非管理员 → 隐藏改删/配置等写按钮（P1-4）
 provide('openMode', openMode);
 provide('isAdmin', isAdmin);
+// 底部导航按角色过滤：标记 requiresAdmin 的项（后台）仅管理员可见，匿名访客看不到入口
+const visibleNav = computed(() => nav.filter((n) => !n.requiresAdmin || isAdmin.value));
 
 function onUnauthorized() {
   needsLogin.value = true;

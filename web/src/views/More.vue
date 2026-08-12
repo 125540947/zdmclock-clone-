@@ -10,7 +10,7 @@
     <section class="card rise" style="animation-delay:0.05s">
       <p class="card-title">✅ 已还原页面（完整实现）</p>
       <div class="grid">
-        <button v-for="p in built" :key="p.name" class="mod" @click="$router.push({ name: p.name })">
+        <button v-for="p in visibleBuilt" :key="p.name" class="mod" @click="$router.push({ name: p.name })">
           <span class="mi">{{ p.icon }}</span>
           <span class="mn">{{ p.label }}</span>
         </button>
@@ -22,6 +22,9 @@
 </template>
 
 <script setup>
+import { ref, inject, computed } from 'vue';
+// 复用 App.vue 透传的管理员态：非管理员隐藏管理类模块入口
+const isAdmin = inject('isAdmin', ref(false));
 const built = [
   { name: 'userclock', label: '每日签到', icon: '📅' },
   { name: 'clock', label: '签到中心', icon: '🗓️' },
@@ -37,12 +40,14 @@ const built = [
   { name: 'point', label: '自动点赞', icon: '👍' },
   { name: 'baoliao', label: '好价爆料', icon: '📣' },
   { name: 'gptReply', label: 'GPT 回复', icon: '🤖' },
-  { name: 'notify', label: '推送通知', icon: '🔔' },
+  { name: 'notify', label: '推送通知', icon: '🔔', requiresAdmin: true },
   { name: 'assets', label: '资产仪表盘', icon: '📈' },
-  { name: 'update', label: '系统更新', icon: '⬆️' },
+  { name: 'update', label: '系统更新', icon: '⬆️', requiresAdmin: true },
   { name: 'manage', label: '运行台', icon: '🛠️' },
-  { name: 'admin', label: '管理后台', icon: '📊' }
+  { name: 'admin', label: '管理后台', icon: '📊', requiresAdmin: true }
 ];
+// 非管理员（含开放模式匿名访客）看不到管理模块入口，与路由守卫保持一致
+const visibleBuilt = computed(() => built.filter((p) => !p.requiresAdmin || isAdmin.value));
 </script>
 
 <style scoped>

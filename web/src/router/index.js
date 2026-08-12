@@ -30,8 +30,8 @@ const routes = [
   { path: '/history', name: 'history', component: History, meta: { title: '签到记录', icon: '📜' } },
   { path: '/tasks', name: 'tasks', component: Tasks, meta: { title: '自动任务', icon: '⚙️' } },
   { path: '/manage', name: 'manage', component: Manage, meta: { title: '运行台', icon: '🛠️' } },
-  { path: '/admin', name: 'admin', component: Admin, meta: { title: '管理后台', icon: '📊' } },
-  { path: '/admin/distribution', name: 'distribution', component: ClockDistribution, meta: { title: '签到分布', icon: '📈' } },
+  { path: '/admin', name: 'admin', component: Admin, meta: { title: '管理后台', icon: '📊', requiresAdmin: true } },
+  { path: '/admin/distribution', name: 'distribution', component: ClockDistribution, meta: { title: '签到分布', icon: '📈', requiresAdmin: true } },
   { path: '/more', name: 'more', component: More, meta: { title: '全部模块', icon: '🧭' } },
 
   // 真实页面（原占位路由）
@@ -59,9 +59,9 @@ const routes = [
   },
   { path: '/baoliao', name: 'baoliao', component: Baoliao, meta: { title: '好价爆料', icon: '📣' } },
   { path: '/gptReply', name: 'gptReply', component: GptReply, meta: { title: 'GPT 回复', icon: '🤖' } },
-  { path: '/notify', name: 'notify', component: Notify, meta: { title: '推送通知', icon: '🔔' } },
+  { path: '/notify', name: 'notify', component: Notify, meta: { title: '推送通知', icon: '🔔', requiresAdmin: true } },
   { path: '/assets', name: 'assets', component: AssetsView, meta: { title: '资产仪表盘', icon: '📈' } },
-  { path: '/update', name: 'update', component: Update, meta: { title: '系统更新', icon: '⬆️' } },
+  { path: '/update', name: 'update', component: Update, meta: { title: '系统更新', icon: '⬆️', requiresAdmin: true } },
   { path: '/lazy', name: 'lazy', component: ExtremeLazy, meta: { title: '极端偷懒', icon: '🚀' } },
 
   // 长尾变体重定向到就近真实页
@@ -81,7 +81,20 @@ const routes = [
   { path: '/:pathMatch(.*)*', redirect: '/userclock' }
 ];
 
-export default createRouter({
+const router = createRouter({
   history: createWebHashHistory(),
   routes
 });
+
+// 专用后台访问控制：标记 requiresAdmin 的路由仅管理员可进入。
+// 判定依据是登录后写入 localStorage 的 zdm_admin_token（开放模式管理员通过
+// 「🔐 管理员」浮层登录、默认模式管理员用 ADMIN_TOKEN 登录后写入）。
+// 非管理员（含开放模式匿名访客）访问管理路由一律重定向到首页，既看不到入口也进不去。
+router.beforeEach((to) => {
+  if (to.meta && to.meta.requiresAdmin && !localStorage.getItem('zdm_admin_token')) {
+    return { name: 'userclock' };
+  }
+  return true;
+});
+
+export default router;
