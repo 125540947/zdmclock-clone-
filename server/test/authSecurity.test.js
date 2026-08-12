@@ -15,6 +15,7 @@ afterEach(() => {
   config.requireAuth = false;
   config.adminToken = '';
   config.installToken = '';
+  config.trustProxy = false;
   config.apiToken = 'zdmclock';
 });
 
@@ -42,10 +43,18 @@ test('safeEqual：相等/不等/长度不同/空值', () => {
 });
 
 // ---------- getClientIp ----------
-test('getClientIp：优先 XFF 首段，回退 req.ip', () => {
+test('getClientIp：默认（trustProxy=false）忽略 XFF，返回真实 req.ip（防伪造绕过 P0-2）', () => {
+  config.trustProxy = false;
+  // 伪造 XFF 不应被采用，必须回退到真实套接字对端 IP
+  assert.equal(getClientIp(mockReq({ headers: { 'x-forwarded-for': '203.0.113.9, 70.41.3.18' }, ip: '198.51.100.5' })), '198.51.100.5');
+  assert.equal(getClientIp(mockReq({ ip: '10.0.0.5' })), '10.0.0.5');
+});
+test('getClientIp：trustProxy=true 时取 XFF 首段，无 XFF 回退 req.ip', () => {
+  config.trustProxy = true;
   assert.equal(getClientIp(mockReq({ headers: { 'x-forwarded-for': '203.0.113.9, 70.41.3.18' } })), '203.0.113.9');
   assert.equal(getClientIp(mockReq({ headers: { 'x-forwarded-for': ' 198.51.100.2 ' } })), '198.51.100.2');
   assert.equal(getClientIp(mockReq({ ip: '10.0.0.5' })), '10.0.0.5');
+  config.trustProxy = false;
 });
 
 // ---------- ipToLong ----------
@@ -102,13 +111,35 @@ test('canAccessUser：开放模式无 recordedIp 遗留账号可见', () => {
   config.openMode = true;
   assert.equal(canAccessUser(mockReq({ ip: '1.2.3.4' }), { recordedIp: undefined }), true);
 });
-test('canAccessUser：开放模式同段可见、跨段拒绝、无记录拒绝', () => {
+test('canAccessUser：开放模式同段可见、跨段拒绝、无记录拒绝（trustProxy=true 时依据 XFF）', () => {
   config.openMode = true;
-  const sameSeg = mockReq({ headers: { 'x-forwarded-for': '192.168.1.50' } });
-  assert.equal(canAccessUser(sameSeg, { recordedIp: '192.168.1.99' }), true);
-  const diffSeg = mockReq({ headers: { 'x-forwarded-for': '192.168.2.50' } });
-  assert.equal(canAccessUser(diffSeg, { recordedIp: '192.168.1.99' }), false);
-  assert.equal(canAccessUser(mockReq(), undefined), false);
+  const prevTrust = config.trustProxy;
+  config.trustProxy = true; // 信任代理，XFF 模拟访客 IP 才生效
+  try {
+    const sameSeg = mockReq({ headers: { 'x-forwarded-for': '192.168.1.50' } });
+    assert.equal(canAccessUser(sameSeg, { recordedIp: '192.168.1.99' }), true);
+    const diffSeg = mockReq({ headers: { 'x-forwarded-for': '192.168.2.50' } });
+    assert.equal(canAccessUser(diffSeg, { recordedIp: '192.168.1.99' }), false);
+    assert.equal(canAccessUser(mockReq(), undefined), false);
+  } finally {
+    config.trustProxy = prevTrust;
+  }
+});
+
+test('P0-2 修复：默认 trustProxy=false 时伪造 XFF 不被信任（跨段仍拒绝越权）', () => {
+  const prevOpen = config.openMode;
+  const prevTrust = config.trustProxy;
+  config.openMode = true;
+  config.trustProxy = false; // 默认配置：不信任客户端 XFF
+  try {
+    const forged = mockReq({ headers: { 'x-forwarded-for': '192.168.1.50' } });
+    assert.equal(canAccessUser(forged, { recordedIp: '192.168.1.99' }), false, '伪造 XFF 不应被信任');
+    const real = mockReq({ ip: '192.168.1.50' });
+    assert.equal(canAccessUser(real, { recordedIp: '192.168.1.99' }), true, '真实同段 IP 应放行');
+  } finally {
+    config.openMode = prevOpen;
+    config.trustProxy = prevTrust;
+  }
 });
 
 // ---------- authRequired（中间件）----------

@@ -73,13 +73,18 @@ export function maskCookie(cookie = '') {
   return cookie ? '已保存(已隐藏)' : '';
 }
 
-// 解析真实访客 IP：优先取 X-Forwarded-For 首段（兼容 Cloudflare / 宝塔 / nginx 反代），
-// 回退到 req.ip（已配合 app.set('trust proxy')）。开放录入的「同IP段可见」依赖此值。
+// 解析真实访客 IP。安全模型（P0-2 修复）：
+// - 仅当显式信任代理（config.trustProxy=true，即确有多层可信反代已剥离客户端伪造的 XFF）时，
+//   才采用 X-Forwarded-For 首段；否则一律返回真实套接字对端 IP（req.ip，不可伪造）。
+// 绝不默认可信 XFF——否则匿名可伪造 X-Forwarded-For 命中同 /24 网段判定，越权读取他人账号数据。
+// 开放录入的「同IP段可见」依赖此值，故该修复同时加固了 P0-3 水平越权防护。
 export function getClientIp(req) {
-  const xff = req.headers && req.headers['x-forwarded-for'];
-  if (xff) {
-    const first = String(xff).split(',')[0].trim();
-    if (first) return first;
+  if (config.trustProxy) {
+    const xff = req.headers && req.headers['x-forwarded-for'];
+    if (xff) {
+      const first = String(xff).split(',')[0].trim();
+      if (first) return first;
+    }
   }
   return (req && req.ip) || '';
 }

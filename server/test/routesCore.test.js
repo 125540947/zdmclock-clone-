@@ -332,13 +332,15 @@ test('POST /api/baoliao 合法 → 200 草稿', async () => {
 });
 
 // ---------- openMode 跨网段越权（P0-3 路由级集成） ----------
-test('openMode 下跨 /24 网段访问他人账号 → 403，同段 → 200', async () => {
+test('openMode 下跨 /24 网段访问他人账号 → 403，同段 → 200（trustProxy=true 时依据 XFF）', async () => {
   const id = await makeUser('seg_user');
   const db = load();
   const u = db.users.find((x) => x.id === id);
   u.recordedIp = '203.0.113.5'; // TEST-NET-3，公网示例地址
   const prevOpen = config.openMode;
+  const prevTrust = config.trustProxy;
   config.openMode = true;
+  config.trustProxy = true; // 信任代理，XFF 模拟访客 IP 才生效
   try {
     const cross = await j('GET', '/api/clock/status?userId=' + id, undefined, {
       'X-Forwarded-For': '198.51.100.7'
@@ -352,6 +354,30 @@ test('openMode 下跨 /24 网段访问他人账号 → 403，同段 → 200', as
     assert.equal(same.status, 200, '同网段应放行');
   } finally {
     config.openMode = prevOpen;
+    config.trustProxy = prevTrust;
+  }
+});
+
+// ---------- P0-2 修复：默认 trustProxy=false 时伪造 XFF 不能越权 ----------
+test('P0-2 修复：默认 trustProxy=false 时伪造 XFF 命中同段也不放行（拒绝越权）', async () => {
+  const id = await makeUser('xff_user');
+  const db = load();
+  const u = db.users.find((x) => x.id === id);
+  u.recordedIp = '203.0.113.5';
+  const prevOpen = config.openMode;
+  const prevTrust = config.trustProxy;
+  config.openMode = true;
+  config.trustProxy = false; // 默认配置：不信任客户端 XFF
+  try {
+    // 攻击者伪造 X-Forwarded-For 命中同 /24 网段，但必须被忽略（真实 IP 为测试对端，与 recordedIp 跨段）
+    const r = await j('GET', '/api/clock/status?userId=' + id, undefined, {
+      'X-Forwarded-For': '203.0.113.99'
+    });
+    assert.equal(r.status, 403, '伪造 XFF 不应被信任，跨段应被拒');
+    assert.equal(r.data.error, 'forbidden');
+  } finally {
+    config.openMode = prevOpen;
+    config.trustProxy = prevTrust;
   }
 });
 
