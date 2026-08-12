@@ -6,6 +6,7 @@ import History from '../views/History.vue';
 import Tasks from '../views/Tasks.vue';
 import Manage from '../views/Manage.vue';
 import Admin from '../views/Admin.vue';
+import AdminLayout from '../views/AdminLayout.vue';
 import ClockDistribution from '../views/ClockDistribution.vue';
 import More from '../views/More.vue';
 import Placeholder from '../views/Placeholder.vue';
@@ -30,8 +31,17 @@ const routes = [
   { path: '/history', name: 'history', component: History, meta: { title: '签到记录', icon: '📜' } },
   { path: '/tasks', name: 'tasks', component: Tasks, meta: { title: '自动任务', icon: '⚙️' } },
   { path: '/manage', name: 'manage', component: Manage, meta: { title: '运行台', icon: '🛠️' } },
-  { path: '/admin', name: 'admin', component: Admin, meta: { title: '管理后台', icon: '📊', requiresAdmin: true } },
-  { path: '/admin/distribution', name: 'distribution', component: ClockDistribution, meta: { title: '签到分布', icon: '📈', requiresAdmin: true } },
+  {
+    path: '/admin',
+    component: AdminLayout,
+    meta: { requiresAdmin: true, adminArea: true },
+    children: [
+      { path: '', name: 'admin', component: Admin, meta: { title: '总览', icon: '📊' } },
+      { path: 'distribution', name: 'distribution', component: ClockDistribution, meta: { title: '签到分布', icon: '📈' } },
+      { path: 'update', name: 'update', component: Update, meta: { title: '系统更新', icon: '⬆️' } },
+      { path: 'notify', name: 'notify', component: Notify, meta: { title: '推送通知', icon: '🔔' } }
+    ]
+  },
   { path: '/more', name: 'more', component: More, meta: { title: '全部模块', icon: '🧭' } },
 
   // 真实页面（原占位路由）
@@ -59,9 +69,9 @@ const routes = [
   },
   { path: '/baoliao', name: 'baoliao', component: Baoliao, meta: { title: '好价爆料', icon: '📣' } },
   { path: '/gptReply', name: 'gptReply', component: GptReply, meta: { title: 'GPT 回复', icon: '🤖' } },
-  { path: '/notify', name: 'notify', component: Notify, meta: { title: '推送通知', icon: '🔔', requiresAdmin: true } },
+  { path: '/notify', redirect: '/admin/notify' },
   { path: '/assets', name: 'assets', component: AssetsView, meta: { title: '资产仪表盘', icon: '📈' } },
-  { path: '/update', name: 'update', component: Update, meta: { title: '系统更新', icon: '⬆️', requiresAdmin: true } },
+  { path: '/update', redirect: '/admin/update' },
   { path: '/lazy', name: 'lazy', component: ExtremeLazy, meta: { title: '极端偷懒', icon: '🚀' } },
 
   // 长尾变体重定向到就近真实页

@@ -40,9 +40,7 @@ const built = [
   { name: 'point', label: '自动点赞', icon: '👍' },
   { name: 'baoliao', label: '好价爆料', icon: '📣' },
   { name: 'gptReply', label: 'GPT 回复', icon: '🤖' },
-  { name: 'notify', label: '推送通知', icon: '🔔', requiresAdmin: true },
   { name: 'assets', label: '资产仪表盘', icon: '📈' },
-  { name: 'update', label: '系统更新', icon: '⬆️', requiresAdmin: true },
   { name: 'manage', label: '运行台', icon: '🛠️' },
   { name: 'admin', label: '管理后台', icon: '📊', requiresAdmin: true }
 ];

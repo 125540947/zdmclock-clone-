@@ -7,7 +7,7 @@
     </router-view>
   </div>
 
-  <nav class="bottom-nav">
+  <nav class="bottom-nav" v-if="!inAdmin">
       <router-link
       v-for="n in visibleNav"
       :key="n.name"
@@ -21,7 +21,7 @@
   </nav>
 
   <!-- 开放模式：管理员入口（仅对本人可见，匿名访客看不到） -->
-  <button v-if="openMode && !needsLogin" class="admin-entry" @click="openAdminLogin">🔐 管理员</button>
+  <button v-if="openMode && !needsLogin && !inAdmin" class="admin-entry" @click="openAdminLogin">🔐 管理员</button>
 
   <!-- 全局登录浮层：未登录或凭证失效（401）时弹出 -->
   <div v-if="needsLogin" class="login-mask">
@@ -63,6 +63,7 @@
 
 <script setup>
 import { ref, onMounted, onBeforeUnmount, provide, computed } from 'vue';
+import { useRoute } from 'vue-router';
 import { login, getAuthConfig } from './api/client.js';
 
 const nav = [
@@ -88,6 +89,9 @@ const isAdmin = computed(() => !!localStorage.getItem('zdm_admin_token'));
 // 透传给子视图：开放模式 + 非管理员 → 隐藏改删/配置等写按钮（P1-4）
 provide('openMode', openMode);
 provide('isAdmin', isAdmin);
+// 是否处于专用后台区（/admin 及其子路由）：进入后台后隐藏普通用户的底部导航与「🔐 管理员」浮层入口
+const route = useRoute();
+const inAdmin = computed(() => !!route.meta.adminArea);
 // 底部导航按角色过滤：标记 requiresAdmin 的项（后台）仅管理员可见，匿名访客看不到入口
 const visibleNav = computed(() => nav.filter((n) => !n.requiresAdmin || isAdmin.value));
 
