@@ -26,11 +26,11 @@ test('所有响应携带 Content-Security-Policy 且满足关键约束', async (
   }
 });
 
-test('CSP 允许 Google Fonts（style/font 来源）', async () => {
+test('CSP 收紧：不再放行被墙的 Google Fonts', async () => {
   const res = await fetch(base + '/api/health');
   const csp = res.headers.get('content-security-policy') || '';
-  assert.ok(csp.includes('fonts.googleapis.com'), 'style-src 应允许 Google Fonts');
-  assert.ok(csp.includes('fonts.gstatic.com'), 'font-src 应允许 Google Fonts');
+  assert.ok(!csp.includes('fonts.googleapis.com'), 'style-src 不应放行 Google Fonts');
+  assert.ok(!csp.includes('fonts.gstatic.com'), 'font-src 不应放行 Google Fonts');
 });
 
 test('关闭测试服务器', () => {
