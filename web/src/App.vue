@@ -117,6 +117,12 @@ async function doLogin() {
   try {
     const data = await login(u, password.value);
     if (data && data.token) {
+      // 管理员模式：后端仅在 ADMIN_TOKEN 匹配时才签发 adminToken；
+      // 未签发说明 Token 不正确或 .env 未配置 ADMIN_TOKEN，明确提示而非静默刷新（避免「无反应」困惑）。
+      if (adminMode.value && !data.adminToken) {
+        err.value = '管理员 Token 不正确，或未在 .env 配置 ADMIN_TOKEN';
+        return;
+      }
       // 登录成功：刷新页面，让各页面用新 token 重新拉取数据
       window.location.reload();
       return;
