@@ -41,7 +41,6 @@ const built = [
   { name: 'baoliao', label: '好价爆料', icon: '📣' },
   { name: 'gptReply', label: 'GPT 回复', icon: '🤖' },
   { name: 'assets', label: '资产仪表盘', icon: '📈' },
-  { name: 'manage', label: '运行台', icon: '🛠️' },
   { name: 'admin', label: '管理后台', icon: '📊', requiresAdmin: true }
 ];
 // 非管理员（含开放模式匿名访客）看不到管理模块入口，与路由守卫保持一致
