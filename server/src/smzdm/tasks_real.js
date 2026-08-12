@@ -185,7 +185,19 @@ export async function getTestingActivityId(cookie, fetcher = call) {
     referer: 'https://test.m.smzdm.com/',
     extraHeaders: { 'x-requested-with': 'com.smzdm.client.android', Origin: 'https://test.m.smzdm.com' }
   });
-  return json?.data?.activity_id || null;
+  // 兼容社区/官方字段偶发漂移：尝试多种可能的 activity_id 取值路径
+  const aid =
+    json?.data?.activity_id ??
+    json?.data?.activityId ??
+    json?.activity_id ??
+    json?.activityId ??
+    null;
+  // 接口明确返回了错误码（未登录 / 活动结束 / 接口变更等）：抛出含真实 error_msg 的异常，
+  // 便于与「无进行中活动」区分诊断，而非静默返回 null 误判。
+  if (!aid && json && (json.error_code != null || json.error_msg || json.errorCode != null)) {
+    throw new Error('众测活动接口返回异常：' + removeTags(String(json.error_msg || json.error_code || json.errorCode || '未知')));
+  }
+  return aid || null;
 }
 
 async function getTestingActivityInfo(activityId, cookie, fetcher = call) {
@@ -212,9 +224,28 @@ async function receiveTestingTask(taskId, cookie, fetcher = call) {
 
 // 自动跑全民众测能量值任务：返回已领奖励列表（best-effort，单个任务失败不阻断）
 async function doCrowdEnergyTasks(cookie, fetcher = call) {
-  const activityId = await getTestingActivityId(cookie, fetcher);
+  let activityId;
+  try {
+    activityId = await getTestingActivityId(cookie, fetcher);
+  } catch (e) {
+    // 接口异常（未登录 / 接口变更 / 网络）：软跳过，不计入失败，附带诊断信息便于排查
+    return {
+      success: true,
+      softSkip: true,
+      message: '全民众测跳过：' + e.message + '（如持续出现请检查 Cookie 或 smzdm 接口是否变更）',
+      rewards: [],
+      count: 0
+    };
+  }
   if (!activityId) {
-    throw new Error('未找到进行中的全民众测活动（可能暂未开启，或 smzdm 接口变更）');
+    // 无进行中的全民众测活动（活动为周期性开启，并非一直有）：软跳过，不计入失败
+    return {
+      success: true,
+      softSkip: true,
+      message: '全民众测暂无可参与的活动（可能未开启，或当前无进行中活动）',
+      rewards: [],
+      count: 0
+    };
   }
   const info = await getTestingActivityInfo(activityId, cookie, fetcher);
   const tasks = (info?.activity_task?.default_list || []) || [];
