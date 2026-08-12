@@ -108,16 +108,18 @@ export async function runExtremeLazy(opts = {}, record = null) {
       log(`  ⊘ 服务端抓取被反爬拦截，使用已导入缓存 ${db.baoliao.length} 篇（如需更新好价请到 /baoliao-import 浏览器导入）`);
       stepResult('刷新好价', true, `爆料箱共 ${db.baoliao.length} 篇（缓存）`);
     } else {
-      log(`  ✗ 抓取失败：${r.message}`);
-      stepResult('刷新好价', false, r.message);
+      const msg = `抓取失败（${r.message}）；爆料箱为空，请到 /baoliao-import 浏览器导入好价后再试`;
+      log(`  ✗ ${msg}`);
+      stepResult('刷新好价', false, msg);
     }
   } catch (e) {
     if (hasCache) {
       log(`  ⊘ 服务端抓取异常（反爬/网络），使用已导入缓存 ${db.baoliao.length} 篇（如需更新好价请到 /baoliao-import 浏览器导入）`);
       stepResult('刷新好价', true, `爆料箱共 ${db.baoliao.length} 篇（缓存）`);
     } else {
-      log(`  ✗ 抓取异常：${e.message}`);
-      stepResult('刷新好价', false, e.message);
+      const msg = `抓取异常（${e.message}）；爆料箱为空，请到 /baoliao-import 浏览器导入好价后再试`;
+      log(`  ✗ ${msg}`);
+      stepResult('刷新好价', false, msg);
     }
   }
 

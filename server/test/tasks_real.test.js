@@ -89,9 +89,12 @@ test('doCrowdtest 自动模式：无 crowd_id 时跑全民众测能量任务', a
   assert.match(r.message, /全民众测能量任务/);
 });
 
-test('doCrowdtest 自动模式：无进行中活动时报错', async () => {
+test('doCrowdtest 自动模式：无进行中活动时软跳过（不计入失败）', async () => {
   const fetcher = async () => ({ data: {} });
-  await assert.rejects(() => doCrowdtest('cookie', { call: fetcher }), /未找到进行中的全民众测活动/);
+  const r = await doCrowdtest('cookie', { call: fetcher });
+  assert.equal(r.success, true);
+  assert.equal(r.softSkip, true);
+  assert.match(r.message, /暂无可参与的活动|未开启|无进行中活动/);
 });
 
 test('doCrowdtest 显式 crowd_id：走 ajax_participate 申请路径', async () => {

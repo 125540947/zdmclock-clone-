@@ -179,13 +179,11 @@ export async function doDailyTasks(cookie) {
 // 这是社区真正可自动化的"众测"玩法，全程无需 crowd_id（用 activity_id 代替）。
 // 端点均为 web 接口（zhiyou.m.smzdm.com / test.m.smzdm.com），不加 app 签名。
 export async function getTestingActivityId(cookie, fetcher = call) {
-  // 该接口属移动端测试域（zhiyou.m.smzdm.com），需带 APP 签名与来源标识（f=android），
-  // 否则 smzdm 返回「来源错误」。改用 appRequest（signFormData 签名 + ANDROID_UA + f=android），
-  // 与可正常跑的点赞/收藏（user-api 带签名）一致，补上此前缺失的来源校验。
-  const json = await appRequest('/task/task/ajax_get_activity_id', {
-    cookie,
+  const json = await fetcher('https://zhiyou.m.smzdm.com/task/task/ajax_get_activity_id', {
     method: 'GET',
-    base: 'https://zhiyou.m.smzdm.com'
+    cookie,
+    referer: 'https://test.m.smzdm.com/',
+    extraHeaders: { 'x-requested-with': 'com.smzdm.client.android', Origin: 'https://test.m.smzdm.com' }
   });
   // 兼容社区/官方字段偶发漂移：尝试多种可能的 activity_id 取值路径
   const aid =
@@ -203,23 +201,23 @@ export async function getTestingActivityId(cookie, fetcher = call) {
 }
 
 async function getTestingActivityInfo(activityId, cookie, fetcher = call) {
-  // 同属移动端测试域，带 APP 签名（activity_id 并入签名 base）
-  const json = await appRequest('/task/task/ajax_get_activity_info', {
-    cookie,
+  const json = await fetcher('https://zhiyou.m.smzdm.com/task/task/ajax_get_activity_info', {
     method: 'GET',
-    base: 'https://zhiyou.m.smzdm.com',
+    cookie,
+    referer: 'https://test.m.smzdm.com/',
+    extraHeaders: { 'x-requested-with': 'com.smzdm.client.android' },
     data: { activity_id: activityId }
   });
   return json?.data || null;
 }
 
 async function receiveTestingTask(taskId, cookie, fetcher = call) {
-  // 同属移动端测试域，带 APP 签名（task_id 并入签名 base）
-  const json = await appRequest('/task/task/ajax_activity_task_receive', {
-    cookie,
+  const json = await fetcher('https://zhiyou.m.smzdm.com/task/task/ajax_activity_task_receive', {
     method: 'POST',
-    base: 'https://zhiyou.m.smzdm.com',
-    data: { task_id: taskId }
+    cookie,
+    referer: 'https://test.m.smzdm.com/',
+    extraHeaders: { 'x-requested-with': 'com.smzdm.client.android' },
+    body: { task_id: taskId }
   });
   return json;
 }
