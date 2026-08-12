@@ -3,7 +3,7 @@
     <header class="admin-bar">
       <button class="bar-btn" @click="goBack" title="返回前台">← 返回</button>
       <span class="bar-title">📊 管理后台</span>
-      <button class="bar-btn exit" @click="logoutAdmin" title="退出管理员权限">退出</button>
+      <button class="bar-btn exit" @click="logoutAdmin" title="退出后台（清除管理员权限并返回前台）">退出后台</button>
     </header>
 
     <nav class="admin-subnav">
