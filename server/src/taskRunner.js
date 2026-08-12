@@ -137,18 +137,33 @@ async function runEngagement(task, db, user, opts) {
       }
       dbgLog('[smzdm-debug] engagement 拟人化等待后继续：第', idx + 1, '/', articleIds.length, '篇，articleId=', aid);
     }
-    try {
-      const r =
-        action === 'comment'
-          ? await smzdm.doComment(user.cookie, { count: perArticleCount, articleId: aid })
-          : action === 'favorite'
-          ? await smzdm.doFavorite(user.cookie, { count: perArticleCount, articleId: aid, channelId: chId })
-          : await smzdm.doPoint(user.cookie, { count: perArticleCount, articleId: aid, channelId: chId });
-      done += r.count || 1;
-      results.push(r.message);
-    } catch (e) {
-      failed += 1;
-      errors.push(`文章 ${aid}: ${e.message}`);
+    // 评论被 smzdm 限流（"速度太快"）时针对性退避重试，提升成功率；收藏/点赞不受此限
+    const maxCommentRetry = action === 'comment' ? 2 : 0;
+    let attempt = 0;
+    while (attempt <= maxCommentRetry) {
+      try {
+        const r =
+          action === 'comment'
+            ? await smzdm.doComment(user.cookie, { count: perArticleCount, articleId: aid })
+            : action === 'favorite'
+            ? await smzdm.doFavorite(user.cookie, { count: perArticleCount, articleId: aid, channelId: chId })
+            : await smzdm.doPoint(user.cookie, { count: perArticleCount, articleId: aid, channelId: chId });
+        done += r.count || 1;
+        results.push(r.message);
+        break;
+      } catch (e) {
+        const rateLimited = /速度太快|太快|频率|频繁|请稍后/.test(e.message);
+        if (attempt < maxCommentRetry && rateLimited) {
+          // 退避：在原有间隔基础上额外延长，逐渐拉开节奏避免再次被限
+          attempt++;
+          await sleep(config.engagementDelayMaxMs * attempt + jitterDelay(config.engagementDelayMinMs, config.engagementDelayMaxMs));
+          dbgLog('[smzdm-debug] 评论被限流，退避重试：第', attempt, '次，articleId=', aid);
+          continue;
+        }
+        failed += 1;
+        errors.push(`文章 ${aid}: ${e.message}`);
+        break;
+      }
     }
   }
   const total = articleIds.length;
