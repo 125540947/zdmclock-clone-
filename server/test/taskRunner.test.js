@@ -194,7 +194,7 @@ test('runTask 定时(scheduled)模式：已过个人时间(宽限窗内)补签�
       users: [
         { id: 'hit', cookie: 'c', schedMode: 'manual', checkInTime: '09:30' }, // 恰好到达 → 签
         { id: 'past', cookie: 'c', schedMode: 'manual', checkInTime: '08:00' }, // 已过且在窗内 → 补签
-        { id: 'def', cookie: 'c', schedMode: 'default' }, // 默认 09:00 已过 → 补签
+        { id: 'def', cookie: 'c', schedMode: 'manual', checkInTime: '09:00' }, // 手动 09:00 已过且在窗内 → 补签
         { id: 'future', cookie: 'c', schedMode: 'manual', checkInTime: '11:00' } // 未来 → 不签
       ],
       clockRecords: []

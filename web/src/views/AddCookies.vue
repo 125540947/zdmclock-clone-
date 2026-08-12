@@ -28,6 +28,27 @@
         <input id="autoRun" v-model="autoRun" type="checkbox" style="width:auto; transform:scale(1.2);" />
         <label for="autoRun" style="margin:0; cursor:pointer;">录入后自动跑任务（签到/互动等）</label>
       </div>
+
+      <div class="field">
+        <label>🚀 智能启动调度</label>
+        <div class="seg">
+          <button
+            v-for="m in schedModes"
+            :key="m.value"
+            type="button"
+            class="seg-btn"
+            :class="{ active: schedMode === m.value }"
+            @click="schedMode = m.value"
+          >{{ m.label }}</button>
+        </div>
+        <div v-if="schedMode === 'manual'" class="sched-time">
+          <input type="time" step="60" v-model="schedTime" />
+          <span class="hint">手动指定每日启动时间（届时触发完整日常流水线：签到/互动/抽奖等）。</span>
+        </div>
+        <p v-else class="hint">
+          系统将在 08:00~10:59 窗口内自动分配一个分散的固定启动时间，避免多账号同时启动造成 VPS 卡顿。
+        </p>
+      </div>
       <button class="btn block" :disabled="saving || !cookie" @click="submit">
         {{ saving ? '保存中…' : '保存账号' }}
       </button>
@@ -51,6 +72,13 @@ const smzdmId = ref('');
 const cookie = ref('');
 const autoRun = ref(true);
 const saving = ref(false);
+// 智能启动调度：默认 auto（系统按账号错峰分配启动时间，遵守第一定律）；可切换 manual 自定义。
+const schedMode = ref('auto');
+const schedTime = ref('09:00');
+const schedModes = [
+  { value: 'auto', label: '系统自动' },
+  { value: 'manual', label: '手动指定' }
+];
 const { toast, toastType, showToast } = useToast();
 
 // P2-13：跳转计时器保存引用，组件卸载时清理，避免卸载后 router.push 访问已卸载组件
@@ -65,7 +93,9 @@ async function submit() {
       nickname: nickname.value.trim(),
       smzdmId: smzdmId.value.trim(),
       cookie: cookie.value.trim(),
-      autoRun: autoRun.value
+      autoRun: autoRun.value,
+      schedMode: schedMode.value,
+      ...(schedMode.value === 'manual' ? { checkInTime: schedTime.value } : {})
     });
     showToast('账号已保存');
     navTimer = setTimeout(() => router.push({ name: 'users' }), 900);
@@ -84,6 +114,50 @@ code {
   border-radius: 6px;
   font-size: 12px;
   color: var(--gold);
+}
+.seg {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+  margin: 8px 0 4px;
+}
+.seg-btn {
+  flex: 1;
+  min-width: 84px;
+  padding: 9px 8px;
+  font-size: 13px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.seg-btn.active {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: rgba(255, 208, 107, 0.1);
+}
+.sched-time {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.sched-time input[type='time'] {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+}
+.hint {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.5;
+  margin: 8px 0 0;
 }
 .toast {
   position: fixed;

@@ -2,7 +2,7 @@ import { load, persist, withWriteLock, todayStr } from './store.js';
 import { runTask } from './taskRunner.js';
 import { notify } from './notifier.js';
 import { config } from './config.js';
-import { zonedWallClock } from './clockSchedule.js';
+import { zonedWallClock, ACCOUNT_PIPELINE_TYPES } from './clockSchedule.js';
 import { smzdm } from './smzdm/adapter.js';
 import { checkAccounts } from './health.js';
 import { getRepoState, checkUpdate, runUpdate, scheduleRestart, updateSupported } from './selfUpdate.js';
@@ -188,9 +188,14 @@ export function tick() {
     const today = todayStr();
     // 按配置时区折算"墙上时间"用于 cron 求值，避免容器 UTC 导致任务在错误时刻触发
     const z = zonedWallClock(now, config.tz);
+    // 智能启动调度（t_startup）启用时，账号级每日流水线改由其按账号错峰统一跑，
+    // 主调度不再对 clock/comment/favorite/point/... 这些类型按固定 cron 全员同刻触发，避免重复执行。
+    const startupEnabled = (db.tasks || []).some((t) => t.type === 'startup' && t.enabled);
     const jobs = [];
     for (const t of db.tasks) {
       if (!t.enabled || !t.cron) continue;
+      // 账号级流水线任务：智能启动调度接管时跳过（仍可手动在「自动任务」页单跑）
+      if (startupEnabled && ACCOUNT_PIPELINE_TYPES.has(t.type)) continue;
       if (!cronMatch(t.cron, z)) continue;
       if (lastFiredMinute[t.id] === minuteKey) continue; // 本分钟已触发，跳过
       lastFiredMinute[t.id] = minuteKey;

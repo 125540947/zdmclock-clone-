@@ -13,6 +13,10 @@ function defaultData() {
     gptDrafts: [],
     tasks: [
       { id: 't_clock', type: 'clock', name: '每日签到', icon: '📅', enabled: true, cron: '* * * * *', lastRun: null, lastResult: null, status: 'idle' },
+      // 智能启动调度：每个账号在各自错峰的启动时间自动跑完
+      // 完整日常流水线（签到+互动+抽奖等）。启用后，主调度不再对账号级任务按固定 cron 全员同刻触发，
+      // 改由本任务按账号错峰统一跑（第一定律：避免多账号同时启动把 VPS 打爆）。
+      { id: 't_startup', type: 'startup', name: '智能启动调度', icon: '🚀', enabled: true, cron: '* * * * *', lastRun: null, lastResult: null, status: 'idle' },
       { id: 't_comment', type: 'comment', name: '自动评论', icon: '💬', enabled: false, cron: '0 10 * * *', articleId: '', articleSource: 'manual', lastRun: null, lastResult: null, status: 'idle' },
       { id: 't_favorite', type: 'favorite', name: '自动收藏', icon: '⭐', enabled: false, cron: '0 11 * * *', articleId: '', articleSource: 'manual', lastRun: null, lastResult: null, status: 'idle' },
       { id: 't_point', type: 'point', name: '自动点赞', icon: '👍', enabled: false, cron: '0 12 * * *', articleId: '', articleSource: 'manual', lastRun: null, lastResult: null, status: 'idle' },
@@ -151,6 +155,12 @@ export function load() {
   let migrated = false;
   cache.users.forEach((u) => {
     if (!u.schedMode) {
+      u.schedMode = 'auto';
+      migrated = true;
+    }
+    // 智能启动调度第一定律：不再允许"系统默认=全员同刻 09:00"的碰撞模式，
+    // 旧 'default' 账号统一转为 'auto'（系统错峰分配），避免多账号同时启动造成 VPS 卡顿。
+    if (u.schedMode === 'default') {
       u.schedMode = 'auto';
       migrated = true;
     }

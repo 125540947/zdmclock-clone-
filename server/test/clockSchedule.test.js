@@ -41,8 +41,10 @@ test('resolvedCheckInTime 三种模式', () => {
   assert.equal(resolvedCheckInTime({ schedMode: 'manual', checkInTime: '13:45' }, cfg), '13:45');
   // manual 非法 → 回退默认
   assert.equal(resolvedCheckInTime({ schedMode: 'manual', checkInTime: 'bad' }, cfg), '09:00');
-  // default → 系统默认
-  assert.equal(resolvedCheckInTime({ schedMode: 'default' }, cfg), '09:00');
+  // 未知/遗留模式 → 按 auto 处理（哈希分配，落在窗口内）
+  const t2 = resolvedCheckInTime({ schedMode: 'whatever', id: 'abc' }, cfg);
+  const p2 = parseHM(t2);
+  assert.ok(p2.h * 60 + p2.mi >= 480 && p2.h * 60 + p2.mi <= 659);
   // auto 有固化时间 → 用之
   assert.equal(resolvedCheckInTime({ schedMode: 'auto', checkInTime: '08:10', id: 'x' }, cfg), '08:10');
   // auto 无固化时间 → 按 id 哈希分配（在窗口内）

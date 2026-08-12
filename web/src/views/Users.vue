@@ -55,10 +55,10 @@
           <span class="tag">🍪 {{ u.cookie }}</span>
         </div>
 
-        <!-- 签到时间设置 -->
+        <!-- 智能启动调度 -->
         <div class="sched">
           <div class="sched-head" @click="toggleSched(u.id)">
-            <span>⏰ 签到时间</span>
+            <span>🚀 智能启动调度</span>
             <span class="sched-val">
               {{ schedLabel(u) }}
               <span class="caret" :class="{ open: openSched[u.id] }">▾</span>
@@ -76,13 +76,10 @@
             </div>
             <div v-if="draft[u.id]?.mode === 'manual'" class="sched-time">
               <input type="time" step="60" v-model="draft[u.id].time" />
-              <span class="hint">手动指定每日签到时间（24 小时制）</span>
-            </div>
-            <div v-else-if="draft[u.id]?.mode === 'auto'" class="hint">
-              系统将在 {{ autoWindow }} 窗口内自动分配一个分散的固定时间（当前：{{ u.checkInTime || '—' }}），避免多账号同时签到被限流。
+              <span class="hint">手动指定每日启动时间（24 小时制），届时触发完整日常流水线（签到/互动/抽奖等）。</span>
             </div>
             <div v-else class="hint">
-              沿用系统默认时间（{{ defaultTime }}），所有默认账号会在同一时刻签到。
+              系统将在 {{ autoWindow }} 窗口内自动分配一个分散的固定启动时间（当前：{{ u.checkInTime || '—' }}），避免多账号同时启动造成 VPS 卡顿。
             </div>
             <button v-if="canWrite" class="btn sm" :disabled="saving === u.id" @click="saveSched(u)">
               {{ saving === u.id ? '保存中…' : '保存' }}
@@ -146,11 +143,9 @@ const draft = reactive({});
 const verifyState = reactive({});
 const schedModes = [
   { value: 'auto', label: '系统自动' },
-  { value: 'manual', label: '手动指定' },
-  { value: 'default', label: '系统默认' }
+  { value: 'manual', label: '手动指定' }
 ];
 const autoWindow = ref('08:00~10:59');
-const defaultTime = ref('09:00');
 const scriptText = ref('');
 const loadingScript = ref(false);
 // 一键安装链接：指向服务端注入好「服务地址 + 窄权限 INSTALL_TOKEN」的 .user.js，油猴导航到此即弹安装。
@@ -225,8 +220,7 @@ async function verify(u) {
 function schedLabel(u) {
   const mode = u.schedMode || 'auto';
   if (mode === 'manual') return '手动 ' + (u.checkInTime || '—');
-  if (mode === 'auto') return '系统自动 ' + (u.checkInTime || '');
-  return '系统默认 ' + defaultTime.value;
+  return '系统自动 ' + (u.checkInTime || '');
 }
 function toggleSched(id) {
   openSched[id] = !openSched[id];
@@ -264,7 +258,6 @@ onMounted(async () => {
     if (data.autoWindowStart && data.autoWindowEnd) {
       autoWindow.value = `${data.autoWindowStart}~${data.autoWindowEnd}`;
     }
-    if (data.defaultCheckInTime) defaultTime.value = data.defaultCheckInTime;
   } catch {
     /* 后台接口不可用不影响账号列表 */
   }

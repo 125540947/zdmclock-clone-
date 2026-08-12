@@ -71,8 +71,7 @@ const nav = [
   { name: 'tasks', label: '任务', icon: '⚙️' },
   { name: 'users', label: '账号', icon: '👤' },
   { name: 'admin', label: '后台', icon: '📊', requiresAdmin: true },
-  { name: 'more', label: '更多', icon: '🧭' },
-  { name: 'lazy', label: '偷懒', icon: '🚀' }
+  { name: 'more', label: '更多', icon: '🧭' }
 ];
 
 const needsLogin = ref(!localStorage.getItem('zdm_token'));

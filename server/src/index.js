@@ -18,7 +18,6 @@ import notifyRoutes from './routes/notify.js';
 import assetsRoutes from './routes/assets.js';
 import healthRoutes from './routes/health.js';
 import updateRoutes from './routes/update.js';
-import extremeLazyRoutes from './routes/extremeLazy.js';
 import { startScheduler, isSchedulerRunning } from './scheduler.js';
 
 // 全局未捕获异常兜底（P1-10）：best-effort 的异步推送/解析若遗漏 try/catch，
@@ -194,7 +193,6 @@ export function createApp() {
   app.use('/api/assets', assetsRoutes);
   app.use('/api/health', healthRoutes);
   app.use('/api/update', updateRoutes);
-  app.use('/api/extreme-lazy', extremeLazyRoutes);
 
   // 好价批量导入页（同源、免构建；服务端抓不到 smzdm 好价，改由浏览器导入）
   // 该页内嵌可信的「拖拽书签 + 粘贴导入」脚本（服务端生成），需通过 nonce 放行内联脚本——

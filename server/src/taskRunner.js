@@ -4,7 +4,8 @@ import { withWriteLock, persist, genId, mergeBaoliao, todayStr, todayStrTZ, yest
 import { normalizeArticleId } from './smzdm/articleId.js';
 import { generateReply } from './gptAdapter.js';
 import { config } from './config.js';
-import { resolvedCheckInTime, fmtHM, parseHM, zonedWallClock } from './clockSchedule.js';
+import { resolvedCheckInTime, fmtHM, parseHM, zonedWallClock, ACCOUNT_PIPELINE_TYPES } from './clockSchedule.js';
+import { runStartupForAccounts } from './startup.js';
 import {
   resolveRisk,
   jitterDelay,
@@ -376,6 +377,8 @@ export function resolveUsers(db, opts) {
 }
 
 export async function runTask(task, db, opts = {}) {
+  // 智能启动调度：按账号错峰跑完整日常流水线（见 startup.js）
+  if (task.type === 'startup') return runStartupForAccounts(db);
   // gpt / fetch 不依赖账号 Cookie，无需账号即可运行（gpt 仅自动发布时用首个账号）
   if (task.type === 'gpt') return runGptBatch(task, db);
   if (task.type === 'fetch') return runFetch(task, db);

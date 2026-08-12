@@ -21,7 +21,6 @@ import GptReply from '../views/GptReply.vue';
 import Notify from '../views/Notify.vue';
 import AssetsView from '../views/AssetsView.vue';
 import Update from '../views/Update.vue';
-import ExtremeLazy from '../views/ExtremeLazy.vue';
 
 const routes = [
   { path: '/', redirect: '/userclock' },
@@ -40,7 +39,7 @@ const routes = [
       { path: '', name: 'admin', component: Admin, meta: { title: '总览', icon: '📊' } },
       // 录入账号：开放模式匿名自助录入（requiresAdmin 显式覆盖为 false），同时保留顶层 /addCookies
       { path: 'add', name: 'admin-add', component: AddCookies, meta: { title: '录入账号', icon: '🔑', requiresAdmin: false } },
-      // 以下为运维/管理员专属，普通界面的用户页（账号/任务/爆料/偷懒）已移出后台，避免重复入口
+      // 以下为运维/管理员专属，普通界面的用户页（账号/任务/爆料/智能启动调度）已移出后台，避免重复入口
       { path: 'manage', name: 'admin-manage', component: Manage, meta: { title: '运行台', icon: '🛠️' } },
       { path: 'distribution', name: 'distribution', component: ClockDistribution, meta: { title: '签到分布', icon: '📈' } },
       { path: 'update', name: 'update', component: Update, meta: { title: '系统更新', icon: '⬆️' } },
@@ -77,7 +76,6 @@ const routes = [
   { path: '/notify', redirect: '/admin/notify' },
   { path: '/assets', name: 'assets', component: AssetsView, meta: { title: '资产仪表盘', icon: '📈' } },
   { path: '/update', redirect: '/admin/update' },
-  { path: '/lazy', name: 'lazy', component: ExtremeLazy, meta: { title: '极端偷懒', icon: '🚀' } },
 
   // 长尾变体重定向到就近真实页
   { path: '/commentArticle', redirect: '/comment' },

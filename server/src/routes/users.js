@@ -18,12 +18,14 @@ const SCRIPT_PATH = path.resolve(
 
 const router = Router();
 
-// 校验并归一化 schedMode / checkInTime（manual 必须提供合法 HH:MM）。
+// 校验并归一化 schedMode / checkInTime（智能启动调度）。
+// schedMode 仅支持 auto（系统按账号错峰分配启动时间）/ manual（用户自定义），
+// 不再提供"系统默认=全员同刻"的碰撞模式（违反第一定律）。
 // 返回 { schedMode, checkInTime } 或 { error, message }（HTTP 400 用）。
 function normalizeSchedule(body) {
   const schedMode = body && body.schedMode;
-  if (schedMode !== undefined && !['auto', 'manual', 'default'].includes(schedMode)) {
-    return { error: 'invalid_sched_mode', message: 'schedMode 仅支持 auto / manual / default' };
+  if (schedMode !== undefined && !['auto', 'manual'].includes(schedMode)) {
+    return { error: 'invalid_sched_mode', message: 'schedMode 仅支持 auto / manual' };
   }
   const mode = schedMode || 'auto';
   let checkInTime = body && typeof body.checkInTime === 'string' ? body.checkInTime.trim() : '';
@@ -32,7 +34,7 @@ function normalizeSchedule(body) {
       return { error: 'invalid_time', message: '手动模式必须提供合法时间（HH:MM，24 小时制）' };
     }
   }
-  // auto / default 下 checkInTime 由系统决定，不强校验；透传（可能为空）
+  // auto 下 checkInTime 由系统决定，不强校验；透传（可能为空）
   return { schedMode: mode, checkInTime };
 }
 

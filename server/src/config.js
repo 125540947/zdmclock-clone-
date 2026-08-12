@@ -98,6 +98,9 @@ export const config = {
   // 补签宽限：个人签到时间已过、但距现在不超过该分钟数时，仍补签一次，
   // 覆盖"服务宕机/休眠/刚部署"期间错过的签到（避免永久漏签）。设 0 关闭补签。
   catchupGraceMin: Number(process.env.CATCHUP_GRACE_MIN || 180),
+  // 智能启动调度宽限：账号启动时间已过、但距现在不超过该分钟数时，仍补跑一次（覆盖服务宕机/休眠），
+  // 超过则跳过今天，避免"补签风暴"把 VPS 打爆。设 0 关闭补跑。默认 180（与 catchupGraceMin 一致）。
+  startupGraceMin: Number(process.env.STARTUP_GRACE_MIN || 180),
   // Cookie 健康检测节流：每隔多少分钟对所有账号做一次 Cookie 探活（仅 real 模式）。
   // 防止高频无效请求；设 0 表示每轮 tick 都检测（不推荐）。默认 360（6 小时）。
   cookieHealthIntervalMin: Number(process.env.COOKIE_HEALTH_INTERVAL_MIN || 360),

@@ -1,7 +1,7 @@
 import { config } from './config.js';
 
-// 签到时间调度辅助：把"账号级个人签到时间"从 schedMode/checkInTime 解析为 HH:MM，
-// 并为"系统自动"模式在配置窗口内确定性地分配一个分散的固定时间，避免多账号同秒扎堆。
+// 智能启动调度辅助：把"账号级个人启动时间"从 schedMode/checkInTime 解析为 HH:MM，
+// 并为"系统自动"模式在配置窗口内确定性地分配一个分散的固定时间，避免多账号同秒扎堆（第一定律）。
 
 // 解析 "HH:MM"（24 小时制）。非法返回 null。
 export function parseHM(s) {
@@ -87,10 +87,27 @@ export function assignAutoCheckInTime(userId, cfg = config) {
   return fmtHM(Math.floor(total / 60) % 24, total % 60);
 }
 
-// 解析某账号实际生效的签到时间（HH:MM）：
-// - manual：用其 checkInTime（非法/缺失则回退系统默认）
-// - default：系统默认时间
-// - auto：用已固化的 checkInTime；若缺失则按 userId 哈希重新分配
+// 参与「智能启动调度」账号级每日流水线的任务类型（含签到）。
+// gpt / fetch 为全局任务（不绑定单个账号），不在此集合，仍走各自独立 cron。
+// 该集合被 startup.js 与 scheduler.js 共用：当 t_startup 启用时，主调度 tick 会跳过这些类型，
+// 改由智能启动调度按账号错峰统一跑，避免「固定 cron 全员同刻 + 启动调度」重复执行。
+export const ACCOUNT_PIPELINE_TYPES = new Set([
+  'clock',
+  'comment',
+  'favorite',
+  'point',
+  'lottery',
+  'turntable',
+  'crowdtest',
+  'dailyTasks',
+  'follow',
+  'share'
+]);
+
+// 解析某账号实际生效的启动时间（HH:MM）：
+// - manual：用其 checkInTime（非法/缺失则回退系统默认时间）
+// - auto（及未知/遗留模式）：用已固化的 checkInTime；若缺失则按 userId 哈希重新分配
+//   注：原"系统默认=全员同刻"的碰撞模式已移除（违反第一定律），不构成可选模式。
 export function resolvedCheckInTime(user, cfg = config) {
   const mode = user && user.schedMode ? user.schedMode : 'auto';
   const fallback = cfg.defaultCheckInTime || '09:00';
@@ -98,10 +115,7 @@ export function resolvedCheckInTime(user, cfg = config) {
     const p = parseHM(user.checkInTime);
     return p ? fmtHM(p.h, p.mi) : fallback;
   }
-  if (mode === 'default') {
-    return fallback;
-  }
-  // auto
+  // auto（含未知/遗留模式，统一按 auto 错峰处理）
   const p = parseHM(user.checkInTime);
   if (p) return fmtHM(p.h, p.mi);
   return assignAutoCheckInTime(user.id, cfg);

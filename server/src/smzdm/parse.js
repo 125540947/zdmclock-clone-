@@ -1,6 +1,6 @@
 // 共享响应解析工具（P1-6 抽离）
 //
-// 原 realAdapter / tasks_real / taskMatrix / extremeLazy 各有一份 removeTags / extractReward /
+// 原 realAdapter / tasks_real / taskMatrix 各有一份 removeTags / extractReward /
 // parseJsonp 的实现，行为存在分叉（是否处理 Angular )]}' 前缀、解析失败是抛错还是返回 {}）。
 // 这里收敛为唯一实现，避免重复与正确性漂移：
 //   - parseJsonp：先剥离 )]}' 安全前缀，再解 JSONP 外壳（callback({...}) / jQuery123({...})），
