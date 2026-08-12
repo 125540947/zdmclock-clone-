@@ -24,7 +24,11 @@ router.post('/login', (req, res) => {
   if (config.openMode) {
     // 匿名自动登录：仅签发普通 token，绝不向访客泄露管理员 Token（修复：此前会把 ADMIN_TOKEN 发给所有匿名访客，
     // 导致「匿名不能改删」形同虚设——任何人都能拿到管理员令牌去改删账号、触发系统更新）。
-    const resp = { token: config.apiToken, adminToken: '', username: username || 'open' };
+    // 注意：匿名登录【不】下发 adminToken 字段（而非空串 ''）。
+    // 前端 setToken(token, undefined) 会跳过管理员令牌分支、保留已有令牌；
+    // 若下发 '' 则会被前端当作「清空」处理，把刚登录成功的管理员令牌在页面 reload 时误删，
+    // 导致开放模式下后台入口闪现后消失、#/admin 被守卫弹回前台。
+    const resp = { token: config.apiToken, username: username || 'open' };
     // 管理员通道：提交正确的 ADMIN_TOKEN（作为 adminToken 或 password 字段）才签发管理员 Token，
     // 使「保留管理员改删/更新能力」在开放模式下可用，且不对匿名访客开放。
     if (config.adminToken) {

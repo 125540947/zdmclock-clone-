@@ -59,7 +59,7 @@ test('OPEN_MODE：匿名登录仅发普通 token（adminToken 空），提交正
   const anon = await j('POST', '/api/auth/login', { username: 'open' });
   assert.equal(anon.status, 200);
   assert.equal(anon.data.token, config.apiToken);
-  assert.equal(anon.data.adminToken, '', '匿名不应拿到管理员令牌');
+  assert.ok(!anon.data.adminToken, '匿名不应拿到管理员令牌');
   const admin = await j('POST', '/api/auth/login', { username: 'open', adminToken: 'adminsecret' });
   assert.equal(admin.data.adminToken, 'adminsecret');
   assert.equal(admin.data.username, config.adminUsername || 'admin');
