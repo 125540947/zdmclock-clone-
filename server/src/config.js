@@ -27,6 +27,9 @@ const installTokenFromEnv = process.env.INSTALL_TOKEN || null;
 export const config = {
   port: Number(process.env.PORT || 3000),
   nodeEnv: process.env.NODE_ENV || 'development',
+  // 调试开关：仅当显式 ZDM_DEBUG=1 时，错误响应才向客户端回显 err.message 内部细节。
+  // 默认关闭（即使 NODE_ENV 未设为 production），确保所有环境错误响应均泛化，杜绝内部路径/查询泄露（S10 纵深加固）。
+  debug: process.env.ZDM_DEBUG === '1',
   requireAuth: parseBool(process.env.REQUIRE_AUTH, false),
   adminUsername: process.env.ADMIN_USERNAME || 'admin',
   adminPassword: process.env.ADMIN_PASSWORD || 'admin123',

@@ -162,7 +162,7 @@ export function createApp() {
     );
     next();
   });
-  app.use(express.json());
+  app.use(express.json({ limit: '256kb' })); // P1：限制请求体大小，防超大 payload DoS
 
   // 健康检查
   app.get('/api/health', (req, res) => {
@@ -263,7 +263,8 @@ export function createApp() {
     // eslint-disable-next-line no-console
     console.error('[error]', err);
     // S10：生产环境不向外暴露内部错误细节（可能含路径），返回泛化消息
-    const message = config.nodeEnv === 'production' ? '服务器内部错误' : err.message;
+    // S10 纵深加固：默认泛化错误响应，仅显式 ZDM_DEBUG=1 才回显内部 err.message（避免 VPS 未设 NODE_ENV=production 时泄露内部细节）
+    const message = config.debug ? err.message : '服务器内部错误';
     res.status(500).json({ error: 'server_error', message });
   });
 
