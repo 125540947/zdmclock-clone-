@@ -187,10 +187,26 @@
 ⚠️ 说明：审计报告曾点名但本次未改的项——(a) `health.js` `checkAccounts` 仍串行逐账号，仅周期探测、不在就绪探针路径，改并行会瞬间打 smzdm 触发风控，保持现状；(b) `scheduler.js` `cronMatch` 日/周用 `&&`（与标准 Cron 的 OR 不同），为有意设计，保持现状；(c) `gpt.test.js` / `notify.test.js` 既有测试失败属 Node test-runner 环境问题（`mock.module is not a function`），与本次改动无关，干净树复测同样失败。
 
 **测试与部署**
-- 后端全量 384 测、382 通过；2 项失败为既有环境问题（见上 ⚠️ 说明）。
+- 后端全量 384 测、382 通过（以 `node --test` 误跑，缺 `--experimental-test-module-mocks`，gpt/notify 报 2 项失败）；⚠️ 该 2 项非真实回归，以项目自带 `npm test` 复跑全量 **402/402 通过**（见批次 8）。
 - `deploy-smart-startup.sh`（工作区根）最新 SHA 同步为 `6e90f07`。
 
 **代表提交**：`6e90f07`
+
+---
+
+## 批次 8 · secure-by-default：REQUIRE_AUTH 默认翻为 true（2026-08-13）
+
+**改动要点**
+- 推翻此前「保留开箱即跑、暂不翻转默认」的暂缓判断：将 `REQUIRE_AUTH` 默认值由 `false` 翻为 `true`，实现 secure-by-default——克隆即需鉴权，彻底堵住「默认配置直接暴露公网」这一审计核心风险。
+
+**问题修复**
+- `config.js`：`requireAuth: parseBool(process.env.REQUIRE_AUTH, false)` → `true`（默认值改 true）。
+- `.env.example`：同步默认 `true`，顶部安全须知改写为「默认 true，克隆后需设强 ADMIN_PASSWORD 并登录拿 Token」；仅本机临时调试可设 `false`（须配合 127.0.0.1 绑定，勿暴露公网）。
+- 测试适配：route 层 HTTP 测试（`routes.test.js` / `routesCore.test.js`）显式 `config.requireAuth = false`（业务/校验逻辑匿名可达）；鉴权仍由 `authRoute.test.js` / `authSecurity.test.js` 专项覆盖。废弃 `--import` 全局注入方案（config 在 import 时快照 env，过早注入会冻结 GPT_API_KEY 等导致无关用例失败）。
+
+⚠️ 说明：批次 7 记「gpt/notify 2 项既有失败」实为以 `node --test`（缺 `--experimental-test-module-mocks`）误跑所致；以项目自带 `npm test` 复跑，全量 **402/402 通过**，无真实回归。
+
+**代表提交**：`9b858a7`
 
 ---
 
