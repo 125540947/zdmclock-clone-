@@ -40,6 +40,31 @@ export function isSafePushUrl(url) {
   return true;
 }
 
+// Phase 1（P0 严重#1/#2 修复）：Cookie 出口白名单。
+// 用户的 smzdm 登录 Cookie（含 sess / __ckguid）属于高敏感凭据，只能发往 smzdm 自家域名。
+// 此前统一出口 call() 仅用 isSafePushUrl（只挡内网、放行一切公网域名），匿名在 OPEN_MODE 下把
+// 「自定义端点」配成自己的服务器即可通过 call() 把他人 Cookie 外泄。这里收紧为"仅 smzdm.com 及其子域"。
+// allowedExact 用于放行 env 自定义基址（如自建反代域名）；其余公网域名一律拒绝。
+export function isSafeSmzdmUrl(url, allowedExact = []) {
+  if (typeof url !== 'string' || !url.trim()) return false;
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+  const host = u.hostname.toLowerCase();
+  // 拒 IP 字面量（IPv4 / IPv6 含 [::1]）与 localhost：Cookie 只应发往域名（便于审计与 TLS 校验）
+  if (host === 'localhost') return false;
+  if (host.includes(':')) return false; // 含冒号即 IPv6 字面量
+  if (/^(\d{1,3}\.){3}\d{1,3}$/.test(host)) return false; // IPv4 字面量
+  // 显式放行 env 自定义基址（调用方传入，形如 ['my-proxy.example.com']）
+  if (Array.isArray(allowedExact) && allowedExact.some((h) => String(h).toLowerCase() === host)) return true;
+  // 仅允 smzdm.com 及其子域
+  return host === 'smzdm.com' || host.endsWith('.smzdm.com');
+}
+
 // 从 db.settings.push 解析推送设置；db 中缺省字段回退到环境变量（便于纯 env 部署）
 export function resolvePushSettings(db) {
   const p = (db && db.settings && db.settings.push) || {};

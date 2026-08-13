@@ -212,36 +212,39 @@ test('GET /api/users/import-script 返回油猴脚本源码（text/plain）', as
   config.requireAuth = false;
 });
 
-test('GET /api/users/import-script.user.js 注入服务地址并返回 javascript', async () => {
+test('GET /api/users/import-script.user.js 注入服务地址（取自 Host）并返回 javascript', async () => {
   config.requireAuth = false;
-  const origin = 'http://1.2.3.4:3000';
-  const res = await fetch(base + '/api/users/import-script.user.js?server=' + encodeURIComponent(origin));
+  // Phase 1 严重#2 修复：移除 ?server= 任意参数，推送目标强制为本服务 Host（base），
+  // 杜绝把 Cookie 指向第三方服务器。注入的 __SERVER__ / __CONNECT__ 应等于 base。
+  const res = await fetch(base + '/api/users/import-script.user.js');
   const text = await res.text();
   assert.equal(res.status, 200);
   assert.ok(text.includes('UserScript'), '应返回油猴脚本内容');
-  assert.ok(text.includes(JSON.stringify(origin)), '应注入服务地址');
+  assert.ok(text.includes(JSON.stringify(base)), '应注入本服务地址（取自 Host）');
   assert.ok(!text.includes('__SERVER__'), '地址占位符应被替换');
   assert.ok(!text.includes('__TOKEN__'), 'Token 占位符应被替换');
+  assert.ok(!text.includes('__CONNECT__'), 'connect 占位符应被替换');
   assert.ok((res.headers.get('content-type') || '').includes('javascript'), '应为 javascript 类型');
+  assert.equal(res.headers.get('cache-control'), 'no-store', '应加 no-store 防缓存含 Token 脚本');
   config.requireAuth = false;
 });
 
 test('GET /api/users/import-script.user.js 公开可读且注入窄权限 installToken（不依赖会话 token）', async () => {
   config.requireAuth = true;
-  const origin = 'http://1.2.3.4:3000';
   // 无 token → 200（安装端点公开可读，P1-2：不依赖会话 token，避免凭证泄露）
-  const noToken = await fetch(base + '/api/users/import-script.user.js?server=' + encodeURIComponent(origin));
+  const noToken = await fetch(base + '/api/users/import-script.user.js');
   assert.equal(noToken.status, 200, '安装端点应公开可读（无需会话 token）');
   const text = await noToken.text();
   assert.ok(text.includes('UserScript'), '应返回油猴脚本内容');
-  assert.ok(text.includes(JSON.stringify(origin)), '应注入服务地址');
+  assert.ok(text.includes(JSON.stringify(base)), '应注入本服务地址（取自 Host）');
   assert.ok(!text.includes('__SERVER__'), '地址占位符应被替换');
   assert.ok(!text.includes('__TOKEN__'), 'Token 占位符应被替换');
+  assert.ok(!text.includes('__CONNECT__'), 'connect 占位符应被替换');
   // 安全断言：脚本内不得内联真实会话 token（仅窄权限 installToken）
   assert.ok(!text.includes(config.apiToken), '脚本不得内联真实会话 token');
   // ?token= 会话参数应被忽略（不再作为鉴权手段），仍 200 且不含会话 token
   const withToken = await fetch(
-    base + '/api/users/import-script.user.js?server=' + encodeURIComponent(origin) + '&token=' + encodeURIComponent(config.apiToken)
+    base + '/api/users/import-script.user.js?token=' + encodeURIComponent(config.apiToken)
   );
   assert.equal(withToken.status, 200, '?token= 会话参数应被忽略（不作为鉴权）');
   config.requireAuth = false;

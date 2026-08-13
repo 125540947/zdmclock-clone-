@@ -177,15 +177,30 @@ router.post('/import', authRequiredOrInstall, async (req, res) => {
   res.json({ ...user, cookie: maskCookie(user.cookie), imported: true });
 });
 
-// 返回油猴抓取脚本「模板」源码（__SERVER__ / __TOKEN__ 占位符由服务端注入）。
+// 返回油猴抓取脚本「模板」源码（__SERVER__ / __TOKEN__ / __CONNECT__ 占位符由服务端注入）。
 // 公开可读（与下方 .user.js 一致），但注入的 __TOKEN__ 仅为窄权限 INSTALL_TOKEN（非会话 token，见 P1-2 修复）。
+// Phase 1 严重#2 修复：① 不再接受 ?server= 任意参数（此前可把推送目标指向任意第三方域名，
+//   配合脚本把 Cookie 推到攻击者服务器）；② 响应加 Cache-Control: no-store（防代理/浏览器缓存含 Token 的脚本）；
+//   ③ @connect 占位符 __CONNECT__ 注入为本服务真实域名，收紧油猴跨域权限（不再 @connect *）。
+function bakeImportScript(req) {
+  const server = String(req.protocol + '://' + (req.headers.host || ''));
+  const token = config.installToken || '';
+  // __CONNECT__ 注入为服务真实主机（host:port，不含 scheme/引号）——油猴 @connect 指令只接受裸域名，
+  // 这样脚本仅对自家服务域放行 GM_xmlhttpRequest 跨域，收紧为「非 @connect *」。
+  const connect = (() => {
+    try { return new URL(server).host; } catch { return server.replace(/^https?:\/\//, '').replace(/\/+$/, ''); }
+  })();
+  const code = fs.readFileSync(SCRIPT_PATH, 'utf8');
+  return code
+    .replace(/__SERVER__/g, JSON.stringify(server))
+    .replace(/__TOKEN__/g, JSON.stringify(token))
+    .replace(/__CONNECT__/g, connect);
+}
+
 router.get('/import-script', (req, res) => {
   try {
-    const code = fs.readFileSync(SCRIPT_PATH, 'utf8');
-    const server = String(req.protocol + '://' + (req.headers.host || ''));
-    const baked = code
-      .replace(/__SERVER__/g, JSON.stringify(server))
-      .replace(/__TOKEN__/g, JSON.stringify(config.installToken || ''));
+    const baked = bakeImportScript(req);
+    res.set('Cache-Control', 'no-store');
     res.type('text/javascript').send(baked);
   } catch {
     res.status(404).json({ error: 'not_found', message: '脚本文件不存在（请确认 tools/cookie-grabber.user.js）' });
@@ -196,18 +211,12 @@ router.get('/import-script', (req, res) => {
 // URL 以 .user.js 结尾且返回 text/javascript，浏览器导航到此链接时油猴会自动弹出安装对话框。
 // 安全（P1-2 修复）：① 本接口公开可读，但注入的 __TOKEN__ 仅为窄权限 INSTALL_TOKEN（scope 仅 POST /users/import），
 //    绝不写入用户会话 token；② 链接不再携带 ?token= 查询参数，消除浏览器历史/Referer/访问日志泄露面。
-// - server：优先取前端通过 ?server= 传入的真实访问地址（穿透反代/HTTPS 也正确）；缺省回退 Host 头拼接。
-// - token ：注入 config.installToken（窄权限；REQUIRE_AUTH 下未配置则为空，脚本自动推送会 401——此时请改用「录入账号」页手动录入）。
+// Phase 1 严重#2 修复：③ 移除 ?server= 任意参数（推送目标强制为本服务 Host，杜绝指向第三方）；
+//    ④ 响应加 Cache-Control: no-store；⑤ @connect 收紧为服务真实域名（见 bakeImportScript）。
 router.get('/import-script.user.js', (req, res) => {
   try {
-    const code = fs.readFileSync(SCRIPT_PATH, 'utf8');
-    const server = String(
-      req.query.server || `${req.protocol}://${req.headers.host || ''}`
-    );
-    const token = config.installToken || '';
-    const baked = code
-      .replace(/__SERVER__/g, JSON.stringify(server))
-      .replace(/__TOKEN__/g, JSON.stringify(token));
+    const baked = bakeImportScript(req);
+    res.set('Cache-Control', 'no-store');
     res.type('text/javascript').send(baked);
   } catch {
     res.status(404).json({ error: 'not_found', message: '脚本文件不存在（请确认 tools/cookie-grabber.user.js）' });

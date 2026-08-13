@@ -8,7 +8,7 @@
 // @match        https://zhiyou.smzdm.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_cookie
-// @connect      *
+// @connect      __CONNECT__
 // ==/UserScript==
 
 (function () {

@@ -226,7 +226,18 @@ export async function runCustomEndpointTask(task, db, user, adapter = smzdm) {
     referer: def.referer,
     extraHeaders: def.headers
   };
-  const raw = def.jsonp ? await adapter.requestRaw(def.endpoint, { ...extraOpts, raw: true }) : await adapter.requestRaw(def.endpoint, extraOpts);
+  // Phase 1 严重#1/#2 修复：自定义端点带登录 Cookie 发起请求。call() 已强制"仅允许 smzdm 域名"，
+  // 若用户配了非 smzdm 端点会被 call() 拒绝；这里捕获并转为友好错误，避免上层把"被拦截"误判为未知异常。
+  let raw;
+  try {
+    raw = def.jsonp ? await adapter.requestRaw(def.endpoint, { ...extraOpts, raw: true }) : await adapter.requestRaw(def.endpoint, extraOpts);
+  } catch (e) {
+    return {
+      ok: false,
+      error: 'blocked_endpoint',
+      message: `自定义端点请求被拒绝（仅允许发往 smzdm 域名，以防 Cookie 泄露）：${e.message}`
+    };
+  }
 
   // JSONP 响应形如 callback({...})，需剥离外层函数壳再解析
   let json = raw;

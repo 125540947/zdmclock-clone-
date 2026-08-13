@@ -121,7 +121,8 @@ test('PUT /api/tasks/endpoints 回环端点 → 400 unsafe_endpoint', async () =
 
 test('PUT /api/tasks/endpoints 不安全 referer → 400 unsafe_referer', async () => {
   const { status, data } = await j('PUT', '/api/tasks/endpoints', {
-    type: 'follow', endpoint: 'https://example.com/x', referer: 'http://127.0.0.1/y'
+    // endpoint 先用合法 smzdm 域通过白名单，referer 用内网地址触发 unsafe_referer
+    type: 'follow', endpoint: 'https://zhiyou.smzdm.com/x', referer: 'http://127.0.0.1/y'
   });
   assert.equal(status, 400);
   assert.equal(data.error, 'unsafe_referer');
@@ -129,19 +130,29 @@ test('PUT /api/tasks/endpoints 不安全 referer → 400 unsafe_referer', async 
 
 test('PUT /api/tasks/endpoints 非法 params JSON → 400 invalid_params', async () => {
   const { status, data } = await j('PUT', '/api/tasks/endpoints', {
-    type: 'follow', endpoint: 'https://example.com/x', params: 'not json{'
+    // endpoint 先用合法 smzdm 域通过白名单，再校验 params
+    type: 'follow', endpoint: 'https://zhiyou.smzdm.com/x', params: 'not json{'
   });
   assert.equal(status, 400);
   assert.equal(data.error, 'invalid_params');
 });
 
-test('PUT /api/tasks/endpoints 合法公网端点 → 200 ok', async () => {
+// Phase 1：Cookie 出口白名单。自定义端点仅允许 smzdm 域名（之前 any 公网即放行，可被配成第三方窃取 Cookie）。
+test('PUT /api/tasks/endpoints 非 smzdm 公网端点 → 400 unsafe_endpoint（防 Cookie 泄露）', async () => {
   const { status, data } = await j('PUT', '/api/tasks/endpoints', {
-    type: 'follow', endpoint: 'https://example.com/api/follow', method: 'POST'
+    type: 'follow', endpoint: 'https://example.com/api/follow'
+  });
+  assert.equal(status, 400);
+  assert.equal(data.error, 'unsafe_endpoint');
+});
+
+test('PUT /api/tasks/endpoints 合法 smzdm 端点 → 200 ok', async () => {
+  const { status, data } = await j('PUT', '/api/tasks/endpoints', {
+    type: 'follow', endpoint: 'https://user-api.smzdm.com/api/follow', method: 'POST'
   });
   assert.equal(status, 200);
   assert.equal(data.ok, true);
-  assert.ok(data.endpoints.follow && data.endpoints.follow.endpoint === 'https://example.com/api/follow');
+  assert.ok(data.endpoints.follow && data.endpoints.follow.endpoint === 'https://user-api.smzdm.com/api/follow');
 });
 
 test('PUT /api/tasks/endpoints 空 endpoint（内置类型仅更新 params）→ 200 ok', async () => {
@@ -173,17 +184,17 @@ test('POST /api/tasks/captures/apply 非自定义类型被跳过', async () => {
   assert.ok(data.skipped.some((s) => s.type === 'bogus'));
 });
 
-test('POST /api/tasks/captures/apply 不安全端点被跳过', async () => {
+test('POST /api/tasks/captures/apply 不安全端点（非 smzdm 域）被跳过', async () => {
   const { status, data } = await j('POST', '/api/tasks/captures/apply', {
     items: [{ type: 'follow', endpoint: 'http://127.0.0.1/x' }]
   });
   assert.equal(status, 400);
-  assert.ok(data.skipped.some((s) => s.type === 'follow' && /不安全/.test(s.reason)));
+  assert.ok(data.skipped.some((s) => s.type === 'follow' && /非 smzdm 域名|不安全/.test(s.reason)));
 });
 
-test('POST /api/tasks/captures/apply 合法端点 → 应用成功', async () => {
+test('POST /api/tasks/captures/apply 合法 smzdm 端点 → 应用成功', async () => {
   const { status, data } = await j('POST', '/api/tasks/captures/apply', {
-    items: [{ type: 'follow', endpoint: 'https://example.com/api/follow2' }]
+    items: [{ type: 'follow', endpoint: 'https://user-api.smzdm.com/api/follow2' }]
   });
   assert.equal(status, 200);
   assert.equal(data.ok, true);

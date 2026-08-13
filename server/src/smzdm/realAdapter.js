@@ -13,7 +13,7 @@
 
 import crypto from 'node:crypto';
 import { normalizeArticleId } from './articleId.js';
-import { isSafePushUrl } from '../notifier.js';
+import { isSafePushUrl, isSafeSmzdmUrl } from '../notifier.js';
 import { parseJsonp, removeTags } from './parse.js';
 
 const BASE = (process.env.SMZDM_BASE || 'https://www.smzdm.com').replace(/\/$/, '');
@@ -23,6 +23,10 @@ const WEB_BASE = (process.env.SMZDM_WEB_BASE || 'https://zhiyou.smzdm.com').repl
 // 文章详情基址（APP 接口家族，与 user-api 同族，服务端带登录 Cookie 可用，无 www 反爬墙）：
 // 点赞/收藏接口必填文章真实 channel_id，此端点可返回 data.data.channel_id。
 const ARTICLE_API_BASE = (process.env.SMZDM_ARTICLE_API_BASE || 'https://article-api.smzdm.com').replace(/\/$/, '');
+
+// Phase 1：Cookie 出口白名单的精确放行基址（env 可覆盖）。call() 带 cookie 时只允许这些域 + 任意 *.smzdm.com。
+const hostOf = (u) => { try { return new URL(u).host.toLowerCase(); } catch { return ''; } };
+const SMZDM_ALLOWED_HOSTS = [hostOf(BASE), hostOf(API_BASE), hostOf(WEB_BASE), hostOf(ARTICLE_API_BASE)].filter(Boolean);
 
 // 调试日志开关：默认关闭（生产静默）。设 SMZDM_DEBUG=1 打开，排查真实签到链路时用。
 // P2-7 修复：原 [smzdm-debug] console.log 在生产环境噪音大且会打印 cookie 长度等内部信息，
@@ -103,31 +107,68 @@ function headers(cookie, ua = UA) {
 // 扩展：raw（返回原始文本，供 JSONP 类接口）、referer / extraHeaders（抓包接口常需特定来源与头）
 export async function call(path, { method = 'GET', cookie, body, ua = UA, base = API_BASE, raw = false, referer, extraHeaders } = {}) {
   const url = path.startsWith('http') ? path : base + path;
-  // SSRF 纵深防御（P0-1）：拒绝任何指向私有/回环/链路本地地址的请求，
-  // 即使上层校验被绕过，call 作为统一出口也拦截内网探测（如云元数据 169.254.169.254）。
-  if (!isSafePushUrl(url)) throw new Error(`拒绝请求非公网地址（疑似 SSRF）@ ${url}`);
-  const timeoutMs = Number(process.env.SMZDM_REQUEST_TIMEOUT || 10000);
-  const init = {
-    method,
-    headers: headers(cookie, ua),
-    redirect: 'follow',
-    // 关键可靠性修复：对外请求必须带超时，避免 smzdm 无响应时 Promise 永久 pending
-    signal: AbortSignal.timeout(timeoutMs)
-  };
-  if (referer) init.headers['Referer'] = referer;
-  if (extraHeaders && typeof extraHeaders === 'object') Object.assign(init.headers, extraHeaders);
-  if (body) {
-    init.headers['Content-Type'] = 'application/x-www-form-urlencoded';
-    init.body = new URLSearchParams(body).toString();
+  // Phase 1 严重#1/#2 修复：Cookie 是用户 smzdm 登录凭据，只能发往 smzdm 域名。
+  // 带 cookie 时用白名单校验（仅 smzdm.com 及其子域 + env 基址）；不带 cookie 时退回 SSRF 纵深防御。
+  const isAllowed = (u) => (cookie ? isSafeSmzdmUrl(u, SMZDM_ALLOWED_HOSTS) : isSafePushUrl(u));
+  if (!isAllowed(url)) {
+    throw new Error(
+      cookie
+        ? `拒绝将登录凭据发往非 smzdm 域名（疑似 Cookie 泄露）@ ${url}`
+        : `拒绝请求非公网地址（疑似 SSRF）@ ${url}`
+    );
   }
-  let resp;
-  try {
-    resp = await fetch(url, init);
-  } catch (e) {
-    if (e?.name === 'TimeoutError' || e?.name === 'AbortError') {
-      throw new Error(`请求超时（>${timeoutMs}ms）@ ${path}，请检查网络或被风控拦截`);
+  // Phase 1 严重#2 修复：禁止调用方通过 extraHeaders 覆盖敏感头（Cookie/Authorization/Host/Origin/Referer 等），
+  // 防止把本应发往 smzdm 的凭据经 extraHeaders 改写 Host/Origin 后导向第三方，或注入 Authorization。
+  const BLOCKED_HEADERS = new Set([
+    'cookie', 'authorization', 'host', 'content-length', 'content-type', 'origin', 'referer'
+  ]);
+  const safeExtra = {};
+  if (extraHeaders && typeof extraHeaders === 'object') {
+    for (const [k, v] of Object.entries(extraHeaders)) {
+      if (BLOCKED_HEADERS.has(String(k).toLowerCase())) continue;
+      safeExtra[k] = v;
     }
-    throw e;
+  }
+  const timeoutMs = Number(process.env.SMZDM_REQUEST_TIMEOUT || 10000);
+  const MAX_REDIRECTS = 3;
+  let currentUrl = url;
+  let resp;
+  for (let attempt = 0; ; attempt++) {
+    const init = {
+      method,
+      headers: headers(cookie, ua),
+      redirect: 'manual',
+      // 关键可靠性修复：对外请求必须带超时，避免 smzdm 无响应时 Promise 永久 pending
+      signal: AbortSignal.timeout(timeoutMs)
+    };
+    if (referer) init.headers['Referer'] = referer;
+    Object.assign(init.headers, safeExtra);
+    if (body) {
+      init.headers['Content-Type'] = 'application/x-www-form-urlencoded';
+      init.body = new URLSearchParams(body).toString();
+    }
+    try {
+      resp = await fetch(currentUrl, init);
+    } catch (e) {
+      if (e?.name === 'TimeoutError' || e?.name === 'AbortError') {
+        throw new Error(`请求超时（>${timeoutMs}ms）@ ${path}，请检查网络或被风控拦截`);
+      }
+      throw e;
+    }
+    // Phase 1 严重#1 修复：手动跳转校验。redirect:'manual' 不自动跟随，避免 Cookie 被带往
+    // 跳转后的非授权地址。仅当跳转目标同样通过白名单才跟随（默认跨域即阻断）。
+    if (resp.status >= 300 && resp.status < 400) {
+      if (attempt >= MAX_REDIRECTS) throw new Error(`重定向次数过多（>${MAX_REDIRECTS}），已拒绝 @ ${currentUrl}`);
+      const loc = resp.headers.get('location');
+      if (!loc) throw new Error(`重定向缺少 Location 头，已拒绝 @ ${currentUrl}`);
+      const next = (() => { try { return new URL(loc, currentUrl).toString(); } catch { return ''; } })();
+      if (!next || !isAllowed(next)) {
+        throw new Error(`拒绝跟随重定向到非授权地址（疑似 Cookie 泄露）@ ${next || loc}`);
+      }
+      currentUrl = next;
+      continue;
+    }
+    break;
   }
   if (!resp.ok) throw new Error(`HTTP ${resp.status} @ ${path}`);
   const text = await resp.text();

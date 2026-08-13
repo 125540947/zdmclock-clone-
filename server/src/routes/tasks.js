@@ -8,7 +8,7 @@ import { dbgLog } from '../log.js';
 import { runTask } from '../taskRunner.js';
 import { validateCron } from '../scheduler.js';
 import { authRequired, mutationGuard } from '../auth.js';
-import { notify, isSafePushUrl } from '../notifier.js';
+import { notify, isSafeSmzdmUrl } from '../notifier.js';
 import { CUSTOM_TYPES, CUSTOM_TASK_DEFS, TASK_TEMPLATES, REAL_STRATEGY_TYPES } from '../taskMatrix.js';
 
 const router = Router();
@@ -94,14 +94,15 @@ router.put('/endpoints', mutationGuard, async (req, res) => {
   const isReal = REAL_STRATEGY_TYPES.has(type);
   const epEmpty = endpoint === '' || endpoint == null;
 
-  // SSRF 防护（P0-1）：endpoint / referer 必须为公网 http/https，拒绝内网/回环/链路本地，
-  // 防止匿名在 OPEN_MODE 下配置端点探测内网或读取云元数据（169.254.169.254）。
+  // Phase 1 严重#1/#2 修复：Cookie 出口白名单。endpoint / referer 必须为 smzdm.com 及其子域
+  // （或 env 自定义基址），拒绝任意其他公网域名 —— 防止匿名在 OPEN_MODE 下把"自定义端点"
+  // 配成自己的服务器从而窃取他人 smzdm 登录 Cookie。运行时 call() 还有第二道白名单兜底。
   if (!epEmpty) {
-    if (!isSafePushUrl(String(endpoint))) {
-      return res.status(400).json({ error: 'unsafe_endpoint', message: 'endpoint 必须为公网 http/https 地址，禁止指向内网/回环/链路本地' });
+    if (!isSafeSmzdmUrl(String(endpoint))) {
+      return res.status(400).json({ error: 'unsafe_endpoint', message: 'endpoint 必须为 smzdm.com 及其子域（仅允许发往 smzdm 自家域名，禁止任意第三方域名以防 Cookie 泄露）' });
     }
-    if (referer && !isSafePushUrl(referer)) {
-      return res.status(400).json({ error: 'unsafe_referer', message: 'referer 必须为公网 http/https 地址' });
+    if (referer && !isSafeSmzdmUrl(referer)) {
+      return res.status(400).json({ error: 'unsafe_referer', message: 'referer 必须为 smzdm.com 及其子域' });
     }
   }
 
@@ -187,8 +188,9 @@ router.post('/captures/apply', mutationGuard, async (req, res) => {
       continue;
     }
     const endpoint = (it.endpoint || '').toString().slice(0, 2000).trim();
-    if (endpoint && !isSafePushUrl(endpoint)) {
-      skipped.push({ type, reason: '端点地址不安全（非公网），已跳过' });
+    // Phase 1 严重#1/#2 修复：仅允许 smzdm 域名（运行时 call() 白名单兜底）
+    if (endpoint && !isSafeSmzdmUrl(endpoint)) {
+      skipped.push({ type, reason: '端点地址非 smzdm 域名（禁止第三方域名以防 Cookie 泄露），已跳过' });
       continue;
     }
     if (!endpoint) {
@@ -213,8 +215,8 @@ router.post('/captures/apply', mutationGuard, async (req, res) => {
     if (it.tokenField && typeof it.tokenField === 'string') cfg.tokenField = it.tokenField.slice(0, 40);
     if (it.referer && typeof it.referer === 'string') {
       const r = it.referer.slice(0, config.maxNoteLen);
-      if (!isSafePushUrl(r)) {
-        skipped.push({ type, reason: 'referer 地址不安全（非公网），已跳过' });
+      if (!isSafeSmzdmUrl(r)) {
+        skipped.push({ type, reason: 'referer 非 smzdm 域名，已跳过' });
         continue;
       }
       cfg.referer = r;

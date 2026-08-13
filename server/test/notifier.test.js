@@ -3,8 +3,50 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { resolvePushSettings, sendPush, notify } = await import('../src/notifier.js');
+const { resolvePushSettings, sendPush, notify, isSafeSmzdmUrl } = await import('../src/notifier.js');
 const realFetch = globalThis.fetch;
+
+// ===================== Phase 1：Cookie 出口白名单 =====================
+
+test('isSafeSmzdmUrl：放行 smzdm.com 及其子域', () => {
+  for (const u of [
+    'https://www.smzdm.com/',
+    'https://user-api.smzdm.com/checkin',
+    'http://zhiyou.smzdm.com/x',
+    'https://article-api.smzdm.com/a'
+  ]) {
+    assert.equal(isSafeSmzdmUrl(u), true, u);
+  }
+});
+
+test('isSafeSmzdmUrl：拒绝其他公网域名（防 Cookie 外泄）', () => {
+  for (const u of [
+    'https://attacker.com/steal',
+    'https://evil.example.org/x',
+    'https://smzdm.com.evil.com/x' // 非 .smzdm.com 子域（前缀陷阱）
+  ]) {
+    assert.equal(isSafeSmzdmUrl(u), false, u);
+  }
+});
+
+test('isSafeSmzdmUrl：拒绝 IP / localhost / 非 http', () => {
+  for (const u of [
+    'http://169.254.169.254/latest/meta-data/',
+    'http://127.0.0.1/x',
+    'http://localhost/x',
+    'http://[::1]/x',
+    'ftp://www.smzdm.com/x',
+    'not-a-url',
+    ''
+  ]) {
+    assert.equal(isSafeSmzdmUrl(u), false, u);
+  }
+});
+
+test('isSafeSmzdmUrl：allowedExact 放行自定义基址', () => {
+  assert.equal(isSafeSmzdmUrl('https://my-proxy.example.com/x', ['my-proxy.example.com']), true);
+  assert.equal(isSafeSmzdmUrl('https://my-proxy.example.com/x', ['other.com']), false);
+});
 
 test('resolvePushSettings 优先采用 db 显式配置', () => {
   const s = resolvePushSettings({ settings: { push: { channel: 'serverchan', token: 't', enabled: true } } });

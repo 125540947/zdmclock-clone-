@@ -19,7 +19,9 @@ mock.module(p('notifier.js'), {
     sendPush: async () => SEND,
     notify: realNotifier.notify,
     resolvePushSettings: realNotifier.resolvePushSettings,
-    isSafePushUrl: realNotifier.isSafePushUrl
+    isSafePushUrl: realNotifier.isSafePushUrl,
+    // Phase 1：routes/tasks.js 现也依赖 isSafeSmzdmUrl（Cookie 出口白名单），mock 需透传真实实现
+    isSafeSmzdmUrl: realNotifier.isSafeSmzdmUrl
   }
 });
 
