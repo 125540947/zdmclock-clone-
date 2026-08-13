@@ -3,6 +3,7 @@ import { load, persist, withWriteLock } from '../store.js';
 import { smzdm } from '../smzdm/adapter.js';
 import { authRequired, mutationGuard } from '../auth.js';
 import { checkAccounts } from '../health.js';
+import { config } from '../config.js';
 import { notify } from '../notifier.js';
 import { runVerification } from '../verifyRealMode.js';
 import { wrapAsync } from '../wrapAsync.js';
@@ -30,13 +31,14 @@ router.post('/cookies', mutationGuard, wrapAsync(async (req, res) => {
   const db = load();
   if (!db.users.length) return res.json({ total: 0, results: [], message: '暂无账号' });
   const results = await checkAccounts(db, smzdm, {
+    concurrency: config.healthConcurrency,
     onExpired: (u, reason) =>
       notify(db, {
         title: '🍪 Cookie 失效告警',
         message: `账号「${u.nickname || u.smzdmId || u.id}」Cookie 可能已失效：${reason}`
       })
   });
-  await withWriteLock(() => persist());
+  await withWriteLock(() => persistAwait());
   // H-08：仅「真实失效（非网络异常）」计入失效列表与告警文案；网络类异常（degraded）不计入，
   // 避免一次外部网络故障把全部账号误报告为失效。
   const bad = results.filter((r) => !r.valid && !r.degraded);
@@ -57,7 +59,7 @@ router.post('/cookies', mutationGuard, wrapAsync(async (req, res) => {
 // 但仍可校验离线签名等逻辑。withCheckin=true 会实签一次（谨慎）。
 // 真机端点自检：用指定账号的 Cookie 跑 runVerification，返回每个端点的 PASS/FAIL/SKIP 明细。
 // withCheckin=true 会实签一次（真实动作），开放模式下强制管理员（mutationGuard），避免匿名用任意 userId 实签（IDOR）。
-router.post('/verify', mutationGuard, async (req, res) => {
+router.post('/verify', mutationGuard, wrapAsync(async (req, res) => {
   const { userId, withCheckin = false } = req.body || {};
   const db = load();
   const u = db.users.find((x) => x.id === userId);
@@ -78,6 +80,6 @@ router.post('/verify', mutationGuard, async (req, res) => {
     console.error('[health] verify 异常:', e);
     res.status(500).json({ error: 'verify_failed', message: '自检执行异常，请稍后重试或查看服务端日志' });
   }
-});
+}));
 
 export default router;

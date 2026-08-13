@@ -162,17 +162,33 @@ if ! id -u "$APP_USER" >/dev/null 2>&1; then
   useradd -r -m -s /usr/sbin/nologin "$APP_USER"
 fi
 
-echo "==> [3/6] 安装依赖与构建前端（校验关键包，缺失才装）"
-# 不能只判断 node_modules 目录是否存在：历史上有"目录在但依赖残缺"导致 npm start
-# 起不来的情况。改为检查真正需要的包/可执行文件。
-if [ ! -x node_modules/.bin/cross-env ] || [ ! -d node_modules/express ] \
-   || [ ! -d node_modules/dotenv ] || [ ! -d node_modules/vite ]; then
-  echo "  · 依赖不完整，执行 npm install"
-  npm install
+echo "==> [3/6] 安装依赖与构建前端（按变更判定，避免运行陈旧产物）"
+# M-11 修复：此前仅凭「关键包目录存在 / web/dist/index.html 存在」就跳过安装与构建，
+# 导致 git pull 后 package-lock.json 或 web 源码已变化，却仍直接运行旧 node_modules / 旧 dist。
+# 改为按 mtime 判定：package-lock.json / package.json 比 node_modules 新 → 重新装；
+# web 源码/锁文件比 web/dist 新 → 重新构建。
+NEED_INSTALL=0
+if [ ! -d node_modules ] || [ package-lock.json -nt node_modules ] || [ package.json -nt node_modules ]; then
+  NEED_INSTALL=1
 fi
+if [ "$NEED_INSTALL" -eq 1 ]; then
+  echo "  · 依赖需更新（package-lock/package.json 变更或缺失），执行 npm install"
+  npm install
+else
+  echo "  · 依赖无变化，跳过 npm install"
+fi
+
+NEED_BUILD=0
 if [ ! -f web/dist/index.html ]; then
-  echo "  · 前端未构建，执行 npm run build"
+  NEED_BUILD=1
+elif [ -n "$(find web/src web/package.json web/package-lock.json -newer web/dist/index.html 2>/dev/null | head -1)" ]; then
+  NEED_BUILD=1
+fi
+if [ "$NEED_BUILD" -eq 1 ]; then
+  echo "  · 前端需构建（源码/锁文件变更或 dist 缺失），执行 npm run build"
   npm run build
+else
+  echo "  · 前端无变化，跳过构建"
 fi
 # 防御：从 Windows 拷贝的仓库 node_modules/.bin 常丢 +x，导致 vite/cross-env 报
 # Permission denied（npm install 不会给已存在的文件补回 +x）。显式补回执行位。
@@ -192,39 +208,71 @@ while [ "$P" != "/" ]; do
 done
 
 echo "==> [4/6] 生成 / 校验 .env（关键安全项）"
-valid_env=0
-if [ -f .env ] && grep -Eq '^ADMIN_PASSWORD=.{8,}$' .env \
-                && grep -Eq '^API_TOKEN=.{8,}$' .env \
-                && grep -Eq '^ADMIN_TOKEN=.{8,}$' .env \
-                && grep -Eq '^REQUIRE_AUTH=true$' .env; then
-  valid_env=1
+# M-12 修复：部署脚本始终是 .env 的权威来源。即便已有 .env，也需「迁移」新增安全字段
+# （TRUST_PROXY / COOKIE_SECURE / PUBLIC_BASE_URL / BIND_ADDRESS / PROXY_TRUSTED_SUBNET / ZDM_TZ），
+# 否则升级部署会缺失这些字段（如始终没有 PUBLIC_BASE_URL、TLS 失败仍强制 Secure Cookie）。
+# 做法：复用既有「强密钥 + 适配器」，但每次都按本次部署参数重新物化全部设置，保证一致性。
+PREV_ADMIN_PASSWORD="$(grep -E '^ADMIN_PASSWORD=' .env 2>/dev/null | cut -d= -f2-)"
+PREV_API_TOKEN="$(grep -E '^API_TOKEN=' .env 2>/dev/null | cut -d= -f2-)"
+PREV_ADMIN_TOKEN="$(grep -E '^ADMIN_TOKEN=' .env 2>/dev/null | cut -d= -f2-)"
+PREV_REQUIRE_AUTH="$(grep -E '^REQUIRE_AUTH=' .env 2>/dev/null | cut -d= -f2-)"
+PREV_ADAPTER="$(grep -E '^SMZDM_ADAPTER=' .env 2>/dev/null | cut -d= -f2-)"
+
+# 既有密钥是否够强（>=8 位；REQUIRE_AUTH 缺省按 true 处理）。够强则复用，避免每次重部署更换登录凭据。
+SECRET_OK=0
+if [ -n "$PREV_ADMIN_PASSWORD" ] && [ "${#PREV_ADMIN_PASSWORD}" -ge 8 ] \
+   && [ -n "$PREV_API_TOKEN" ] && [ "${#PREV_API_TOKEN}" -ge 8 ] \
+   && [ -n "$PREV_ADMIN_TOKEN" ] && [ "${#PREV_ADMIN_TOKEN}" -ge 8 ] \
+   && { [ "$PREV_REQUIRE_AUTH" = "true" ] || [ -z "$PREV_REQUIRE_AUTH" ]; }; then
+  SECRET_OK=1
 fi
 
-if [ "$valid_env" -eq 0 ]; then
+if [ "$SECRET_OK" -eq 1 ]; then
+  ADMIN_PASSWORD="$PREV_ADMIN_PASSWORD"
+  API_TOKEN="$PREV_API_TOKEN"
+  ADMIN_TOKEN="$PREV_ADMIN_TOKEN"
+  REQ_AUTH_VAL="${PREV_REQUIRE_AUTH:-true}"
+  echo "  .env 密钥有效，复用现有凭据（其余设置按本次部署参数重新物化）。"
+else
   if [ -f .env ]; then
-    cp .env ".env.broken.$(date +%s)" && echo "  ⚠ 检测到无效的 .env，已备份为 .env.broken.* 后重新生成"
+    cp .env ".env.broken.$(date +%s)" && echo "  ⚠ 检测到无效/弱密钥的 .env，已备份为 .env.broken.* 后重新生成"
   fi
   ADMIN_PASSWORD="$(openssl rand -base64 18 | tr -dc 'A-Za-z0-9' | head -c 24)"
   API_TOKEN="$(openssl rand -hex 24)"
   ADMIN_TOKEN="$(openssl rand -hex 24)"
-  # 保留用户已显式选择的适配器（real/mock），避免重新生成时把 real 悄悄重置回 mock
-  # （历史上会导致"重新部署后变回假签到"）。未设置则安全默认 mock。
-  PREV_ADAPTER="$(grep -E '^SMZDM_ADAPTER=' .env 2>/dev/null | cut -d= -f2-)"
-  SMZDM_ADAPTER_VAL="${PREV_ADAPTER:-mock}"
-  # H-06：标准 TLS 部署（配了域名，走 nginx 反代）下，后端位于反代之后，必须开启 TRUST_PROXY
-  # （让 req.secure 正确识别 HTTPS），并对会话 Cookie 加 Secure，避免签发的 API/Admin 会话 Cookie
-  # 在 HTTP 链路/降级中被发送。直连 http 部署保持关闭（自托管 http 场景 Cookie 需可被发送）。
-  if [ -n "$DOMAIN" ]; then
-    ZDM_TRUST_PROXY="TRUST_PROXY=true"
-    ZDM_COOKIE_SECURE="COOKIE_SECURE=1"
-  else
-    ZDM_TRUST_PROXY="TRUST_PROXY=false"
-    ZDM_COOKIE_SECURE="COOKIE_SECURE=0"
-  fi
-  cat > .env <<ZDM_ENV_EOF
+  REQ_AUTH_VAL=true
+fi
+# 保留用户已显式选择的适配器（real/mock），避免重新生成时把 real 悄悄重置回 mock
+# （历史上会导致"重新部署后变回假签到"）。未设置则安全默认 mock。
+SMZDM_ADAPTER_VAL="${PREV_ADAPTER:-mock}"
+
+# H-06：标准 TLS 部署（配了域名，走 nginx 反代）下，后端位于反代之后，必须开启 TRUST_PROXY
+# （让 req.secure 正确识别 HTTPS），并对会话 Cookie 加 Secure，避免签发的 API/Admin 会话 Cookie
+# 在 HTTP 链路/降级中被发送。直连 http 部署保持关闭（自托管 http 场景 Cookie 需可被发送）。
+# H-01/H-02：TLS 部署由本机 nginx 反代，后端只监听 127.0.0.1（关闭外部可达端口），
+#   Express 信任代理仅限 loopback（PROXY_TRUSTED_SUBNET=loopback），使直连暴露的客户端无法伪造 XFF；
+#   油猴脚本回传地址固定为 PUBLIC_BASE_URL（https://$DOMAIN），杜绝 Host 头注入把 Cookie 指到攻击者域名。
+# 注意：COOKIE_SECURE 在 certbot 成功后才真正置 1（见 [6/6]），若 TLS 申请失败会回落为 0，
+# 避免「仅 HTTP 可用却强制 Secure Cookie」导致登录会话无法维持（M-12）。
+if [ -n "$DOMAIN" ]; then
+  ZDM_TRUST_PROXY="TRUST_PROXY=true"
+  ZDM_COOKIE_SECURE="COOKIE_SECURE=0"
+  ZDM_PUBLIC_BASE_URL="PUBLIC_BASE_URL=https://$DOMAIN"
+  ZDM_BIND_ADDRESS="BIND_ADDRESS=127.0.0.1"
+  ZDM_PROXY_SUBNET="PROXY_TRUSTED_SUBNET=loopback"
+else
+  ZDM_TRUST_PROXY="TRUST_PROXY=false"
+  ZDM_COOKIE_SECURE="COOKIE_SECURE=0"
+  # 直连模式：回传地址用「本机 IP:端口」固定（避免依赖不可靠的 Host 头），后端监听 0.0.0.0 供局域网直连。
+  SERVER_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  ZDM_PUBLIC_BASE_URL="PUBLIC_BASE_URL=http://${SERVER_IP}:$PORT"
+  ZDM_BIND_ADDRESS="BIND_ADDRESS=0.0.0.0"
+  ZDM_PROXY_SUBNET="PROXY_TRUSTED_SUBNET="
+fi
+cat > .env <<ZDM_ENV_EOF
 PORT=$PORT
 NODE_ENV=production
-REQUIRE_AUTH=true
+REQUIRE_AUTH=$REQ_AUTH_VAL
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=$ADMIN_PASSWORD
 API_TOKEN=$API_TOKEN
@@ -232,6 +280,9 @@ ADMIN_TOKEN=$ADMIN_TOKEN
 SMZDM_ADAPTER=$SMZDM_ADAPTER_VAL
 $ZDM_TRUST_PROXY
 $ZDM_COOKIE_SECURE
+$ZDM_PUBLIC_BASE_URL
+$ZDM_BIND_ADDRESS
+$ZDM_PROXY_SUBNET
 AUTO_UPDATE_APPLY=false
 UPDATE_CHECK_INTERVAL_MIN=1440
 SELF_UPDATE_NO_REEXEC=1
@@ -240,16 +291,13 @@ DATA_DIR=$APP_DIR/data
 WEB_DIST=$APP_DIR/web/dist
 ZDM_TZ=Asia/Shanghai
 ZDM_ENV_EOF
-  chown "$APP_USER":"$APP_USER" .env
-  chmod 600 .env
-  echo "=========================================================="
-  echo "  管理员密码(请立即记录): $ADMIN_PASSWORD"
-  echo "  API_TOKEN(请立即记录):  $API_TOKEN"
-  echo "  ADMIN_TOKEN(请立即记录): $ADMIN_TOKEN"
-  echo "=========================================================="
-else
-  echo "  .env 已存在且有效，沿用现有配置。"
-fi
+chown "$APP_USER":"$APP_USER" .env
+chmod 600 .env
+echo "=========================================================="
+echo "  管理员密码(请立即记录): $ADMIN_PASSWORD"
+echo "  API_TOKEN(请立即记录):  $API_TOKEN"
+echo "  ADMIN_TOKEN(请立即记录): $ADMIN_TOKEN"
+echo "=========================================================="
 
 echo "==> [5/6] 注册 systemd 服务（崩溃自动重启；禁用应用内 re-exec）"
 # 解析 npm 绝对路径：二进制 Node 装在 /usr/local/bin，而 systemd 默认 PATH 常不含该目录，
@@ -303,8 +351,16 @@ server {
 NGX_EOF
   ln -sf "/etc/nginx/sites-available/$SERVICE" "/etc/nginx/sites-enabled/$SERVICE"
   nginx -t && systemctl reload nginx
-  certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "admin@$DOMAIN" \
-    || echo "  ⚠ certbot 失败，请手动处理 TLS（域名解析/端口 80 需就绪）"
+  # M-12：仅在 certbot 成功（真正拿到 TLS 证书）后才把会话 Cookie 升级为 Secure；
+  # 若证书申请失败，保持 COOKIE_SECURE=0（HTTP 可用），避免「仅 HTTP 却强制 Secure Cookie」
+  # 导致登录会话无法维持（表面登录成功实际无会话）。
+  if certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "admin@$DOMAIN"; then
+    sed -i 's/^COOKIE_SECURE=.*/COOKIE_SECURE=1/' .env
+    echo "  ✅ TLS 证书已签发，会话 Cookie 已设为 Secure（仅 HTTPS 发送）。"
+  else
+    sed -i 's/^COOKIE_SECURE=.*/COOKIE_SECURE=0/' .env
+    echo "  ⚠ certbot 失败，已保持 COOKIE_SECURE=0（HTTP 可用）；请手动处理 TLS 后重跑本脚本。"
+  fi
 fi
 
 echo "==> 完成。访问：${DOMAIN:+https://$DOMAIN}${DOMAIN:-http://$(hostname -I | awk '{print $1}'):$PORT}"

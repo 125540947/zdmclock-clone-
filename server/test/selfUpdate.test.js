@@ -192,6 +192,80 @@ test('shouldReexec：决策矩阵（测试环境/ supervisor 托管）', () => {
   }
 });
 
+// M-13：依赖/构建失败 → 回滚 HEAD 到更新前提交（原子性，避免重启加载坏代码）
+test('M-13：npm install 失败 → 回滚 HEAD 到更新前提交', async () => {
+  let resetArgs = null;
+  const runner = async (cmd, args = []) => {
+    const a = args.join(' ');
+    if (cmd === 'git') {
+      if (a === 'rev-parse --is-inside-work-tree') return okOut('true');
+      if (a === 'rev-parse --show-toplevel') return okOut('/repo');
+      if (a === 'branch --show-current') return okOut('main');
+      if (a === 'log -1 --format=%s') return okOut('feat: base');
+      if (a === 'remote get-url origin') return okOut('https://github.com/x/y.git');
+      if (a === 'status --porcelain') return okOut('');
+      if (a.startsWith('fetch')) return okOut('');
+      if (a.startsWith('rev-list --count HEAD..origin')) return okOut('0');
+      if (a.startsWith('rev-list --count origin')) return okOut('0');
+      if (a.startsWith('rev-parse origin')) return okOut('def789');
+      if (a.startsWith('pull')) return okOut('Fast-forward');
+      if (a.startsWith('diff --name-only')) return okOut('package.json');
+      if (a === 'rev-parse HEAD') return okOut('abc123def456');
+      if (a.startsWith('reset --hard')) {
+        resetArgs = args.slice(2);
+        return okOut('HEAD is now at abc123d');
+      }
+    }
+    if (cmd === 'npm') {
+      if (a === 'install') return failOut('npm ERR! code 1');
+      if (a === 'run build') return okOut('built');
+    }
+    return okOut('');
+  };
+  const r = await runUpdate({ restart: false, runner });
+  assert.equal(r.ok, false, 'install 失败应返回 ok=false');
+  assert.equal(r.rolledBack, true);
+  assert.equal(r.beforeCommit, 'abc123def456', '应记录回滚到的更新前提交');
+  assert.equal(r.rollbackOk, true);
+  assert.deepEqual(resetArgs, ['abc123def456'], '应执行 git reset --hard <更新前提交>');
+});
+
+test('M-13：npm run build 失败 → 回滚 HEAD 到更新前提交', async () => {
+  let resetArgs = null;
+  const runner = async (cmd, args = []) => {
+    const a = args.join(' ');
+    if (cmd === 'git') {
+      if (a === 'rev-parse --is-inside-work-tree') return okOut('true');
+      if (a === 'rev-parse --show-toplevel') return okOut('/repo');
+      if (a === 'branch --show-current') return okOut('main');
+      if (a === 'log -1 --format=%s') return okOut('feat: base');
+      if (a === 'remote get-url origin') return okOut('https://github.com/x/y.git');
+      if (a === 'status --porcelain') return okOut('');
+      if (a.startsWith('fetch')) return okOut('');
+      if (a.startsWith('rev-list --count HEAD..origin')) return okOut('0');
+      if (a.startsWith('rev-list --count origin')) return okOut('0');
+      if (a.startsWith('rev-parse origin')) return okOut('def789');
+      if (a.startsWith('pull')) return okOut('Fast-forward');
+      if (a.startsWith('diff --name-only')) return okOut('web/src/App.vue');
+      if (a === 'rev-parse HEAD') return okOut('abc123def456');
+      if (a.startsWith('reset --hard')) {
+        resetArgs = args.slice(2);
+        return okOut('HEAD is now at abc123d');
+      }
+    }
+    if (cmd === 'npm') {
+      if (a === 'install') return okOut('added 0');
+      if (a === 'run build') return failOut('vite build failed');
+    }
+    return okOut('');
+  };
+  const r = await runUpdate({ restart: false, runner });
+  assert.equal(r.ok, false, 'build 失败应返回 ok=false');
+  assert.equal(r.rolledBack, true);
+  assert.equal(r.beforeCommit, 'abc123def456');
+  assert.deepEqual(resetArgs, ['abc123def456'], '应回滚 HEAD（含 web/dist 这类入库产物的跟踪文件）');
+});
+
 // M-05：runUpdate 必须报告"更新后"的提交号（此前用的是更新前 state.commit，会把旧提交号误报为已更新版本）。
 test('M-05：runUpdate 返回更新后提交号（非更新前 state.commit）', async () => {
   let headCalls = 0;

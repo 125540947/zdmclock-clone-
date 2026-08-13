@@ -24,6 +24,15 @@ export const boundedNum = (v, min, max, fallback) => {
   return n;
 };
 
+// M-15 修复：离散计数类配置（重试次数、账号上限、记录上限、并发上限等）必须为整数。
+// 浮点会导致数组长度 / 循环次数 / 上限判断异常（如 maxUsers=500.5 永不等于数组 length），
+// 故在 boundedNum 钳制基础上强制向下取整，保证离散语义。
+export const boundedInt = (v, min, max, fallback) => {
+  const n = boundedNum(v, min, max, fallback);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.floor(n);
+};
+
 // 默认凭据治理：API_TOKEN 未显式设置时生成随机值，避免静态可猜测 token 被滥用。
 // 随机 token 每次启动都会变化（仅本地/测试场景），生产请显式设置固定 API_TOKEN。
 const apiTokenFromEnv = process.env.API_TOKEN || null;
@@ -36,7 +45,12 @@ const adminTokenFromEnv = process.env.ADMIN_TOKEN || null;
 const installTokenFromEnv = process.env.INSTALL_TOKEN || null;
 
 export const config = {
-  port: Number(process.env.PORT || 3000),
+  // M-15 修复：PORT 必须为本机合法 TCP 端口（1~65535 整数）。非法值（非数字 / 0 / 超大 / 负数）
+  // 会让 app.listen 监听异常或绑定到错误地址，故解析失败/越界时回退到 3000 而非抛错中断启动。
+  port: (() => {
+    const p = parseInt(process.env.PORT ?? '', 10);
+    return Number.isInteger(p) && p > 0 && p < 65536 ? p : 3000;
+  })(),
   nodeEnv: process.env.NODE_ENV || 'development',
   // 调试开关：仅当显式 ZDM_DEBUG=1 时，错误响应才向客户端回显 err.message 内部细节。
   // 默认关闭（即使 NODE_ENV 未设为 production），确保所有环境错误响应均泛化，杜绝内部路径/查询泄露（S10 纵深加固）。
@@ -69,15 +83,30 @@ export const config = {
   // 无需 Token、无需登录、无需前置代理。用于「开放式录入系统」等受信任或隔离网络场景。
   // ⚠️ 高危操作（系统更新 requireAdmin，会执行 git pull + 重启）仍受 ADMIN_TOKEN 保护，不会被匿名放开。
   openMode: parseBool(process.env.OPEN_MODE, false),
-  // 信任代理（开启后 req.ip 取 X-Forwarded-For 真实访客 IP）：开放录入的「同IP段可见」依赖真实访客 IP。
-  // ⚠️ 安全（P0-2）：不再因 OPEN_MODE 自动开启——否则匿名可伪造 X-Forwarded-For 命中同 /24 网段判定，
+  // 信任代理（开启后 req.ip 依据 X-Forwarded-For 计算真实访客 IP）：开放录入的「同IP段可见」依赖真实访客 IP。
+  // ⚠️ 安全（P0-2 / H-01）：不再因 OPEN_MODE 自动开启——否则匿名可伪造 X-Forwarded-For 命中同 /24 网段判定，
   // 越权读取他人账号数据。仅在确有多层可信反代（Cloudflare/宝塔/nginx 已剥离客户端伪造的 XFF）时才显式设 TRUST_PROXY=true；
   // 直连暴露保持默认 false，此时 req.ip 为真实套接字对端、不可伪造。
+  // H-01 修复：开启后 Express 的 trust proxy 仅信任「受信任代理网段」（见 proxyTrustedSubnet），
+  // 而非无条件信任全部 XFF——这样直连暴露（非代理网段）的客户端即便伪造 XFF 也无法让 req.ip 改变，限流与网段隔离不受影响。
   trustProxy: parseBool(process.env.TRUST_PROXY, false),
+  // 受信任代理网段（H-01）：TRUST_PROXY=true 时，Express 仅当连接来自该网段才采信 X-Forwarded-For。
+  // 留空 → 默认 'loopback'（即仅本机反代 nginx 可信，匹配标准 TLS 部署）；
+  // 使用 Cloudflare/外部反代时填入其出口 CIDR（如 173.245.48.0/20,...) 防止客户端伪造 XFF。
+  // 设为 'false' 可强制即便 TRUST_PROXY=true 也只用网络层 IP（等同关闭 XFF 信任，最保守）。
+  proxyTrustedSubnet: process.env.PROXY_TRUSTED_SUBNET || '',
+  // 服务监听地址（H-01）：默认 0.0.0.0（本机/局域网直连均可访问）；
+  // 标准 TLS 部署由 nginx 反代时，deploy.sh 会设为 127.0.0.1，关闭后端端口的外部可达性，
+  // 使 smzdm Cookie / 凭据只经受 TLS 保护的反代进出，避免后端裸端口暴露公网。
+  bindAddress: process.env.BIND_ADDRESS || '0.0.0.0',
   // 公开服务基址（H-04 修复）：油猴安装脚本的「回传地址」改用此配置值，而非信任不可靠的 Host 头
   // （反代未严格限制 Host 时，攻击者可让脚本指向攻击者域名从而窃取 Cookie）。
   // 未设置时回退到 req.headers.host（仅开发态），生产部署请在 .env 显式设置 PUBLIC_BASE_URL。
   publicBaseUrl: process.env.PUBLIC_BASE_URL || '',
+  // Host 头白名单（H-02 防御纵深）：逗号分隔的允许 hostname（可带端口亦可不带；比对时忽略端口）。
+  // 仅在「未设置 PUBLIC_BASE_URL」时生效——用于校验 req.headers.host 是否可信，防止 Host 头注入
+  // 把安装脚本的 Cookie 回传地址指向非预期主机。留空 = 不校验（开发态；生产务必配合 PUBLIC_BASE_URL）。
+  hostAllowlist: process.env.HOST_ALLOWLIST || '',
   apiToken: apiTokenFromEnv || crypto.randomBytes(24).toString('hex'),
   apiTokenIsDefault: !apiTokenFromEnv,
   // 独立管理员 Token（高危操作鉴权）。未配置时为空，由 requireAdmin 走兜底策略。
@@ -105,11 +134,11 @@ export const config = {
   webDist: path.resolve(__dirname, '..', process.env.WEB_DIST || '../web/dist'),
   // 多账号签到错峰：第 2 个起每个账号额外等待「固定间隔 + 随机抖动」毫秒，
   // 避免同一秒扎堆请求 smzdm 触发限流/风控导致漏签。设为 0 可关闭错峰。
-  clockStaggerMs: boundedNum(process.env.CLOCK_STAGGER_MS, 0, 60000, 800),
-  clockStaggerJitterMs: boundedNum(process.env.CLOCK_STAGGER_JITTER_MS, 0, 60000, 2000),
+  clockStaggerMs: boundedInt(process.env.CLOCK_STAGGER_MS, 0, 60000, 800),
+  clockStaggerJitterMs: boundedInt(process.env.CLOCK_STAGGER_JITTER_MS, 0, 60000, 2000),
   // 单次签到失败重试：应对频率限制 / 网络抖动等瞬时错误（指数退避）。
-  clockRetry: boundedNum(process.env.CLOCK_RETRY, 0, 10, 2),
-  clockRetryBaseMs: boundedNum(process.env.CLOCK_RETRY_BASE_MS, 0, 60000, 2000),
+  clockRetry: boundedInt(process.env.CLOCK_RETRY, 0, 10, 2),
+  clockRetryBaseMs: boundedInt(process.env.CLOCK_RETRY_BASE_MS, 0, 60000, 2000),
   // 签到时间调度：
   // - defaultCheckInTime：schedMode='default' 账号（沿用旧版"统一 09:00"）的签到时间
   // - autoWindowStart/End：schedMode='auto' 账号由系统在该窗口内确定性分散分配一个固定时间
@@ -124,55 +153,67 @@ export const config = {
   tz: process.env.ZDM_TZ || 'local',
   // 补签宽限：个人签到时间已过、但距现在不超过该分钟数时，仍补签一次，
   // 覆盖"服务宕机/休眠/刚部署"期间错过的签到（避免永久漏签）。设 0 关闭补签。
-  catchupGraceMin: boundedNum(process.env.CATCHUP_GRACE_MIN, 0, 1440, 180),
+  catchupGraceMin: boundedInt(process.env.CATCHUP_GRACE_MIN, 0, 1440, 180),
   // 智能启动调度宽限：账号启动时间已过、但距现在不超过该分钟数时，仍补跑一次（覆盖服务宕机/休眠），
   // 超过则跳过今天，避免"补签风暴"把 VPS 打爆。设 0 关闭补跑。默认 180（与 catchupGraceMin 一致）。
-  startupGraceMin: boundedNum(process.env.STARTUP_GRACE_MIN, 0, 1440, 180),
+  startupGraceMin: boundedInt(process.env.STARTUP_GRACE_MIN, 0, 1440, 180),
   // Cookie 健康检测节流：每隔多少分钟对所有账号做一次 Cookie 探活（仅 real 模式）。
   // 防止高频无效请求；设 0 表示每轮 tick 都检测（不推荐）。默认 360（6 小时）。
-  cookieHealthIntervalMin: boundedNum(process.env.COOKIE_HEALTH_INTERVAL_MIN, 0, 10080, 360),
+  cookieHealthIntervalMin: boundedInt(process.env.COOKIE_HEALTH_INTERVAL_MIN, 0, 10080, 360),
+  // Cookie 健康检测并发上限（M-06 修复）：检查对每账号发起一次外部请求，默认账号上限 500、可配到 100000，
+  // 若一次性全部 Promise.all 会同时建立数百~数万个对外 socket，瞬间打满 FD / 内存 / 触发 smzdm 限流。
+  // 故以固定并发上限分批执行，单轮在途请求数恒 ≤ healthConcurrency。设 0/负数会被钳回 1（不可并发=串行）。
+  healthConcurrency: boundedInt(process.env.HEALTH_CONCURRENCY, 1, 1000, 10),
   // 自动更新（从 Git 仓库拉取最新代码并重建/重启）：仅在 production 环境由调度器节流执行。
   // - updateCheckIntervalMin：定时检查更新的节流间隔（分钟），默认 1440（每天检查一次）；设 0 关闭自动检查。
   // - autoUpdateApply：检查到落后时是否自动拉取+重建+重启；默认 false（仅推送"有更新"通知，需手动点更新）。
-  updateCheckIntervalMin: boundedNum(process.env.UPDATE_CHECK_INTERVAL_MIN, 0, 10080, 1440),
+  updateCheckIntervalMin: boundedInt(process.env.UPDATE_CHECK_INTERVAL_MIN, 0, 10080, 1440),
   autoUpdateApply: parseBool(process.env.AUTO_UPDATE_APPLY, false),
   // 风控（反检测/反封号）保守模式：默认开启，降低被 smzdm 风控识别/限流/封号概率。
   riskEnabled: parseBool(process.env.RISK_ENABLED, true),
   // 每次签到尝试前的"人类化随机等待"窗口（毫秒）：打破固定周期，避免请求过于机械。
-  riskPreDelayMinMs: boundedNum(process.env.RISK_PRE_DELAY_MIN_MS, 0, 60000, 200),
-  riskPreDelayMaxMs: boundedNum(process.env.RISK_PRE_DELAY_MAX_MS, 0, 60000, 1500),
+  riskPreDelayMinMs: boundedInt(process.env.RISK_PRE_DELAY_MIN_MS, 0, 60000, 200),
+  riskPreDelayMaxMs: boundedInt(process.env.RISK_PRE_DELAY_MAX_MS, 0, 60000, 1500),
   // 同一账号连续失败达到阈值后"熔断"冷却，期间跳过其自动签到，避免反复撞限流/风控被封。
-  riskCircuitFailures: boundedNum(process.env.RISK_CIRCUIT_FAILURES, 0, 100, 5),
-  riskCircuitCooldownMs: boundedNum(process.env.RISK_CIRCUIT_COOLDOWN_MIN, 0, 1440, 30) * 60000,
+  riskCircuitFailures: boundedInt(process.env.RISK_CIRCUIT_FAILURES, 0, 100, 5),
+  riskCircuitCooldownMs: boundedInt(process.env.RISK_CIRCUIT_COOLDOWN_MIN, 0, 1440, 30) * 60000,
   // 自适应降频：连续失败越多，下次额外等待越长（温和降频），封顶 maxExtraMs。
-  riskAdaptiveStepMs: boundedNum(process.env.RISK_ADAPTIVE_STEP_MS, 0, 600000, 2000),
-  riskMaxExtraMs: boundedNum(process.env.RISK_MAX_EXTRA_MS, 0, 600000, 60000),
+  riskAdaptiveStepMs: boundedInt(process.env.RISK_ADAPTIVE_STEP_MS, 0, 600000, 2000),
+  riskMaxExtraMs: boundedInt(process.env.RISK_MAX_EXTRA_MS, 0, 600000, 60000),
   // 互动（评论/点赞/收藏）拟人化随机延迟（毫秒）：每条操作之间等待不规则时长，
   // 打破固定频率，使行为更接近真人浏览，降低被 smzdm 风控识别为批量脚本的概率。
-  engagementDelayMinMs: boundedNum(process.env.ENGAGEMENT_DELAY_MIN_MS, 0, 600000, 2000),
-  engagementDelayMaxMs: boundedNum(process.env.ENGAGEMENT_DELAY_MAX_MS, 0, 600000, 15000),
+  engagementDelayMinMs: boundedInt(process.env.ENGAGEMENT_DELAY_MIN_MS, 0, 600000, 2000),
+  engagementDelayMaxMs: boundedInt(process.env.ENGAGEMENT_DELAY_MAX_MS, 0, 600000, 15000),
   // 偶发"长思考"停顿：以该概率在基础延迟后再叠加一次更长随机等待（拟人不规律节奏）。设 0 关闭。
   engagementDelayLongProbability: boundedNum(process.env.ENGAGEMENT_DELAY_LONG_PROB, 0, 1, 0.15),
-  engagementDelayLongMaxMs: boundedNum(process.env.ENGAGEMENT_DELAY_LONG_MAX_MS, 0, 600000, 30000),
+  engagementDelayLongMaxMs: boundedInt(process.env.ENGAGEMENT_DELAY_LONG_MAX_MS, 0, 600000, 30000),
   // 未配置 limit（随机挑选条数上限）时，baoliao 来源的默认随机取样区间（含端点）；
   // 实际取样数 = [min,max] 间随机整数（封顶为池大小），模拟真人"只挑部分好价互动"，而非全量遍历。
-  engagementSampleDefaultMin: boundedNum(process.env.ENGAGEMENT_SAMPLE_MIN, 0, 100, 3),
-  engagementSampleDefaultMax: boundedNum(process.env.ENGAGEMENT_SAMPLE_MAX, 0, 100, 12),
+  engagementSampleDefaultMin: boundedInt(process.env.ENGAGEMENT_SAMPLE_MIN, 0, 100, 3),
+  engagementSampleDefaultMax: boundedInt(process.env.ENGAGEMENT_SAMPLE_MAX, 0, 100, 12),
   // 持久化与容量上限（P1-4）：
   // - clockRecordsMaxPerUser：每个账号保留最近 N 条签到记录（按日期降序截断），防止 db.json 无限膨胀。
   //   设为 0 可关闭截断（不推荐，仅调试用）。
-  clockRecordsMaxPerUser: boundedNum(process.env.CLOCK_RECORDS_MAX_PER_USER, 0, 100000, 365),
+  clockRecordsMaxPerUser: boundedInt(process.env.CLOCK_RECORDS_MAX_PER_USER, 0, 100000, 365),
   // - maxUsers：录入账号总数硬上限，防止 OPEN_MODE 匿名录入或恶意刷量撑爆 db（P1-1 容量防护）。
-  maxUsers: boundedNum(process.env.MAX_USERS, 1, 100000, 500),
+  maxUsers: boundedInt(process.env.MAX_USERS, 1, 100000, 500),
   // 容量/截断上限（P2-8：收敛散落的魔法常量，集中可配、消除重复字面量）：
   // - maxBaoliaoItems：好价库保留 / 账本返回条数上限
   // - maxNoteLen：抓包备注 / referer 字符串截断上限（防超大字段撑爆 db）
   // - maxPageSize：签到记录等分页每页上限
   // - countMax/gptBatchMax/fetchMax：任务动作次数 / GPT 批量条数 / 抓取条数上限（原 taskRunner 局部常量）
-  maxBaoliaoItems: boundedNum(process.env.MAX_BAOLIAO_ITEMS, 0, 100000, 500),
-  maxNoteLen: boundedNum(process.env.MAX_NOTE_LEN, 0, 100000, 500),
-  maxPageSize: boundedNum(process.env.MAX_PAGE_SIZE, 1, 10000, 200),
-  countMax: boundedNum(process.env.COUNT_MAX, 0, 100, 5),
-  gptBatchMax: boundedNum(process.env.GPT_BATCH_MAX, 0, 100, 10),
-  fetchMax: boundedNum(process.env.FETCH_MAX, 0, 1000, 50),
+  maxBaoliaoItems: boundedInt(process.env.MAX_BAOLIAO_ITEMS, 0, 100000, 500),
+  maxNoteLen: boundedInt(process.env.MAX_NOTE_LEN, 0, 100000, 500),
+  maxPageSize: boundedInt(process.env.MAX_PAGE_SIZE, 1, 10000, 200),
+  countMax: boundedInt(process.env.COUNT_MAX, 0, 100, 5),
+  gptBatchMax: boundedInt(process.env.GPT_BATCH_MAX, 0, 100, 10),
+  fetchMax: boundedInt(process.env.FETCH_MAX, 0, 1000, 50),
 };
+
+// M-15 修复：跨字段关系一致性。若调用方把「最小值」配得比「最大值」还大（如把随机延迟区间
+// 倒置），下游取 [min,max] 间随机数会退化或异常放大，故在此统一把 max 钳制为 ≥ min，杜绝倒置配置。
+config.riskPreDelayMaxMs = Math.max(config.riskPreDelayMaxMs, config.riskPreDelayMinMs);
+config.engagementDelayMaxMs = Math.max(config.engagementDelayMaxMs, config.engagementDelayMinMs);
+config.engagementDelayLongMaxMs = Math.max(config.engagementDelayLongMaxMs, config.engagementDelayMinMs);
+config.engagementSampleDefaultMax = Math.max(config.engagementSampleDefaultMax, config.engagementSampleDefaultMin);
+config.clockStaggerJitterMs = Math.max(config.clockStaggerJitterMs, 0);

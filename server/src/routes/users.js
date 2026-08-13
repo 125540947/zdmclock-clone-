@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { load, persistAwait, genId, withWriteLock } from '../store.js';
+import { wrapAsync } from '../wrapAsync.js';
 import { smzdm } from '../smzdm/adapter.js';
 import { config } from '../config.js';
 import { authRequired, authRequiredOrInstall, maskCookie, getClientIp, sameSegment, isAdminRequest, mutationGuard } from '../auth.js';
@@ -39,13 +40,15 @@ function normalizeSchedule(body) {
   return { schedMode: mode, checkInTime };
 }
 
-// 开放模式下：账号有 recordedIp 且与当前访客不同网段、且非管理员 → 视为不可见（返回 404）。
+// 开放模式下：账号与当前访客不同网段、且非管理员 → 视为不可见（返回 404）。
 // 集中处理 GET /:id、GET /:id/smzdm、POST /:id/refresh 的可见性判定，避免跨网段枚举读他人资料。
+// M-10 修复：无 recordedIp 的遗留账号（升级前数据/手工数据）同样按「不可见」处理——此前 `u.recordedIp &&`
+// 短路导致无 recordedIp 的账号永不隐藏，匿名访客可跨网段读取其元数据/统计（水平越权）。遗留数据归属不明，
+// 不应对任意匿名访客可见；仅管理员可查看全部。
 function rejectHiddenAccount(res, req, u) {
   if (
     config.openMode &&
     !isAdminRequest(req) &&
-    u.recordedIp &&
     !sameSegment(getClientIp(req), u.recordedIp, 24)
   ) {
     res.status(404).json({ error: 'not_found', message: '无权查看该账号' });
@@ -54,21 +57,22 @@ function rejectHiddenAccount(res, req, u) {
   return false;
 }
 
-// 账号列表（cookie 遮罩）。开放模式下：匿名访客仅可见「同 /24 网段」录入的账号（含无 recordedIp 的遗留账号）；
-// 提供有效 ADMIN_TOKEN 的请求（管理员）可绕过，查看全部。
+// 账号列表（cookie 遮罩）。开放模式下：匿名访客仅可见「同 /24 网段」录入的账号；
+// 无 recordedIp 的遗留账号（归属不明）对匿名不可见，仅管理员（有效 ADMIN_TOKEN）可查看全部。
+// M-10 修复：移除原先 `!u.recordedIp` 的「遗留账号全可见」特例，杜绝匿名跨网段读取遗留数据。
 router.get('/', authRequired, (req, res) => {
   const db = load();
   let users = db.users;
   if (config.openMode && !isAdminRequest(req)) {
     const viewerIp = getClientIp(req);
-    users = users.filter((u) => !u.recordedIp || sameSegment(viewerIp, u.recordedIp, 24));
+    users = users.filter((u) => sameSegment(viewerIp, u.recordedIp, 24));
   }
   const list = users.map((u) => ({ ...u, cookie: maskCookie(u.cookie) }));
   res.json({ total: list.length, list });
 });
 
 // 新增 smzdm 账号（录入 cookie）
-router.post('/', authRequired, async (req, res) => {
+router.post('/', authRequired, wrapAsync(async (req, res) => {
   const { smzdmId, nickname } = req.body || {};
   let cookie;
   try {
@@ -118,11 +122,11 @@ router.post('/', authRequired, async (req, res) => {
   db.users.push(user);
   await withWriteLock(() => persistAwait());
   res.json({ ...user, cookie: maskCookie(user.cookie) });
-});
+}));
 
 // 自动抓取导入（油猴脚本等自动工具调用）：按 smzdmId upsert。
 // 与 POST / 的区别：同名账号（同一 smzdmId）只更新 cookie，不重复建号。
-router.post('/import', authRequiredOrInstall, async (req, res) => {
+router.post('/import', authRequiredOrInstall, wrapAsync(async (req, res) => {
   const { nickname } = req.body || {};
   let cookie;
   try {
@@ -182,18 +186,42 @@ router.post('/import', authRequiredOrInstall, async (req, res) => {
   }
   await withWriteLock(() => persistAwait());
   res.json({ ...user, cookie: maskCookie(user.cookie), imported: true });
-});
+}));
 
 // 返回油猴抓取脚本「模板」源码（__SERVER__ / __TOKEN__ / __CONNECT__ 占位符由服务端注入）。
 // 公开可读（与下方 .user.js 一致），但注入的 __TOKEN__ 仅为窄权限 INSTALL_TOKEN（非会话 token，见 P1-2 修复）。
 // Phase 1 严重#2 修复：① 不再接受 ?server= 任意参数（此前可把推送目标指向任意第三方域名，
 //   配合脚本把 Cookie 推到攻击者服务器）；② 响应加 Cache-Control: no-store（防代理/浏览器缓存含 Token 的脚本）；
 //   ③ @connect 占位符 __CONNECT__ 注入为本服务真实域名，收紧油猴跨域权限（不再 @connect *）。
+// H-02 修复：校验 req.headers.host 是否落在可信白名单（仅当未配置 PUBLIC_BASE_URL 时生效）。
+// 用于防止 Host 头注入把安装脚本的 Cookie 回传地址指向非预期主机。
+function isHostAllowed(host) {
+  const raw = (config.hostAllowlist || '').trim();
+  if (!raw) return true; // 白名单未配置（开发态）：不校验
+  const h = String(host || '').split(':')[0].toLowerCase();
+  if (!h) return false;
+  return raw
+    .split(',')
+    .map((s) => s.trim().split(':')[0].toLowerCase())
+    .filter(Boolean)
+    .some((a) => h === a || h.endsWith('.' + a));
+}
+
 function bakeImportScript(req) {
-  // H-04 修复：回传地址改用配置基址 PUBLIC_BASE_URL，而非信任不可靠的 Host 头
-  // （反代未严格限制 Host 时，攻击者可让脚本指向攻击者域名从而窃取 Cookie）。
-  // 未配置时回退到 req.headers.host（仅开发态；生产部署应在 .env 显式设置 PUBLIC_BASE_URL）。
-  const server = config.publicBaseUrl || String(req.protocol + '://' + (req.headers.host || ''));
+  // H-04/H-02 修复：回传地址优先用配置基址 PUBLIC_BASE_URL（生产部署应在 .env 显式设置，
+  // 由 deploy.sh 写入），绝不盲信不可靠的 Host 头（反代未严格限制 Host 时攻击者可让脚本指向攻击者域名）。
+  // 仅在「未配置 PUBLIC_BASE_URL」时回退到 req.headers.host，且需通过 hostAllowlist 校验，
+  // 校验不通过则拒绝生成（返回 null，调用方回 400），杜绝 Host 注入窃取 Cookie。
+  let server = null;
+  if (config.publicBaseUrl) {
+    server = config.publicBaseUrl;
+  } else {
+    const host = req.headers.host || '';
+    if (isHostAllowed(host)) {
+      server = String(req.protocol + '://' + host);
+    }
+  }
+  if (!server) return null; // 不可信来源，拒绝生成含回传地址的脚本
   const token = config.installToken || '';
   // __CONNECT__ 注入为服务真实主机（host:port，不含 scheme/引号）——油猴 @connect 指令只接受裸域名，
   // 这样脚本仅对自家服务域放行 GM_xmlhttpRequest 跨域，收紧为「非 @connect *」。
@@ -210,6 +238,9 @@ function bakeImportScript(req) {
 router.get('/import-script', (req, res) => {
   try {
     const baked = bakeImportScript(req);
+    if (!baked) {
+      return res.status(400).json({ error: 'untrusted_host', message: '无法确定服务回传地址：请设置 PUBLIC_BASE_URL 或将当前 Host 加入 HOST_ALLOWLIST' });
+    }
     res.set('Cache-Control', 'no-store');
     res.type('text/javascript').send(baked);
   } catch {
@@ -226,6 +257,9 @@ router.get('/import-script', (req, res) => {
 router.get('/import-script.user.js', (req, res) => {
   try {
     const baked = bakeImportScript(req);
+    if (!baked) {
+      return res.status(400).json({ error: 'untrusted_host', message: '无法确定服务回传地址：请设置 PUBLIC_BASE_URL 或将当前 Host 加入 HOST_ALLOWLIST' });
+    }
     res.set('Cache-Control', 'no-store');
     res.type('text/javascript').send(baked);
   } catch {
@@ -250,49 +284,67 @@ router.get('/:id', authRequired, (req, res) => {
 });
 
 // 更新账号（含换 cookie 时刷新资料、设置签到时间）。开放模式下匿名不可改，须管理员 Token。
-router.put('/:id', mutationGuard, async (req, res) => {
+// M-04 修复：校验（sched 合法性 / cookie 长度 / 换 cookie 的资料刷新）全部在「改写内存」之前完成，
+// 且所有内存修改与落盘都在 withWriteLock 内一次性进行；校验失败路径不会留下 partial state。
+// M-02 修复：wrapAsync 兜住 withWriteLock/persistAwait 异常，避免请求挂起。
+router.put('/:id', mutationGuard, wrapAsync(async (req, res) => {
   const db = load();
   const u = db.users.find((x) => x.id === req.params.id);
   if (!u) return res.status(404).json({ error: 'not_found' });
   const { nickname, cookie, smzdmId, schedMode, checkInTime } = req.body || {};
-  if (nickname !== undefined) u.nickname = nickname;
-  if (smzdmId !== undefined) u.smzdmId = smzdmId;
-  // 仅当显式传入 schedMode（或同时传了 checkInTime）时才更新签到时间配置
+  // 先算 sched（校验），失败直接 400，此时尚未改动任何内存状态
+  let sched = null;
   if (schedMode !== undefined || checkInTime !== undefined) {
-    const sched = normalizeSchedule({
+    sched = normalizeSchedule({
       schedMode: schedMode !== undefined ? schedMode : u.schedMode,
       checkInTime: checkInTime !== undefined ? checkInTime : u.checkInTime
     });
     if (sched.error) return res.status(400).json(sched);
-    u.schedMode = sched.schedMode;
-    u.checkInTime = sched.checkInTime;
-    // auto 模式：固化系统分配的分散时间（便于展示与统计）
-    if (u.schedMode === 'auto') u.checkInTime = resolvedCheckInTime(u);
   }
+  // cookie 长度校验（锁外计算，不赋值）
+  let newCookie = null;
   if (cookie) {
     try {
-      u.cookie = limitStr(cookie, MAX_COOKIE_LEN, 'cookie');
+      newCookie = limitStr(cookie, MAX_COOKIE_LEN, 'cookie');
     } catch (e) {
       return res.status(400).json({ error: e.code || 'invalid_cookie', message: e.message });
     }
-    u.cookieExpired = false; // 重新录入 Cookie：解除失效标记并重置该账号风控状态
-    resetRisk(u.id);
+  }
+  // 换 cookie 时先刷新资料（锁外，避免持锁等待 I/O）
+  let info = {};
+  if (newCookie) {
     try {
-      const info = await smzdm.getUserInfo(cookie);
+      info = await smzdm.getUserInfo(newCookie);
+    } catch {
+      /* ignore：仍能更新 cookie，不依赖资料 */
+    }
+  }
+  // M-04：所有内存修改与落盘都在写锁内一次性完成；校验失败路径不会留下 partial state
+  await withWriteLock(() => {
+    if (nickname !== undefined) u.nickname = nickname;
+    if (smzdmId !== undefined) u.smzdmId = smzdmId;
+    if (sched) {
+      u.schedMode = sched.schedMode;
+      u.checkInTime = sched.checkInTime;
+      // auto 模式：固化系统分配的分散时间（便于展示与统计）
+      if (u.schedMode === 'auto') u.checkInTime = resolvedCheckInTime(u);
+    }
+    if (newCookie) {
+      u.cookie = newCookie;
+      u.cookieExpired = false; // 重新录入 Cookie：解除失效标记并重置该账号风控状态
+      resetRisk(u.id);
       u.points = info.points || u.points;
       u.level = info.level || u.level;
       u.vip = !!info.vip;
       u.smzdmId = u.smzdmId || info.smzdmId || '';
-    } catch {
-      /* ignore */
     }
-  }
-  await withWriteLock(() => persistAwait());
+    return persistAwait();
+  });
   res.json({ ...u, cookie: maskCookie(u.cookie) });
-});
+}));
 
 // 删除账号。开放模式下匿名不可删，须管理员 Token。
-router.delete('/:id', mutationGuard, async (req, res) => {
+router.delete('/:id', mutationGuard, wrapAsync(async (req, res) => {
   const db = load();
   const i = db.users.findIndex((x) => x.id === req.params.id);
   if (i < 0) return res.status(404).json({ error: 'not_found' });
@@ -301,10 +353,10 @@ router.delete('/:id', mutationGuard, async (req, res) => {
     return persistAwait();
   });
   res.json({ ok: true });
-});
+}));
 
 // 拉取该账号在 smzdm 的真实资料（调用适配器 getUserInfo）
-router.get('/:id/smzdm', authRequired, async (req, res) => {
+router.get('/:id/smzdm', authRequired, wrapAsync(async (req, res) => {
   const db = load();
   const u = db.users.find((x) => x.id === req.params.id);
   if (!u) return res.status(404).json({ error: 'not_found' });
@@ -316,10 +368,10 @@ router.get('/:id/smzdm', authRequired, async (req, res) => {
     dbgLog('[users] 获取账号资料失败：', e.message);
     res.status(502).json({ error: 'adapter_error', message: '账号操作失败，请稍后重试' });
   }
-});
+}));
 
 // 主动刷新账号资料（调用适配器 getUserInfo）
-router.post('/:id/refresh', authRequired, async (req, res) => {
+router.post('/:id/refresh', authRequired, wrapAsync(async (req, res) => {
   const db = load();
   const u = db.users.find((x) => x.id === req.params.id);
   if (!u) return res.status(404).json({ error: 'not_found' });
@@ -336,6 +388,6 @@ router.post('/:id/refresh', authRequired, async (req, res) => {
     dbgLog('[users] 刷新账号资料失败：', e.message);
     res.status(502).json({ error: 'adapter_error', message: '账号操作失败，请稍后重试' });
   }
-});
+}));
 
 export default router;

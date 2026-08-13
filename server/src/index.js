@@ -135,9 +135,11 @@ const BAOLIAO_IMPORT_HTML = `<!doctype html>
 // 限流逻辑本身由 rateLimit.test.js 独立覆盖，关闭不影响逻辑验证。
 export function createApp({ rateLimit: enableRateLimit = true } = {}) {
   const app = express();
-  // 信任代理：开启后 req.ip 取真实访客 IP（经 X-Forwarded-For）。
-  // 开放录入的「同IP段可见」依赖真实访客 IP，故 OPEN_MODE 开启时默认开；否则默认关。
-  app.set('trust proxy', config.trustProxy);
+  // 信任代理：开启后 Express 仅当连接来自「受信任代理网段」时才采信 X-Forwarded-For 计算 req.ip。
+  // H-01 修复：不再无差别 `true`（那样直连暴露的客户端可伪造 XFF 绕过限流与网段隔离），
+  // 而是绑定到具体可信网段（PROXY_TRUSTED_SUBNET，留空默认 loopback 匹配本机 nginx 反代）。
+  // 这样 req.ip / 限流键 / 开放模式网段判定统一以「可信来源的真实访客 IP」为准；直连非代理连接仍用网络层 IP。
+  app.set('trust proxy', config.trustProxy ? (config.proxyTrustedSubnet || 'loopback') : false);
   // CORS：默认仅同源（生产由本服务托管前端、开发由 Vite 代理，正常情况下无需跨域）。
   // 如需跨域部署（前端在独立域名），设置环境变量 CORS_ORIGIN="https://your.domain"
   // 或逗号分隔的多个域名；未设置时 origin:false 不返回 Access-Control-Allow-Origin，杜绝任意域调用。
@@ -347,7 +349,7 @@ if (isMain) {
     process.exit(1);
   }
 
-  app.listen(config.port, () => {
+  app.listen(config.port, config.bindAddress, () => {
     // R4：仅在 production 启动定时调度，避免开发态意外触发真实签到
     if (config.nodeEnv === 'production') {
       startScheduler();
@@ -357,8 +359,10 @@ if (isMain) {
     }
     // eslint-disable-next-line no-console
     console.log(
-      `[zdmclock] server listening on http://localhost:${config.port} ` +
-        `(env=${config.nodeEnv}, adapter=${config.smzdmAdapter}, auth=${config.requireAuth}, scheduler=${isSchedulerRunning() ? 'on' : 'off'})`
+      `[zdmclock] server listening on http://${config.bindAddress}:${config.port} ` +
+        `(env=${config.nodeEnv}, adapter=${config.smzdmAdapter}, auth=${config.requireAuth}, ` +
+        `trustProxy=${config.trustProxy ? (config.proxyTrustedSubnet || 'loopback') : 'off'}, ` +
+        `scheduler=${isSchedulerRunning() ? 'on' : 'off'})`
     );
     // 安全告警：默认配置偏向「开箱即跑」，但公网暴露前必须收紧
     if (!config.requireAuth) {

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { load, persist, persistAwait, genId, mergeBaoliao, withWriteLock } from '../store.js';
+import { load, persistAwait, genId, mergeBaoliao, withWriteLock } from '../store.js';
 import { smzdm } from '../smzdm/adapter.js';
 import { config } from '../config.js';
 import {
@@ -13,6 +13,7 @@ import {
 import { dbgLog } from '../log.js';
 import { normalizeArticleId } from '../smzdm/articleId.js';
 import { limitArr, MAX_IMPORT_ITEMS } from '../validation.js';
+import { wrapAsync } from '../wrapAsync.js';
 
 const router = Router();
 
@@ -27,14 +28,16 @@ router.get('/', authRequired, (req, res) => {
   if (userId) list = list.filter((x) => x.userId === userId);
   if (config.openMode && !isAdminRequest(req)) {
     const viewerIp = getClientIp(req);
-    list = list.filter((x) => !x.recordedIp || sameSegment(viewerIp, x.recordedIp, 24));
+    // M-10 修复：移除 `!x.recordedIp` 特例——无 recordedIp 的遗留好价对匿名不可见，
+    // 仅同网段录入的好价或管理员可见，杜绝匿名跨网段读取遗留好价文本（水平越权）。
+    list = list.filter((x) => sameSegment(viewerIp, x.recordedIp, 24));
   }
   res.json({ items: list, total: list.length });
 });
 
 // 从 smzdm 抓取好价并合并进爆料箱（real 适配器抓真实列表；mock 返回样例数据）
 // 注意：必须定义在任何 /:id 路由之前，否则 "refresh" 会被当成 id 匹配。开放模式下强制管理员（mutationGuard）。
-router.post('/refresh', mutationGuard, async (req, res) => {
+router.post('/refresh', mutationGuard, wrapAsync(async (req, res) => {
   const db = load();
   const { limit } = req.body || {};
   const lim = Math.min(50, Math.max(1, Number(limit) || 20));
@@ -56,14 +59,14 @@ router.post('/refresh', mutationGuard, async (req, res) => {
     dbgLog('[baoliao] refresh 失败：', e.message);
     res.status(502).json({ error: 'fetch_failed', message: '好价抓取失败，请稍后重试或查看服务端日志' });
   }
-});
+}));
 
 // 批量导入好价文章链接（浏览器导入入口；支持 ?token= 以便书签/同源页面调用）
 // 背景：服务端直抓 smzdm 好价被反爬挡死（首页 202 挑战页 / 内部 JSON 接口要签名 / RSSHub 403），
 // 故改为「数据从用户浏览器来」——用户在 smzdm 页用书签抓取链接，粘贴到 /baoliao-import 同源页面，
 // 由本接口解析 /p/<id> 并合并进 db.baoliao，「从好价列表取」即可正常工作。
 // 输入：{ text: "url1\nurl2" } 或 { items: [{url,title}] } 或裸字符串（空格/逗号/分号分隔）。
-router.post('/bulk', authRequiredOrQuery, async (req, res) => {
+router.post('/bulk', authRequiredOrQuery, wrapAsync(async (req, res) => {
   const db = load();
   const body = req.body || {};
   let raw = [];
@@ -97,13 +100,13 @@ router.post('/bulk', authRequiredOrQuery, async (req, res) => {
   let added = 0;
   await withWriteLock(() => {
     added = mergeBaoliao(items);
-    persist();
+    return persistAwait();
   });
   res.json({ ok: true, received: items.length, added, total: db.baoliao.length });
-});
+}));
 
 // 新增爆料草稿
-router.post('/', authRequired, async (req, res) => {
+router.post('/', authRequired, wrapAsync(async (req, res) => {
   const { title, url, price, cat, content, userId } = req.body || {};
   if (!title || !title.trim()) return res.status(400).json({ error: 'invalid', message: '标题不能为空' });
   const db = load();
@@ -124,13 +127,13 @@ router.post('/', authRequired, async (req, res) => {
   };
   await withWriteLock(() => {
     db.baoliao.unshift(item);
-    persist();
+    return persistAwait();
   });
   res.json({ ok: true, item });
-});
+}));
 
 // 更新（标题/价格/分类/状态等）
-router.put('/:id', mutationGuard, async (req, res) => {
+router.put('/:id', mutationGuard, wrapAsync(async (req, res) => {
   const db = load();
   const item = db.baoliao.find((x) => x.id === req.params.id);
   if (!item) return res.status(404).json({ error: 'not_found' });
@@ -142,27 +145,25 @@ router.put('/:id', mutationGuard, async (req, res) => {
   if (content !== undefined) item.content = String(content);
   if (status !== undefined) item.status = String(status);
   item.updatedAt = new Date().toISOString();
-  await withWriteLock(() => {
-    persist();
-  });
+  await withWriteLock(() => persistAwait());
   res.json({ ok: true, item });
-});
+}));
 
 // 删除
-router.delete('/:id', mutationGuard, async (req, res) => {
+router.delete('/:id', mutationGuard, wrapAsync(async (req, res) => {
   const db = load();
   const idx = db.baoliao.findIndex((x) => x.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'not_found' });
   await withWriteLock(() => {
     db.baoliao.splice(idx, 1);
-    persist();
+    return persistAwait();
   });
   res.json({ ok: true });
-});
+}));
 
 // 提交到 smzdm（调用适配器；mock 直接返回成功）
 // 真实动作类接口：开放模式下强制管理员（mutationGuard），避免匿名用任意 cookie 提交爆料（IDOR）。
-router.post('/:id/submit', mutationGuard, async (req, res) => {
+router.post('/:id/submit', mutationGuard, wrapAsync(async (req, res) => {
   const db = load();
   const item = db.baoliao.find((x) => x.id === req.params.id);
   if (!item) return res.status(404).json({ error: 'not_found' });
@@ -198,6 +199,6 @@ router.post('/:id/submit', mutationGuard, async (req, res) => {
     dbgLog('[baoliao] 任务执行异常：', e.message);
     res.status(502).json({ error: 'adapter_error', message: '任务执行异常，请稍后重试' });
   }
-});
+}));
 
 export default router;

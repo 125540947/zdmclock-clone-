@@ -168,6 +168,25 @@ export async function runUpdate({ restart = true, onLog, runner = run } = {}) {
   const beforeR = await runner('git', ['rev-parse', 'HEAD'], { cwd: root });
   const before = beforeR.stdout.trim();
 
+  // M-13 修复：依赖/构建失败回滚原子性。
+  // git pull --ff-only 成功后 HEAD 已前移；若随后 npm install / npm run build 失败，
+  // 工作区会停留在"新代码 + 损坏依赖/产物"的状态，若此刻重启将加载坏代码。
+  // 因此 install/build 失败时回滚到更新前的 HEAD（reset --hard），保证"全有或全无"。
+  const rollback = async (reason) => {
+    push('✖ ' + reason + '，回滚到更新前提交…');
+    const rb = await runner('git', ['reset', '--hard', before], { cwd: root });
+    if (rb.ok) push('↩ 已回滚到 ' + before.slice(0, 7));
+    else push('⚠️ 回滚命令异常（' + (rb.stderr.trim() || rb.code) + '），请手动 git reset --hard ' + before);
+    return {
+      ok: false,
+      log,
+      error: reason,
+      rolledBack: true,
+      beforeCommit: before,
+      rollbackOk: rb.ok
+    };
+  };
+
   push(`▶ 拉取 origin/${state.branch} …`);
   const pull = await runner('git', ['pull', '--ff-only', 'origin', state.branch], { cwd: root });
   if (!pull.ok) {
@@ -197,7 +216,7 @@ export async function runUpdate({ restart = true, onLog, runner = run } = {}) {
     const inst = await runner('npm', ['install'], { cwd: root, timeout: 300_000 });
     if (!inst.ok) {
       push(inst.stderr.split('\n').slice(-3).join('\n'));
-      return { ok: false, log, error: 'npm install 失败' };
+      return rollback('npm install 失败');
     }
     push('依赖安装完成');
   } else {
@@ -209,7 +228,7 @@ export async function runUpdate({ restart = true, onLog, runner = run } = {}) {
     const b = await runner('npm', ['run', 'build'], { cwd: root, timeout: 300_000 });
     if (!b.ok) {
       push(b.stderr.split('\n').slice(-3).join('\n'));
-      return { ok: false, log, error: 'npm run build 失败' };
+      return rollback('npm run build 失败');
     }
     push('前端构建完成');
   } else {

@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { applyAssetEffect, summarizeAssets, dailyAssetSeries, assetByTask, recentLedger } from '../src/assetLedger.js';
-import { localDateStr } from '../src/store.js';
+import { localDateStr, todayStrTZ } from '../src/store.js';
+import { config } from '../src/config.js';
 
 function freshDb() {
   return { users: [], assetLedger: [], assetSnapshots: [] };
@@ -186,4 +187,73 @@ test('M-02 多账号：既有快照账号不双算、无快照账号正常累加
   db.assetLedger.push({ id: 'c2', ts: d2 + 'T09:00:00Z', date: d2, userId: 'u2', taskType: 'point', taskName: '点赞', goldDelta: 20, silverDelta: 0, expDelta: 0, goldAfter: 20, silverAfter: 0, expAfter: 0, levelAfter: null, success: true, message: '' });
   const series = dailyAssetSeries(db, 1);
   assert.equal(series[0].goldTotal, 130, 'u1 快照(110) + u2 累加(20) = 130，u1 不双算');
+});
+
+// M-08 修复：窗口前最后一个快照应作为曲线首日期初余额，而非从 0 起算。
+// 审计复现：31 天前余额 100/50/20，请求 30 天曲线（窗口内无任何活动）时，
+// 首日与末日总额此前均错误返回 0。
+test('M-08 期初余额：窗口前最后快照作为首日余额，而非从 0 起算', () => {
+  const db = freshDb();
+  const today = new Date();
+  const dPrev = new Date(today);
+  dPrev.setDate(today.getDate() - 31); // 落在 30 天窗口之前
+  db.users.push({ id: 'u1', nickname: '甲', assets: { gold: 100, silver: 50, exp: 20, level: null } });
+  db.assetSnapshots.push({ userId: 'u1', date: localDateStr(dPrev), gold: 100, silver: 50, exp: 20, level: null });
+  const series = dailyAssetSeries(db, 30);
+  assert.equal(series.length, 30);
+  const first = series[0];
+  const last = series[series.length - 1];
+  // 窗口内无活动 → 余额应 carry forward 窗口前快照值，首日/末日均等于 100/50/20
+  assert.equal(first.goldTotal, 100, '首日 goldTotal 应为窗口前余额 100');
+  assert.equal(first.silverTotal, 50, '首日 silverTotal 应为窗口前余额 50');
+  assert.equal(first.expTotal, 20, '首日 expTotal 应为窗口前余额 20');
+  assert.equal(last.goldTotal, 100, '末日 goldTotal 仍为 100');
+  assert.equal(last.silverTotal, 50, '末日 silverTotal 仍为 50');
+  assert.equal(last.expTotal, 20, '末日 expTotal 仍为 20');
+});
+
+// M-08 补充：期初余额之上叠加窗口内增量，累计应正确累加而非被期初吞没/重置。
+test('M-08 期初余额 + 窗口内增量在上沿正确累加', () => {
+  const db = freshDb();
+  const today = new Date();
+  const dPrev = new Date(today);
+  dPrev.setDate(today.getDate() - 31);
+  const dMid = new Date(today);
+  dMid.setDate(today.getDate() - 15); // 落在窗口内
+  db.users.push({ id: 'u1', nickname: '甲', assets: { gold: 100, silver: 0, exp: 0, level: null } });
+  db.assetSnapshots.push({ userId: 'u1', date: localDateStr(dPrev), gold: 100, silver: 0, exp: 0, level: null });
+  // 窗口内第 15 天入账 +30（无快照，靠累加）
+  db.assetLedger.push({
+    id: 'a1', ts: localDateStr(dMid) + 'T08:00:00Z', date: localDateStr(dMid), userId: 'u1',
+    taskType: 'clock', taskName: '签到', goldDelta: 30, silverDelta: 0, expDelta: 0,
+    goldAfter: 130, silverAfter: 0, expAfter: 0, levelAfter: null, success: true, message: ''
+  });
+  const series = dailyAssetSeries(db, 30);
+  const first = series[0];
+  const mid = series.find((x) => x.date === localDateStr(dMid));
+  const last = series[series.length - 1];
+  assert.equal(first.goldTotal, 100, '首日仍为期初 100');
+  assert.equal(mid.goldTotal, 130, '窗口内增量后累计 130');
+  assert.equal(last.goldTotal, 130, '末日累计保持 130');
+});
+
+// M-09 修复：资产曲线窗口按「配置时区(ZDM_TZ)」折算，末日应为 tz 的今天而非进程本地今天，
+// 避免 UTC 容器与 Asia/Shanghai 并存时资产日报归属与状态页"今天"跨日冲突。
+test('M-09 资产曲线窗口末日对齐到配置时区当天', () => {
+  const db = freshDb();
+  const series = dailyAssetSeries(db, 7, null, 'Asia/Shanghai');
+  assert.equal(series.length, 7);
+  assert.equal(series[series.length - 1].date, todayStrTZ('Asia/Shanghai'));
+});
+
+test('M-09 资产曲线包含 tz 当天数据（而非仅进程本地当天）', () => {
+  const db = freshDb();
+  const tz = 'Asia/Shanghai';
+  const tzToday = todayStrTZ(tz);
+  db.users.push({ id: 'u1', nickname: '甲', assets: { gold: 50, silver: 0, exp: 0, level: null } });
+  db.assetSnapshots.push({ userId: 'u1', date: tzToday, gold: 50, silver: 0, exp: 0, level: null });
+  const series = dailyAssetSeries(db, 7, null, tz);
+  const point = series.find((x) => x.date === tzToday);
+  assert.ok(point, 'tz 当天应出现在曲线窗口内');
+  assert.equal(point.goldTotal, 50);
 });

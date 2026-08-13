@@ -330,6 +330,39 @@
 
 ---
 
+## 批次 13 · 深度审计整改收尾（M-03 / M-06~M-10 / M-13 / M-17 / H-04 / L-03 / L-04，2026-08-13 ~ 08-14）
+
+**改动要点**
+- 收尾 25 项审计整改中剩余的代码与测试项，闭合整轮审计（批次 9~13 累计闭环全部 30 项代码漏洞）。
+- 重点补强「运行期健壮性」与「部署原子性」：智能启动并发幂等、自更新依赖/构建失败回滚、响应体流式限流、资产曲线期初余额、时区统一、遗留数据可见性。
+- 补齐跨切面回归测试（401 / 期初余额 / 并发启动 / 保留地址段 / Host 注入 / 部署清单），形成回归护栏。
+- 对齐依赖锁文件（nanoid → 3.3.18），新增根级统一 `test` / `lint` / `audit:deps` 脚本。
+
+**新增功能**
+- 根级脚本：`npm test`（server + web 全量）、`npm run lint --if-present`（仅当 workspace 配 linter 时执行）、`npm run audit:deps`（依赖漏洞审计）。
+
+**问题修复（按审计项）**
+- **M-06 健康检测并发上限**：`health.js` 引入 bounded 并发池 `mapWithConcurrency`（`cap = max(1, concurrency)`，`concurrency=0` 退化为串行，不可并发=串行），`config.healthConcurrency` 默认 10、`HEALTH_CONCURRENCY` 可配；健康检查不再被账号数拖爆 smzdm 风控。
+- **M-07 响应体流式/提前上限校验**：`notifier.js` 新增 `readBodyCapped`（`BodyTooLargeError` + 边读边限，超限即 `cancel` 不再整段缓冲）+ `readJsonCapped`；`realAdapter.call` 改用之（`MAX=2_000_000`），杜绝超大响应撑爆内存；`safePushFetch` 把 `BodyTooLargeError` 映射为 `{ ok:false, error:'body_too_large' }`。
+- **M-08 资产历史曲线期初余额**：`assetLedger.js` 窗口首日用「窗口前最新快照」作为期初余额（而非 0），修正资产曲线首日凭空跳变；窗口内快照日只重锚 run、不再叠加当日 delta（修复批次 11 残留双算）。
+- **M-09 时区统一**：`assetLedger.js` 的 `dailyAssetSeries` / `assetByTask`、`scheduler.tick` 的 `t.lastRun`、`routes/clock.buildCalendar`、`routes/tasks` 手动运行统一用 `todayStrTZ(config.tz)` + UTC 日历日运算（此前误用 `zonedWallClock` 返回值构造 `Date` 导致 `NaN-NaN-NaN`）；`startup.js` 同样用 `ZDM_TZ` 折算今日/分钟，避免容器 UTC 致启动时间整体偏移。
+- **M-10 遗留数据开放模式可见性**：`auth.js` / `routes/users.js` / `routes/clock.js` / `routes/baoliao.js` 移除「无 `recordedIp` 的遗留账号对匿名可见」这一例外，统一按 `sameSegment(viewerIp, recordedIp, 24)` 判定；`sameSegment(undefined, undefined)` 返回 false，移除例外后匿名正确隐藏遗留数据。
+- **M-03 智能启动并发幂等（原子区）**：`startup.js` 新增进程内「原子区」守卫——`runStartupForAccounts` 同时刻仅真正执行一遍，并发调用（调度 tick 与手动 `POST /api/tasks/:id/run` 重叠）复用进行中 promise，保证「每账号每天仅启动一次」且不触发并发启动（第一定律）；并同步更新文件头注释消除与旧去重逻辑的歧义。
+- **M-13 自更新原子性**：`selfUpdate.js` 在 `git pull --ff-only` 成功后若 `npm install` / `npm run build` 失败，自动 `git reset --hard <更新前提交>` 回滚 HEAD（全有或全无），避免重启加载「新代码 + 损坏依赖/产物」的坏状态；返回 `rolledBack:true` 与 `beforeCommit`。
+- **M-17 关键回归测试**：新增/补全 6 类回归护栏——① 401 鉴权（26 处断言，跨 authRoute/authSecurity/routes/routesCore 等 8 文件）；② 资产曲线期初余额（assetLedger M-08 用例）；③ 智能启动并发幂等（`startup.test.js`：并发两次仅触发一次流水线 + 已完成当天启动被幂等跳过）；④ 保留地址段（dnsGuard：10/8、172.16/12、192.168/16、169.254、100.64/10 CGNAT、::1/fe80/fc00 等全部判定为保留，出站被拒）；⑤ Host 注入（`routes.test.js`：未配 `PUBLIC_BASE_URL` 且 Host 不在 `HOST_ALLOWLIST` → 400 `untrusted_host`，白名单内 Host 正常注入回传地址）；⑥ 部署清单（`server/src/notifier.js` 补入 `deploy-smart-startup.sh` 拉取白名单，避免 VPS 残留旧版）。
+- **H-04 nanoid 锁文件对齐**：根与 web 的 `package-lock.json` 中 `node_modules/nanoid` 解析版本统一对齐到 `3.3.18`（root 由 3.3.17 升级，web 已为该版本），依赖约束 `^3.3.18`；校验 integrity 与 tarball 一致。
+- **L-03 根级统一脚本**：`package.json` 新增 `test` / `lint` / `audit:deps`（见上）。
+- **L-04 注释冲突修正**：修正 `startup.js` 文件头注释，明确「原子区」守卫与 `lastStartupDate` 去重为互补的幂等双保险，消除与新增 M-03 代码的歧义。
+
+**测试与部署**
+- 后端 `npm test -w server` **425 通过 / 0 失败**（较批次 12 增 5：startup 并发幂等 ×2、selfUpdate 回滚 ×2、routes Host 白名单 ×1）。
+- 前端 `npm test -w web` **26/26 通过**（本轮未改前端源码，`web/dist` 产物 hash 不变）。
+- 部署脚本 `deploy-smart-startup.sh`（工作区根，未进仓库）：SHA 更新至本轮提交；拉取白名单补入 `server/src/notifier.js`（M-07 改动文件此前遗漏，已修正，避免 VPS 残留旧版）。
+
+**代表提交**：`ced42f1`
+
+---
+
 ## 维护约定（默认规范）
 
 1. **分批原则**：每次整理历史或新增工作阶段，按**逻辑阶段**（功能/安全波次）或**时间**划分为批次；同一波次跨多日可合并为一批次。

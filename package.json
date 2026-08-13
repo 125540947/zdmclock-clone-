@@ -11,7 +11,10 @@
     "build": "npm run build -w web",
     "start": "cross-env NODE_ENV=production npm run start -w server",
     "dev": "concurrently -n server,web -c green,cyan \"npm run dev -w server\" \"npm run dev -w web\"",
-    "install:all": "npm install"
+    "install:all": "npm install",
+    "test": "npm run test -w server && npm run test -w web",
+    "lint": "npm run lint -w server -w web --if-present",
+    "audit:deps": "npm audit --workspaces --audit-level=moderate"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",

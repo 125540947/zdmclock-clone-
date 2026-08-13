@@ -279,6 +279,63 @@ test('GET /api/users/import-script.user.js 注入服务地址（取自 Host）�
   config.requireAuth = false;
 });
 
+// M-17 / H-02 回归：Host 头注入防护。未配置 PUBLIC_BASE_URL 时，回传地址只能取自白名单内 Host，
+// 否则拒绝生成含回传地址的脚本，避免把 Cookie 推送到攻击者域名。
+test('M-17/H-02：Host 不在白名单 → 拒绝生成脚本（防 Host 注入窃取 Cookie）', async () => {
+  const savedAllow = config.hostAllowlist;
+  const savedBase = config.publicBaseUrl;
+  // fetch(undici) 不允覆盖 Host 头，改用底层 http 模块显式指定 Host 以模拟攻击者构造的请求头
+  const http = await import('node:http');
+  const getWithHost = (hostHeader) =>
+    new Promise((resolve, reject) => {
+      const u = new URL(base + '/api/users/import-script.user.js');
+      const req = http.request(
+        {
+          method: 'GET',
+          hostname: u.hostname,
+          port: u.port,
+          path: u.pathname + u.search,
+          headers: { Host: hostHeader }
+        },
+        (res) => {
+          let body = '';
+          res.on('data', (c) => (body += c));
+          res.on('end', () =>
+            resolve({
+              status: res.statusCode,
+              body,
+              json: (() => {
+                try {
+                  return JSON.parse(body);
+                } catch {
+                  return {};
+                }
+              })()
+            })
+          );
+        }
+      );
+      req.on('error', reject);
+      req.end();
+    });
+  try {
+    config.publicBaseUrl = ''; // 触发"回退 Host + 白名单校验"分支
+    config.hostAllowlist = 'good.example.com';
+    // 恶意 Host（不在白名单）→ 400 untrusted_host，脚本不生成
+    const bad = await getWithHost('evil.example.com');
+    assert.equal(bad.status, 400, '不可信 Host 应被拒绝');
+    assert.equal(bad.json.error, 'untrusted_host');
+    // 白名单内 Host → 正常生成，且回传地址注入该 Host（而非攻击者域名）
+    const good = await getWithHost('good.example.com');
+    assert.equal(good.status, 200, '白名单内 Host 应正常生成脚本');
+    assert.ok(good.body.includes(JSON.stringify('http://good.example.com')), '应注入白名单 Host 作为回传地址');
+    assert.ok(!good.body.includes('__SERVER__'), '地址占位符应被替换');
+  } finally {
+    config.hostAllowlist = savedAllow;
+    config.publicBaseUrl = savedBase;
+  }
+});
+
 test('GET /api/users/import-script.user.js 公开可读且注入窄权限 installToken（不依赖会话 token）', async () => {
   config.requireAuth = true;
   // 无 token → 200（安装端点公开可读，P1-2：不依赖会话 token，避免凭证泄露）

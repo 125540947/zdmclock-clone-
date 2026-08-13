@@ -1,10 +1,11 @@
 import { Router } from 'express';
-import { load, todayStr, withWriteLock, persist, persistAwait } from '../store.js';
+import { load, todayStr, withWriteLock, persistAwait } from '../store.js';
 import { config } from '../config.js';
 import { adminOrAuthRequired } from '../auth.js';
 import { resolvedCheckInTime, parseHM, fmtHM, windowMinutes } from '../clockSchedule.js';
 import { resolveRisk } from '../riskControl.js';
 import { boundedInt } from '../validation.js';
+import { wrapAsync } from '../wrapAsync.js';
 
 const router = Router();
 
@@ -130,7 +131,7 @@ router.get('/risk-settings', adminOrAuthRequired, (req, res) => {
 });
 
 // 更新风控配置（持久化到 db.settings.risk）。仅接受已知数值字段，非法值回退默认。
-router.put('/risk-settings', adminOrAuthRequired, async (req, res) => {
+router.put('/risk-settings', adminOrAuthRequired, wrapAsync(async (req, res) => {
   const db = load();
   const b = (req.body && req.body.settings) || {};
   const cur = db.settings.risk || {};
@@ -146,9 +147,12 @@ router.put('/risk-settings', adminOrAuthRequired, async (req, res) => {
   };
   // 防御：最小等待窗口不能大于最大等待窗口
   if (next.preDelayMinMs > next.preDelayMaxMs) next.preDelayMinMs = next.preDelayMaxMs;
-  db.settings.risk = next;
-  await withWriteLock(() => persistAwait());
+  // M-04 修复：赋值与落盘都在写锁内一次性完成
+  await withWriteLock(() => {
+    db.settings.risk = next;
+    return persistAwait();
+  });
   res.json({ ok: true, settings: resolveRisk(db) });
-});
+}));
 
 export default router;

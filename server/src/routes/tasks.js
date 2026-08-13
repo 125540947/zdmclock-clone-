@@ -2,7 +2,7 @@ import { Router } from 'express';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { load, persist, persistAwait, todayStr, withWriteLock } from '../store.js';
+import { load, persist, persistAwait, todayStr, todayStrTZ, withWriteLock } from '../store.js';
 import { config } from '../config.js';
 import { dbgLog } from '../log.js';
 import { runTask } from '../taskRunner.js';
@@ -328,7 +328,9 @@ router.post('/:id/run', mutationGuard, async (req, res) => {
       notify(db, { title: `❌ 任务失败 · ${t.name}`, message: r.message }).catch(() => {});
       return res.status(400).json({ error: r.error, message: r.message });
     }
-    t.lastRun = todayStr();
+    // M-09 修复：手动运行任务的 lastRun 同样使用「配置时区」日期，与定时调度（scheduler tick）口径一致，
+    // 避免 UTC 容器下任务执行日期落在 tz 前一天，与状态页"今天"跨日冲突。
+    t.lastRun = todayStrTZ(config.tz);
     t.lastResult = r.result.message;
     t.status = 'done';
     await withWriteLock(() => persistAwait());

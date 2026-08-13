@@ -54,14 +54,62 @@ function safeJson(text) {
 // 防止异常/受控上游返回超大响应占满内存（M-03 修复）。与 safePushFetch 中常量一致。
 const MAX_PUSH_BODY = 2_000_000;
 
+// M-07 修复：响应体大小超限专属错误。流式读取时一旦超限立即抛出，便于调用方按类型映射为
+// 结构化错误（如 safePushFetch 返回 { error:'body_too_large' }），而非通用的 fetch_failed。
+export class BodyTooLargeError extends Error {
+  constructor(maxBytes) {
+    super('响应体过大，已拒绝');
+    this.name = 'BodyTooLargeError';
+    this.maxBytes = maxBytes;
+  }
+}
+
+// M-07 修复：流式读取响应体并「边读边钳制」大小，超过上限立即取消后续读取（不把整段响应载入内存）。
+// 替代原先 `arrayBuffer()`/`text()` 后判断大小的写法——后者会先把完整响应缓冲到内存，仅影响"解析结果"，
+// 无法限制下载与峰值内存（异常/受控上游仍能让进程在判定前分配完整大响应）。
+// r：fetch 的 Response（或其兼容替身，须提供 .body.getReader()）。encoding 仅影响最终文本解码。
+export async function readBodyCapped(r, { maxBytes = MAX_PUSH_BODY, encoding = 'utf8' } = {}) {
+  if (!r.body || typeof r.body.getReader !== 'function') {
+    // 无流式分身（非标准 Response）：退化为有限 arrayBuffer，但同样先判断上限再解码
+    const buf = await r.arrayBuffer();
+    if (buf.byteLength > maxBytes) throw new BodyTooLargeError(maxBytes);
+    return Buffer.from(buf).toString(encoding);
+  }
+  const reader = r.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        total += value.byteLength;
+        // 超限即取消后续下载并抛错，避免继续把超大响应缓冲进内存
+        if (total > maxBytes) {
+          await reader.cancel().catch(() => {});
+          throw new BodyTooLargeError(maxBytes);
+        }
+        chunks.push(Buffer.from(value));
+      }
+    }
+  } catch (e) {
+    // 连接中断等读取异常：同样取消并释放底层流，再上抛（含超限错误）
+    await reader.cancel().catch(() => {});
+    throw e;
+  }
+  return Buffer.concat(chunks).toString(encoding);
+}
+
 // M-03 修复：直连 fetch（serverchan/bark/telegram 等固定可信域名）也限制响应体大小，
 // 防止超大响应占内存（此前直接 r.json() 无上限，完全绕过限制）。
+// M-07 修复：改用流式 readBodyCapped 边读边限，不再整段缓冲。
 export async function readJsonCapped(r) {
-  const buf = await r.arrayBuffer();
-  if (buf.byteLength > MAX_PUSH_BODY) {
-    throw new Error('推送响应体过大，已拒绝');
+  const text = await readBodyCapped(r, { maxBytes: MAX_PUSH_BODY });
+  try {
+    return JSON.parse(text);
+  } catch {
+    return {};
   }
-  return JSON.parse(Buffer.from(buf).toString('utf8'));
 }
 
 // Phase 1（P0 严重#1/#2 修复）：Cookie 出口白名单。
@@ -119,12 +167,17 @@ export async function safePushFetch(url, init = {}) {
     if (r.status >= 300 && r.status < 400) {
       return { ok: false, error: 'redirect_not_allowed', message: `推送目标返回重定向，已拒绝跟随 @ ${url}` };
     }
-    // M-03：读取并限制响应体大小，防止超大响应占内存
-    const buf = await r.arrayBuffer();
-    if (buf.byteLength > MAX_PUSH_BODY) {
-      return { ok: false, error: 'body_too_large', message: '推送响应体过大，已拒绝' };
+    // M-03 / M-07：流式读取并「边读边限」大小，防止超大响应占满内存；超限映射为 body_too_large。
+    let text;
+    try {
+      text = await readBodyCapped(r, { maxBytes: MAX_PUSH_BODY });
+    } catch (e) {
+      if (e instanceof BodyTooLargeError) {
+        return { ok: false, error: 'body_too_large', message: '推送响应体过大，已拒绝' };
+      }
+      throw e;
     }
-    return { ok: true, text: Buffer.from(buf).toString('utf8'), status: r.status, okStatus: r.ok };
+    return { ok: true, text, status: r.status, okStatus: r.ok };
   } catch (e) {
     const name = e && e.name;
     if (name === 'TimeoutError' || name === 'AbortError') return { ok: false, error: 'timeout' };

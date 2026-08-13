@@ -26,25 +26,32 @@ function scopeUserIds(db, req) {
   if (isAdminRequest(req)) return null;
   if (config.openMode) {
     const viewerIp = getClientIp(req);
+    // M-10 修复：移除 `!u.recordedIp` 特例——无 recordedIp 的遗留账号归属不明，对匿名不可见，
+    // 仅同网段录入的账号或管理员可见，杜绝匿名跨网段读取遗留数据（水平越权）。
     return new Set(
-      db.users.filter((u) => !u.recordedIp || sameSegment(viewerIp, u.recordedIp, 24)).map((u) => u.id)
+      db.users.filter((u) => sameSegment(viewerIp, u.recordedIp, 24)).map((u) => u.id)
     );
   }
   return null;
 }
 
 // 生成最近 days 天的签到日历
-function buildCalendar(records, days = 30) {
+function buildCalendar(records, days = 30, tz) {
   const map = {};
   records.forEach((r) => {
     map[r.date] = r;
   });
   const arr = [];
-  const today = new Date();
+  // M-09 修复：日历窗口以「配置时区」的墙钟今天为终点，与状态接口的 today 字段（tzToday）口径一致，
+  // 避免跨日边界上日历最后一天与"今天"错位（如容器 UTC 与 Asia/Shanghai 并存时状态页自相矛盾）。
+  // zonedWallClock 返回的是带 getter 的普通对象而非 Date，故用 todayStrTZ 取 tz 日历日，
+  // 再以 UTC 日历日回推 days 天（日历日运算与时区无关），保证跨时区一致。
+  const tzToday = tz && tz !== 'local' && tz !== 'UTC' ? todayStrTZ(tz) : localDateStr(new Date());
+  const baseUTC = new Date(tzToday + 'T00:00:00Z');
   for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(today);
-    d.setDate(today.getDate() - i);
-    const ds = localDateStr(d);
+    const d = new Date(baseUTC);
+    d.setUTCDate(baseUTC.getUTCDate() - i);
+    const ds = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
     arr.push({ date: ds, checked: !!map[ds], points: map[ds] ? map[ds].points : 0 });
   }
   return arr;
@@ -71,7 +78,7 @@ router.get('/status', authRequired, (req, res) => {
       streak: user.streak,
       total: user.totalClockIn,
       points: user.points,
-      calendar: buildCalendar(records)
+      calendar: buildCalendar(records, 30, config.tz)
     });
     return;
   }
@@ -85,7 +92,7 @@ router.get('/status', authRequired, (req, res) => {
     streak: 0,
     total: records.length,
     points: 0,
-    calendar: buildCalendar(records)
+    calendar: buildCalendar(records, 30, config.tz)
   });
 });
 

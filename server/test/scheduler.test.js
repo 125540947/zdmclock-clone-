@@ -66,6 +66,23 @@ test('cronMatch 月末/跨月维度（非 2 月 31 日）', () => {
   assert.equal(cronMatch('* * 6 8 *', ANCHOR), true);
 });
 
+// M-14 修复：日（dom）与星期（dow）同时受限时取「任一匹配」的 POSIX 语义。
+// 锚点 = 周四（getDay()===4）、6 日。
+test('cronMatch 日与星期同时受限取 OR 语义（M-14）', () => {
+  // dom=5（不中 6）但 dow=4（中周四）→ OR 命中
+  assert.equal(cronMatch('* * 5 * 4', ANCHOR), true, 'dom 不中但 dow 中 → 命中');
+  // dom=6（中）但 dow=2（不中）→ OR 命中
+  assert.equal(cronMatch('* * 6 * 2', ANCHOR), true, 'dow 不中但 dom 中 → 命中');
+  // dom=5 且 dow=2（都不中）→ 不命中
+  assert.equal(cronMatch('* * 5 * 2', ANCHOR), false, '两者都不中 → 不命中');
+  // dom=6 且 dow=4（都中）→ 命中
+  assert.equal(cronMatch('* * 6 * 4', ANCHOR), true, '两者都中 → 命中');
+  // 任一为 * 时仍按 AND：dom 受限不中、dow=*
+  assert.equal(cronMatch('* * 5 * *', ANCHOR), false, 'dom 受限不中、dow=* → 整体不中（AND）');
+  // dow 受限中、dom=* → 命中（AND，dow 中）
+  assert.equal(cronMatch('* * * * 4', ANCHOR), true, 'dow 受限中、dom=* → 命中（AND）');
+});
+
 test('cronMatch 段数错误直接不命中', () => {
   assert.equal(cronMatch('* * *', ANCHOR), false);
   assert.equal(cronMatch('', ANCHOR), false);

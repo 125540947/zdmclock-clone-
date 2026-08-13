@@ -37,12 +37,15 @@ function mockFetch(impl) {
   globalThis.fetch = impl;
 }
 function fakeResp({ ok = true, status = 200, body = '', headers = {} } = {}) {
+  // 同时提供 arrayBuffer 以兼容 realAdapter 改用 readBodyCapped 的流式读取（无 body 流时走 arrayBuffer 兜底）
+  const buf = Buffer.from(String(body));
   return {
     ok,
     status,
     statusText: '',
     headers: { get: (k) => (headers[String(k).toLowerCase()] ?? null) },
-    text: async () => body
+    text: async () => body,
+    arrayBuffer: async () => buf
   };
 }
 

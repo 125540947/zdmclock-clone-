@@ -1,7 +1,8 @@
 import { Router } from 'express';
-import { load, persist, persistAwait, withWriteLock } from '../store.js';
+import { load, persistAwait, withWriteLock } from '../store.js';
 import { sendPush, resolvePushSettings, isSafePushUrl } from '../notifier.js';
 import { authRequired, mutationGuard } from '../auth.js';
+import { wrapAsync } from '../wrapAsync.js';
 
 const router = Router();
 const CHANNELS = ['none', 'serverchan', 'bark', 'telegram', 'webhook'];
@@ -26,7 +27,7 @@ router.get('/config', authRequired, (req, res) => {
 
 // 保存推送配置（配置类写操作：开放模式下强制管理员 mutationGuard）。
 // webhook 经 SSRF 校验（P0-2），拒绝回环/私有/链路本地地址。
-router.put('/config', mutationGuard, async (req, res) => {
+router.put('/config', mutationGuard, wrapAsync(async (req, res) => {
   const db = load();
   const { enabled, channel, token, chatId, webhook } = req.body || {};
   if (channel !== undefined && !CHANNELS.includes(channel)) {
@@ -42,17 +43,20 @@ router.put('/config', mutationGuard, async (req, res) => {
     });
   }
   const p = db.settings.push || (db.settings.push = {});
-  if (enabled !== undefined) p.enabled = !!enabled;
-  if (channel !== undefined) p.channel = channel;
-  if (token !== undefined) p.token = String(token || '').slice(0, 512);
-  if (chatId !== undefined) p.chatId = String(chatId || '').slice(0, 128);
-  if (webhook !== undefined) p.webhook = String(webhook || '').slice(0, 2048);
-  await withWriteLock(() => persistAwait());
+  // M-04 修复：先完成全部校验，再在写锁内一次性应用全部修改并落盘。
+  await withWriteLock(() => {
+    if (enabled !== undefined) p.enabled = !!enabled;
+    if (channel !== undefined) p.channel = channel;
+    if (token !== undefined) p.token = String(token || '').slice(0, 512);
+    if (chatId !== undefined) p.chatId = String(chatId || '').slice(0, 128);
+    if (webhook !== undefined) p.webhook = String(webhook || '').slice(0, 2048);
+    return persistAwait();
+  });
   res.json({ ok: true, config: { enabled: p.enabled, channel: p.channel, token: masked(p.token), chatId: masked(p.chatId), webhook: masked(p.webhook) } });
-});
+}));
 
 // 发送测试推送，验证配置是否正确（触发服务端请求：开放模式下强制管理员 mutationGuard，防 SSRF 滥用）
-router.post('/test', mutationGuard, async (req, res) => {
+router.post('/test', mutationGuard, wrapAsync(async (req, res) => {
   const db = load();
   const settings = resolvePushSettings(db);
   if (settings.channel === 'none') {
@@ -71,6 +75,6 @@ router.post('/test', mutationGuard, async (req, res) => {
   } catch (e) {
     return res.status(502).json({ error: 'push_error', message: e.message });
   }
-});
+}));
 
 export default router;

@@ -87,7 +87,7 @@ test('GET /api/assets/ledger 带昵称的最近明细 + ?limit 钳制', async ()
   assert.equal(limited.data.list.length, 1);
 });
 
-test('OPEN_MODE 下 /api/assets/summary 仅返回同 /24 网段（或无 recordedIp）账号', async () => {
+test('OPEN_MODE 下 /api/assets/summary 仅返回同 /24 网段账号（遗留无 recordedIp 不可见，M-10）', async () => {
   const prevOpen = config.openMode;
   const prevAdm = config.adminToken;
   const prevTrust = config.trustProxy;

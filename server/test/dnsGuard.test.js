@@ -29,6 +29,32 @@ test('isPrivateOrReservedIp：公开 IPv6 放行、非法格式保守拒绝', ()
   assert.equal(isPrivateOrReservedIp(''), true);
 });
 
+// H-03 修复补充：此前遗漏的保留/非公网地址段现应被识别为非公开。
+test('isPrivateOrReservedIp：H-03 补齐的 IPv4 保留段识别', () => {
+  for (const ip of [
+    '100.64.0.1', '100.127.255.254', // 100.64.0.0/10（CGNAT）
+    '192.0.0.1', '192.0.0.255', // 192.0.0.0/24（IETF 协议分配）
+    '198.18.0.1', '198.19.255.255' // 198.18.0.0/15（基准网络）
+  ]) {
+    assert.equal(isPrivateOrReservedIp(ip), true, ip);
+  }
+  // 边界之外应放行
+  assert.equal(isPrivateOrReservedIp('100.63.255.255'), false);
+  assert.equal(isPrivateOrReservedIp('100.128.0.1'), false);
+  assert.equal(isPrivateOrReservedIp('198.17.255.255'), false);
+  assert.equal(isPrivateOrReservedIp('198.20.0.1'), false);
+});
+
+test('isPrivateOrReservedIp：H-03 补齐的 IPv6 链路本地/组播保留段', () => {
+  assert.equal(isPrivateOrReservedIp('fe90::1'), true, 'fe80::/10 其它前缀（此前漏判）');
+  assert.equal(isPrivateOrReservedIp('febf::1'), true, 'fe80::/10 边界');
+  assert.equal(isPrivateOrReservedIp('ff02::1'), true, 'ff00::/8 组播');
+  assert.equal(isPrivateOrReservedIp('fc00::1'), true, 'fc00::/7 ULA 下界');
+  assert.equal(isPrivateOrReservedIp('fdff::1'), true, 'fc00::/7 ULA 上界');
+  // 公开 IPv6 仍放行
+  assert.equal(isPrivateOrReservedIp('2001:db8::1'), false);
+});
+
 test('assertPublicDns：解析到公开 IP 通过', async () => {
   setDnsResolver(async () => [{ address: '93.184.216.34' }]);
   const addrs = await assertPublicDns('example.com');

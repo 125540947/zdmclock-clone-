@@ -13,7 +13,7 @@
 
 import crypto from 'node:crypto';
 import { normalizeArticleId } from './articleId.js';
-import { isSafePushUrl, isSafeSmzdmUrl } from '../notifier.js';
+import { isSafePushUrl, isSafeSmzdmUrl, readBodyCapped, BodyTooLargeError } from '../notifier.js';
 import { parseJsonp, removeTags } from './parse.js';
 import { config, boundedNum } from '../config.js';
 import { assertPublicDns } from '../dnsGuard.js';
@@ -27,7 +27,13 @@ const WEB_BASE = (process.env.SMZDM_WEB_BASE || 'https://zhiyou.smzdm.com').repl
 const ARTICLE_API_BASE = (process.env.SMZDM_ARTICLE_API_BASE || 'https://article-api.smzdm.com').replace(/\/$/, '');
 
 // Phase 1：Cookie 出口白名单的精确放行基址（env 可覆盖）。call() 带 cookie 时只允许这些域 + 任意 *.smzdm.com。
-const hostOf = (u) => { try { return new URL(u).host.toLowerCase(); } catch { return ''; } };
+// M-16 修复：此处用 hostname（不含端口）而非 host（含端口）。
+//   - isSafeSmzdmUrl 的白名单比对走 u.hostname，若这里存 host（含端口），
+//     自定义基址 https://proxy.example.com:8443 会被记录为 proxy.example.com:8443，
+//     而校验值 hostname 为 proxy.example.com，精确白名单永远不匹配 → 自建 HTTPS 反代不可用。
+//   - 同时 assertPublicDns 需要纯 hostname（带端口的 host 会让 dns.lookup 失败），
+//     改 hostname 后带端口的自定义基址也能正确做 DNS 重绑定防护。
+const hostOf = (u) => { try { return new URL(u).hostname.toLowerCase(); } catch { return ''; } };
 const SMZDM_ALLOWED_HOSTS = [hostOf(BASE), hostOf(API_BASE), hostOf(WEB_BASE), hostOf(ARTICLE_API_BASE)].filter(Boolean);
 
 // 调试日志开关：默认关闭（生产静默）。设 SMZDM_DEBUG=1 打开，排查真实签到链路时用。
@@ -185,10 +191,17 @@ export async function call(path, { method = 'GET', cookie, body, ua = UA, base =
     break;
   }
   if (!resp.ok) throw new Error(`HTTP ${resp.status} @ ${path}`);
-  const text = await resp.text();
-  // M-03 修复：无论 raw（JSONP）还是 JSON 路径，均先限制响应体大小，防止异常/受控上游用超大
-  // 响应占满内存（此前 raw 路径在 size 检查之前直接返回，完全绕过限制）。
-  if (text.length > 2_000_000) throw new Error('响应体过大，已拒绝（疑似异常响应）'); // b5：防超大响应占内存
+  // M-03 / M-07 修复：流式读取并「边读边限」大小，超过 2MB 立即取消读取，避免把完整超大响应
+  // 缓冲进内存（此前用 resp.text() 先整段缓冲再判断，无法限制峰值内存）。
+  let text;
+  try {
+    text = await readBodyCapped(resp, { maxBytes: 2_000_000 });
+  } catch (e) {
+    if (e instanceof BodyTooLargeError) {
+      throw new Error('响应体过大，已拒绝（疑似异常响应）'); // b5：防超大响应占内存
+    }
+    throw e;
+  }
   if (raw) return text; // JSONP / 非 JSON 响应原样返回，由调用方自行解析
   let json;
   try {

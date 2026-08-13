@@ -22,10 +22,13 @@ function uninstallFetch() {
 
 // 构造 fetch 的 Response 替身
 function jsonResp(obj, { ok = true, status = 200 } = {}) {
-  return { ok, status, text: async () => JSON.stringify(obj) };
+  // 同时提供 arrayBuffer 以兼容 realAdapter 改用 readBodyCapped 的流式读取（无 body 流时走 arrayBuffer 兜底）
+  const buf = Buffer.from(JSON.stringify(obj));
+  return { ok, status, text: async () => JSON.stringify(obj), arrayBuffer: async () => buf };
 }
 function rawResp(text, { ok = true, status = 200 } = {}) {
-  return { ok, status, text: async () => text };
+  // 同时提供 arrayBuffer 以兼容 realAdapter 改用 readBodyCapped 的流式读取（无 body 流时走 arrayBuffer 兜底）
+  return { ok, status, text: async () => text, arrayBuffer: async () => Buffer.from(String(text)) };
 }
 // JSONP 外壳（与 parseJsonp 兼容）
 function jsonp(obj) {
@@ -193,8 +196,8 @@ test('resolveChannelId：article-api 失败 → www 正则兜底', async () => {
 test('resolveChannelId：article-api 与 www 都失败 → 退化为 1', async () => {
   installFetch((url) => {
     const u = String(url);
-    if (u.includes('/article_detail/')) return { ok: false, status: 500, text: async () => '' };
-    if (u.includes('/p/')) return { ok: false, status: 500, text: async () => '' };
+    if (u.includes('/article_detail/')) return { ok: false, status: 500, text: async () => '', arrayBuffer: async () => Buffer.alloc(0) };
+    if (u.includes('/p/')) return { ok: false, status: 500, text: async () => '', arrayBuffer: async () => Buffer.alloc(0) };
     throw new Error('非预期: ' + url);
   });
   const cid = await resolveChannelId('777777', 'sess=abc');
@@ -230,7 +233,7 @@ test('robotCheckIn：额外奖励接口失败 → 主签到仍成功', async () 
   installFetch(
     routerFetch(
       ['/robot/token', () => jsonResp({ error_code: 0, data: { token: 'T' } })],
-      ['/checkin/all_reward', () => ({ ok: false, status: 500, text: async () => '' })], // 触发 robotCheckinExtras 内部 catch（须放在 /checkin 之前，避免子串误匹配）
+      ['/checkin/all_reward', () => ({ ok: false, status: 500, text: async () => '', arrayBuffer: async () => Buffer.alloc(0) })], // 触发 robotCheckinExtras 内部 catch（须放在 /checkin 之前，避免子串误匹配）
       ['/checkin', () => jsonResp({ error_code: 0, data: { cgold: 2, daily_num: 1 } })]
     )
   );
@@ -243,8 +246,8 @@ test('webCheckIn：额外奖励接口全失败 → 主签到仍成功', async ()
   installFetch(
     routerFetch(
       ['/user/checkin/jsonp_checkin', () => rawResp(jsonp({ error_code: 0, data: { cgold: 1 } }))],
-      ['/checkin/all_reward', () => ({ ok: false, status: 500, text: async () => '' })],
-      ['/checkin/extra_reward', () => ({ ok: false, status: 500, text: async () => '' })]
+      ['/checkin/all_reward', () => ({ ok: false, status: 500, text: async () => '', arrayBuffer: async () => Buffer.alloc(0) })],
+      ['/checkin/extra_reward', () => ({ ok: false, status: 500, text: async () => '', arrayBuffer: async () => Buffer.alloc(0) })]
     )
   );
   const r = await realAdapter.webCheckIn('sess=abc');
@@ -286,7 +289,7 @@ test('doCheckinExtras：成功端点计入奖励，失败端点静默跳过', as
   installFetch(
     routerFetch(
       ['/checkin/all_reward', () => rawResp(jsonp({ error_code: 0, data: { reward_msg: '获得<strong>5</strong>金币' } }))],
-      ['/checkin/extra_reward', () => ({ ok: false, status: 500, text: async () => '' })]
+      ['/checkin/extra_reward', () => ({ ok: false, status: 500, text: async () => '', arrayBuffer: async () => Buffer.alloc(0) })]
     )
   );
   const r = await realAdapter.doCheckinExtras('sess=abc');

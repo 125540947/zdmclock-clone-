@@ -108,9 +108,10 @@ test('canAccessUser：开放模式管理员绕过', () => {
   const req = mockReq({ headers: { 'x-admin-token': 'SECRET_ADMIN' } });
   assert.equal(canAccessUser(req, { recordedIp: '9.9.9.9' }), true);
 });
-test('canAccessUser：开放模式无 recordedIp 遗留账号可见', () => {
+test('canAccessUser：开放模式无 recordedIp 遗留账号不可见（M-10 修复）', () => {
   config.openMode = true;
-  assert.equal(canAccessUser(mockReq({ ip: '1.2.3.4' }), { recordedIp: undefined }), true);
+  // 遗留数据归属不明，不应对匿名访客可见；仅同网段录入或管理员可访问，杜绝跨网段读取。
+  assert.equal(canAccessUser(mockReq({ ip: '1.2.3.4' }), { recordedIp: undefined }), false);
 });
 test('canAccessUser：开放模式同段可见、跨段拒绝、无记录拒绝（trustProxy=true 时依据 XFF）', () => {
   config.openMode = true;
@@ -256,19 +257,20 @@ test('computeVisibleUserIds：开放模式管理员返回 null（全部可见）
   const db = { users: [{ id: 'a', recordedIp: '9.9.9.9' }] };
   assert.equal(computeVisibleUserIds(db, mockReq({ headers: { 'x-admin-token': 'SECRET_ADMIN' } })), null);
 });
-test('computeVisibleUserIds：开放模式非管理员仅同 /24 网段 + 无 recordedIp 遗留账号', () => {
+test('computeVisibleUserIds：开放模式非管理员仅同 /24 网段（遗留无 recordedIp 不可见，M-10）', () => {
   config.openMode = true; config.adminToken = 'SECRET_ADMIN';
   const db = {
     users: [
-      { id: 'a', recordedIp: '192.168.1.10' }, // 同段（访客 192.168.1.50）
+      { id: 'a', recordedIp: '192.168.1.10' }, // 同段（访客 192.168.1.50）→ 可见
       { id: 'b', recordedIp: '192.168.2.10' }, // 跨段 → 排除
-      { id: 'c', recordedIp: undefined } // 遗留无记录 → 可见
+      { id: 'c', recordedIp: undefined } // 遗留无记录 → 不可见（M-10 修复）
     ]
   };
   const ids = computeVisibleUserIds(db, mockReq({ ip: '192.168.1.50' }));
   assert.ok(ids instanceof Set);
-  assert.ok(ids.has('a') && ids.has('c'));
+  assert.ok(ids.has('a'));
   assert.equal(ids.has('b'), false);
+  assert.equal(ids.has('c'), false, '遗留无 recordedIp 账号对匿名不可见');
 });
 
 // ---------- adminOrAuthRequired（Phase 2 管理/任务路由隔离）----------

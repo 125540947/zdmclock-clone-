@@ -1,4 +1,4 @@
-import { load, persist, withWriteLock, todayStr } from './store.js';
+import { load, persist, withWriteLock, todayStr, todayStrTZ } from './store.js';
 import { runTask } from './taskRunner.js';
 import { notify } from './notifier.js';
 import { config } from './config.js';
@@ -92,12 +92,16 @@ export function cronMatch(expr, date = new Date()) {
   const f = String(expr || '').trim().split(/\s+/);
   if (f.length !== 5) return false;
   const [mF, hF, domF, monF, dowF] = f;
+  const domMatch = fieldMatch(domF, date.getDate(), 1, 31);
+  const dowMatch = fieldMatch(dowF, date.getDay(), 0, 6);
+  // M-14 修复：POSIX cron 语义——当日（dom）与星期（dow）同时受限（均非 *）时取「任一匹配」，
+  // 任一为 * 时仍按常规 AND。避免按通用 cron 习惯配置的表达式（如「每月 1 日与每周一」）少执行。
+  const dayMatch = domF === '*' || dowF === '*' ? domMatch && dowMatch : domMatch || dowMatch;
   return (
     fieldMatch(mF, date.getMinutes(), 0, 59) &&
     fieldMatch(hF, date.getHours(), 0, 23) &&
-    fieldMatch(domF, date.getDate(), 1, 31) &&
-    fieldMatch(monF, date.getMonth() + 1, 1, 12) &&
-    fieldMatch(dowF, date.getDay(), 0, 6)
+    dayMatch &&
+    fieldMatch(monF, date.getMonth() + 1, 1, 12)
   );
 }
 
@@ -112,6 +116,7 @@ export async function runHealthCheck() {
     if (minute - lastHealthMinute < (config.cookieHealthIntervalMin || 360)) return;
     lastHealthMinute = minute;
     const results = await checkAccounts(db, smzdm, {
+      concurrency: config.healthConcurrency,
       onExpired: (u, reason) =>
         notify(db, {
           title: '🍪 Cookie 失效告警',
@@ -185,7 +190,9 @@ export function tick() {
     const db = load();
     const now = new Date();
     const minuteKey = Math.floor(now.getTime() / 60000);
-    const today = todayStr();
+    // M-09 修复：任务 lastRun 使用「配置时区」日期，与 cron 求值的 zonedWallClock 口径一致，
+    // 避免容器 UTC 下任务执行日期落在 tz 前一天，导致状态页"今天"与任务日期跨日不一致。
+    const today = todayStrTZ(config.tz);
     // 按配置时区折算"墙上时间"用于 cron 求值，避免容器 UTC 导致任务在错误时刻触发
     const z = zonedWallClock(now, config.tz);
     // 智能启动调度（t_startup）启用时，账号级每日流水线改由其按账号错峰统一跑，

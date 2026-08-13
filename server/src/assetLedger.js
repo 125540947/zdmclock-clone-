@@ -8,7 +8,8 @@
 // 数据来源说明：增量优先取 smzdm 权威接口 getUserInfo 刷新后的"前后差额"；
 // 签到等明确返回增量的动作使用显式增量；其余任务靠刷新差额，保证不造假、可追溯。
 
-import { genId, todayStr, localDateStr } from './store.js';
+import { genId, todayStr, localDateStr, todayStrTZ } from './store.js';
+import { config } from './config.js';
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -173,15 +174,23 @@ export function summarizeAssets(db, visibleIds = null) {
 
 // 日收益序列（含累计总量）：返回最近 days 天，每天 { date, 各增量, 各累计 }
 // visibleIds：可选 Set<userId>；传入时仅统计该集合内账号（OPEN_MODE 按 /24 网段隔离），null/省略=全部。
-export function dailyAssetSeries(db, days = 30, visibleIds = null) {
+// tz：窗口终点所用的时区（M-09），默认取 config.tz；传 null/'local'/'UTC' 时退回进程本地日期。
+export function dailyAssetSeries(db, days = 30, visibleIds = null, tz = config.tz) {
   const ledger = db.assetLedger || [];
   const snaps = db.assetSnapshots || [];
-  const base = new Date();
+  // M-09 修复：窗口以「配置时区」墙钟今天为终点，与签到/任务 lastRun 时区口径统一，
+  // 避免容器 UTC 下资产日报归属与"今天"错位（跨日统计冲突）。
+  // 注意 zonedWallClock 返回的是带 getter 的普通对象而非 Date，故这里用 todayStrTZ 取 tz 日历日，
+  // 再以 UTC 日历日回推 days 天（日历日运算与时区无关），保证跨时区一致。
+  const tzToday = tz && tz !== 'local' && tz !== 'UTC' ? todayStrTZ(tz) : localDateStr(new Date());
+  const baseUTC = new Date(tzToday + 'T00:00:00Z');
+  const ymd = (d) =>
+    `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
   const dates = [];
   for (let i = days - 1; i >= 0; i--) {
-    const dt = new Date(base);
-    dt.setDate(base.getDate() - i);
-    dates.push(localDateStr(dt));
+    const dt = new Date(baseUTC);
+    dt.setUTCDate(baseUTC.getUTCDate() - i);
+    dates.push(ymd(dt));
   }
   // 每账号每日起增量：deltaByUserDate[date][userId] = {gold,silver,exp}
   const deltaByUserDate = {};
@@ -214,8 +223,33 @@ export function dailyAssetSeries(db, days = 30, visibleIds = null) {
   //  - 无快照但有当日账本的账号：在上一日余额基础上累加当日 delta（carry forward）。
   //  - 无快照且无当日账本的账号：余额保持不变（carry forward）。
   // 每日 total = 所有 perUserRun 之和，确保部分账号快照不会令其他账号从历史曲线消失。
+  // M-08 修复：用「窗口之前最后一个快照」作为期初余额，避免曲线首日从 0 起算。
+  // 否则仅窗口内有快照/账本的账号才正确；窗口前已有余额（如 31 天前 100/50/20）、窗口内无活动的账号，
+  // 首日与末日总额都会错误返回 0。窗口内的快照仍按 M-02 逻辑逐日锚定，不与此处冲突。
+  const windowStart = dates[0]; // dates 按从旧到新排列，dates[0] 即窗口起点
+  const openingByUser = {}; // userId -> {date,gold,silver,exp}，取窗口前最新一条快照
+  for (const s of snaps) {
+    if (visibleIds && !visibleIds.has(s.userId)) continue;
+    if (s.date >= windowStart) continue; // 仅取窗口之前的快照作为期初
+    const prev = openingByUser[s.userId];
+    if (!prev || s.date > prev.date) {
+      openingByUser[s.userId] = {
+        date: s.date,
+        // 快照某字段为 null（未知）时按 0 计入，避免 carry forward 时出现 NaN；
+        // 窗口内若有该字段快照/账本会再修正。
+        gold: s.gold != null ? s.gold : 0,
+        silver: s.silver != null ? s.silver : 0,
+        exp: s.exp != null ? s.exp : 0
+      };
+    }
+  }
   const perUserRun = {};
-  for (const userId of allUserIds) perUserRun[userId] = { gold: 0, silver: 0, exp: 0 };
+  for (const userId of allUserIds) {
+    const op = openingByUser[userId];
+    perUserRun[userId] = op
+      ? { gold: round2(op.gold), silver: round2(op.silver), exp: round2(op.exp) }
+      : { gold: 0, silver: 0, exp: 0 };
+  }
   for (const date of dates) {
     const snapsForDate = snapByUserDate[date] || {};
     const deltasForDate = deltaByUserDate[date] || {};
@@ -270,11 +304,14 @@ export function dailyAssetSeries(db, days = 30, visibleIds = null) {
 
 // 任务贡献统计：最近 days 天内，各任务类型累计的增量与执行次数
 // visibleIds：可选 Set<userId>；传入时仅统计该集合内账号（OPEN_MODE 按 /24 网段隔离），null/省略=全部。
-export function assetByTask(db, days = 30, visibleIds = null) {
+// tz：窗口起点所用的时区（M-09），默认取 config.tz，与 dailyAssetSeries 同源。
+export function assetByTask(db, days = 30, visibleIds = null, tz = config.tz) {
   const ledger = db.assetLedger || [];
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - (days - 1));
-  const cutoffStr = localDateStr(cutoff);
+  // M-09 修复：与 dailyAssetSeries 同源，按配置时区墙钟计算窗口起点
+  const tzToday = tz && tz !== 'local' && tz !== 'UTC' ? todayStrTZ(tz) : localDateStr(new Date());
+  const cutoffUTC = new Date(tzToday + 'T00:00:00Z');
+  cutoffUTC.setUTCDate(cutoffUTC.getUTCDate() - (days - 1));
+  const cutoffStr = `${cutoffUTC.getUTCFullYear()}-${String(cutoffUTC.getUTCMonth() + 1).padStart(2, '0')}-${String(cutoffUTC.getUTCDate()).padStart(2, '0')}`;
   const map = {};
   for (const e of ledger) {
     if (visibleIds && !visibleIds.has(e.userId)) continue;

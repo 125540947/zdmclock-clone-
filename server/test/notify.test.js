@@ -21,7 +21,10 @@ mock.module(p('notifier.js'), {
     resolvePushSettings: realNotifier.resolvePushSettings,
     isSafePushUrl: realNotifier.isSafePushUrl,
     // Phase 1：routes/tasks.js 现也依赖 isSafeSmzdmUrl（Cookie 出口白名单），mock 需透传真实实现
-    isSafeSmzdmUrl: realNotifier.isSafeSmzdmUrl
+    isSafeSmzdmUrl: realNotifier.isSafeSmzdmUrl,
+    // M-07：realAdapter.call 现依赖 readBodyCapped / BodyTooLargeError（流式限流读取），mock 透传真实实现
+    readBodyCapped: realNotifier.readBodyCapped,
+    BodyTooLargeError: realNotifier.BodyTooLargeError
   }
 });
 
