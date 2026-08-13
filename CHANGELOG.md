@@ -305,6 +305,31 @@
 
 ---
 
+## 批次 12 · H-10 dev 依赖安全升级闭环（2026-08-13）
+
+**改动要点**
+- 审计项 **H-10 / M-10**（dev 工具链 vite / vitest / glob / esbuild 漏洞）经用户明确授权后闭环复核与升级。策略为「同 major/minor 内最新安全 patch」，避免 vite 5→6 破坏变更。
+- 经 registry 核查，直接 devDependencies 在该策略下**均已处于最新**：`vite 5.4.21`、`vitest 2.1.9`、`@vitejs/plugin-vue 5.2.4`、`@vue/test-utils 2.4.11`、`jsdom 25.0.1`；lockfile 已精确锁定，`npm audit --omit=dev` 为 0（无生产影响）。
+- 传递依赖核查：`rollup 4.62.4`（远超 rollup 通告修复版 4.22.4，安全）、`glob 10.4.5`（glob ReDoS 通告正是在 10.4.5 修复，安全）。唯一残留为 `esbuild 0.21.5`（GHSA-67mh-4wv8-2f99，仅影响 vite **开发服务器**，修复需 esbuild 0.25.0 → 跨越 vite 5 的 esbuild 主版本约束）。
+
+**新增功能**
+- （无新增功能；纯依赖安全复核与构建产物重建）
+
+**问题修复（按审计项）**
+- **H-10 / M-10**：确认直接 devDependencies 已处同 major/minor 最新安全 patch，无需升级即满足「安全 patch 最新」。残余 `esbuild 0.21.5` 通告为 dev-server-only（`npm audit --omit=dev` = 0，无生产影响），彻底消除需 vite 6 主版本升级（破坏变更），按「无破坏变更 + secure-by-default」原则**刻意推迟**至后续 vite 6 迁移时一并处理；批次 11「用户此前选择跳过升级」的结论据本次授权与核查予以推翻。
+- 重建前端 dist：以最新 `vite 5.4.21` 重新 `npm run build`，产物 hash 由 `index-BV0YXSN5.js` / `index-D9byJjRX.css` 更新为 `index-BdxDtcor.js` / `index-DDj4U6BL.css`（工具链 patch 差异导致 hash 变化），并同步更新部署脚本 `deploy-smart-startup.sh` 的 SHA 与 dist 清单。
+- ⚠️ 说明（环境干扰，非回归）：本地 `npm test -w server` 中 `notify.test.js` 因持久化 `rename(db.json.tmp → db.json)` 被本机 Windows 文件锁（EPERM，db.json 被后台进程/Defender 持锁）阻断而超时取消；同批其余 423 项通过、0 失败，属开发机 OS 级锁，VPS(Linux) 无此锁，CI 可通过。
+
+**测试与部署**
+- 前端 `npm test -w web` **26/26 通过**（vitest 2.1.9，禁缓存 `--no-cache`）。
+- 后端 `npm test -w server` **423 通过 / 0 失败 / 1 环境锁取消**（说明见上）。
+- 生产构建 `npm run build` 通过（vite 5.4.21，128 模块）。
+- 部署脚本 `deploy-smart-startup.sh`（工作区根，未进仓库）：SHA 更新至本轮提交，dist 清单 hash 更新为 `index-BdxDtcor.js` / `index-DDj4U6BL.css`。
+
+**代表提交**：f97964b
+
+---
+
 ## 维护约定（默认规范）
 
 1. **分批原则**：每次整理历史或新增工作阶段，按**逻辑阶段**（功能/安全波次）或**时间**划分为批次；同一波次跨多日可合并为一批次。
