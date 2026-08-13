@@ -376,6 +376,26 @@ export function resolveUsers(db, opts) {
   return db.users.filter((u) => u.autoRun !== false);
 }
 
+// 同账号互斥锁（#183）：同一 userId 的两次并发执行（如定时调度与手动"运行"撞车、
+// 或 t_clock 补签窗口与 t_startup 同时触发）不会真正同时打 smzdm，避免重复动作 / 触发限流。
+// 不同账号使用各自的锁，互不阻塞。锁为内存态（进程重启即清空），与 withWriteLock（DB 写串行化）正交。
+const accountLocks = new Map();
+export function withAccountLock(userId, fn) {
+  const key = String(userId);
+  const prev = accountLocks.get(key) || Promise.resolve();
+  const run = prev.then(fn, fn);
+  const chain = run.then(
+    () => undefined,
+    () => undefined
+  );
+  accountLocks.set(key, chain);
+  // 若无其他并发持有该账号的链，清理 Map 条目，避免长期运行无限增长
+  chain.finally(() => {
+    if (accountLocks.get(key) === chain) accountLocks.delete(key);
+  });
+  return run;
+}
+
 export async function runTask(task, db, opts = {}) {
   // 智能启动调度：按账号错峰跑完整日常流水线（见 startup.js）
   if (task.type === 'startup') return runStartupForAccounts(db);
@@ -434,6 +454,8 @@ export async function runTask(task, db, opts = {}) {
   const assetCache = new Map(); // P2-5：本轮内按账号缓存余额刷新结果，避免 N+1（同账号多任务只拉一次 smzdm）
   for (let i = 0; i < users.length; i++) {
     const user = users[i];
+    // 同账号互斥锁（#183）：同一 userId 的并发执行串行化，避免同时打 smzdm 造成重复动作 / 限流。
+    await withAccountLock(user.id, async () => {
     const who = user.nickname || user.smzdmId || user.id;
     // 错峰：从第 2 个账号起，加入固定间隔 + 随机抖动，避免多账号同秒集中请求
     // smzdm 触发限流/风控导致漏签。单账号场景（i===0）无等待。
@@ -482,6 +504,7 @@ export async function runTask(task, db, opts = {}) {
     } catch (e) {
       parts.push(`${who}：异常 ${e.message}`);
     }
+    });
   }
   const total = users.length;
   const allOk = okCount === total;

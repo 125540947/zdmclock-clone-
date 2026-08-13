@@ -9,6 +9,7 @@
 // 任何异常都被捕获并返回 { ok:false, error }，不会向外抛出，保证签到/任务主流程不受影响。
 
 import { config } from './config.js';
+import { assertPublicDns } from './dnsGuard.js';
 
 // SSRF 防护：用户可控的 webhook（及 bark base）、任务自定义 endpoint / referer 都必须经过校验，
 // 仅允许公网 http/https，拒绝回环 / 私有 / 链路本地地址，防止在 OPEN_MODE 下被匿名
@@ -65,6 +66,36 @@ export function isSafeSmzdmUrl(url, allowedExact = []) {
   return host === 'smzdm.com' || host.endsWith('.smzdm.com');
 }
 
+// #182 DNS 重绑定防护 + #102 推送 webhook/Bark SSRF 校验的落点：
+// 对用户可控的出站 URL（webhook / bark 自定义 base），先经 isSafePushUrl 拒绝内网/回环/非公网，
+// 再经 assertPublicDns 确认解析到的 IP 全部公开（防 DNS 重绑定把请求导到内网）。
+// 固定公开域名（serverchan/telegram/默认 bark）不经过此路径（非用户可控主机，无需解析）。
+// 返回 { ok, error?, message? }；ok=false 时调用方应放弃发送（绝不回退到裸 fetch）。
+export async function safePushFetch(url, init = {}) {
+  if (!isSafePushUrl(url)) {
+    return { ok: false, error: 'unsafe_url', message: `拒绝向非公网地址推送 @ ${url}` };
+  }
+  let host;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return { ok: false, error: 'bad_url', message: `推送地址非法 @ ${url}` };
+  }
+  try {
+    await assertPublicDns(host);
+  } catch (e) {
+    return { ok: false, error: 'dns_rebind', message: e && e.message ? e.message : 'DNS 校验失败' };
+  }
+  try {
+    const r = await fetch(url, init);
+    return { ok: true, response: r };
+  } catch (e) {
+    const name = e && e.name;
+    if (name === 'TimeoutError' || name === 'AbortError') return { ok: false, error: 'timeout' };
+    return { ok: false, error: 'fetch_failed', message: e && e.message ? e.message : 'unknown' };
+  }
+}
+
 // 从 db.settings.push 解析推送设置；db 中缺省字段回退到环境变量（便于纯 env 部署）
 export function resolvePushSettings(db) {
   const p = (db && db.settings && db.settings.push) || {};
@@ -108,6 +139,15 @@ export async function sendPush(settings, { title, message }) {
         if (!settings.token) return { ok: false, error: 'missing_token' };
         const base = (settings.webhook || 'https://api.day.app').replace(/\/$/, '');
         const u = `${base}/${encodeURIComponent(settings.token)}/${encodeURIComponent(title_)}/${encodeURIComponent(body)}`;
+        // 仅当用户显式配置了自定义 base（非默认 api.day.app）时才需经 safePushFetch 做 SSRF + DNS 校验；
+        // 默认 base 为知名公开服务，直接发送。
+        if (settings.webhook) {
+          const guard = await safePushFetch(u, { signal });
+          if (!guard.ok) return { ok: false, error: guard.error, message: guard.message };
+          const j = await guard.response.json().catch(() => ({}));
+          if (j.code === 200 || j.message === 'success') return { ok: true };
+          return { ok: false, error: j.message || `HTTP ${guard.response.status}` };
+        }
         const r = await fetch(u, { signal });
         const j = await r.json().catch(() => ({}));
         if (j.code === 200 || j.message === 'success') return { ok: true };
@@ -128,14 +168,17 @@ export async function sendPush(settings, { title, message }) {
       }
       case 'webhook': {
         if (!settings.webhook) return { ok: false, error: 'missing_webhook' };
-        const r = await fetch(settings.webhook, {
+        // 用户完全可控的 URL：必须经 safePushFetch（isSafePushUrl + DNS 重绑定校验）后才发送，
+        // 防止 OPEN_MODE 匿名把 webhook 配成内网地址探测 / 读取云元数据（SSRF）。
+        const guard = await safePushFetch(settings.webhook, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ title: title_, message: body, text: `${title_}\n${body}` }),
           signal
         });
-        if (r.ok) return { ok: true };
-        return { ok: false, error: `HTTP ${r.status}` };
+        if (!guard.ok) return { ok: false, error: guard.error, message: guard.message };
+        if (guard.response.ok) return { ok: true };
+        return { ok: false, error: `HTTP ${guard.response.status}` };
       }
       default:
         return { ok: false, error: 'unknown_channel' };

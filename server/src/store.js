@@ -238,14 +238,28 @@ export function persistNow() {
   fs.renameSync(tmp, DB_FILE);
 }
 
-function writeDbAsync() {
-  if (!cache) return Promise.resolve();
+// #183 单写者：所有异步落盘串入同一条 Promise 链，避免并发 persistSoon / 多次触发时
+// 对同一个 .tmp 文件产生交错的写操作（rename 原子但 writeFile 非原子，且无序并发可能写坏文件）。
+// 注意：此处的 persistChain 与上方 withWriteLock 的 writeChain 是两回事——前者串行化磁盘写，
+// 后者串行化内存变更；二者正交。
+let persistChain = Promise.resolve();
+function doWrite() {
+  if (!cache) return undefined;
   enforceClockCap();
   ensureDir();
   const tmp = DB_FILE + '.tmp';
   return fs.promises
     .writeFile(tmp, JSON.stringify(cache, null, 2))
     .then(() => fs.promises.rename(tmp, DB_FILE));
+}
+function scheduleWrite() {
+  const run = persistChain.then(doWrite, doWrite);
+  // 无论成功失败都继续链条，避免单次写失败卡死后续写
+  persistChain = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
 }
 
 let persistTimer = null;
@@ -255,15 +269,21 @@ export function persistSoon() {
   if (persistTimer) return;
   persistTimer = setTimeout(() => {
     persistTimer = null;
-    writeDbAsync().catch((e) => console.error('[store] persistSoon 写失败', e && e.message));
+    scheduleWrite().catch((e) => console.error('[store] persistSoon 写失败', e && e.message));
   }, 1200);
 }
 
-// 进程退出兜底：同步立即落盘（SIGTERM/SIGINT 调用），确保 debounce 窗口内的修改不丢失。
-export function flushPersist() {
+// 进程退出兜底：先等待任何在途异步写（单写者）完成，再做一次同步立即落盘，
+// 确保 debounce 窗口内的修改与尚未完成的异步写都不丢失（SIGTERM/SIGINT 调用）。
+export async function flushPersist() {
   if (persistTimer) {
     clearTimeout(persistTimer);
     persistTimer = null;
+  }
+  try {
+    await persistChain;
+  } catch {
+    /* 在途写失败不影响最终同步落盘 */
   }
   persistNow();
 }

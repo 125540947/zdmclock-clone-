@@ -280,21 +280,23 @@ if (isMain) {
   // 优雅退出：收到 SIGTERM/SIGINT（如 systemd restart）时，先把 debounce 窗口内的修改同步落盘，
   // 再退出，避免合并写（persistSoon）延迟期内进程被杀导致最近改动丢失（P1-4 兜底）。
   let stopping = false;
-  const gracefulStop = (sig) => {
+  const gracefulStop = async (sig) => {
     if (stopping) return;
     stopping = true;
     // eslint-disable-next-line no-console
     console.warn(`[zdmclock] 收到 ${sig}，正在落盘并退出…`);
     try {
-      flushPersist();
+      // flushPersist 现已异步：先等待在途的异步落盘（单写者）完成，再做最终同步落盘，
+      // 确保 debounce 窗口内与尚未完成的写都不丢失，然后才退出。
+      await flushPersist();
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error('[zdmclock] flushPersist 失败', e && e.message);
     }
     process.exit(0);
   };
-  process.on('SIGTERM', () => gracefulStop('SIGTERM'));
-  process.on('SIGINT', () => gracefulStop('SIGINT'));
+  process.on('SIGTERM', () => { gracefulStop('SIGTERM'); });
+  process.on('SIGINT', () => { gracefulStop('SIGINT'); });
 
   // 致命配置校验（Phase 2 代理认证加固）：TRUST_PROXY_AUTH=true 但未配 PROXY_AUTH_HEADER 时，
   // 任何人直连 /login 都能拿到 apiToken+adminToken，等同把后台裸奔到公网 —— 直接拒绝启动。

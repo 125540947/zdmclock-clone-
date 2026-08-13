@@ -3,8 +3,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { resolvePushSettings, sendPush, notify, isSafeSmzdmUrl } = await import('../src/notifier.js');
+const { resolvePushSettings, sendPush, notify, isSafeSmzdmUrl, safePushFetch } = await import('../src/notifier.js');
+const { setDnsResolver, getDnsResolver } = await import('../src/dnsGuard.js');
 const realFetch = globalThis.fetch;
+const realResolver = getDnsResolver();
+// 测试期间默认把解析器置为"返回公开 IP"，个别用例再覆盖为私有/失败，避免触发真实网络。
+setDnsResolver(async () => [{ address: '93.184.216.34' }]);
+const restoreResolver = () => setDnsResolver(realResolver);
 
 // ===================== Phase 1：Cookie 出口白名单 =====================
 
@@ -107,4 +112,75 @@ test('notify 未启用/未配置时跳过（返回 skipped）', async () => {
 test('还原全局 fetch', () => {
   globalThis.fetch = realFetch;
   assert.ok(true);
+});
+
+// ===================== #182：推送 webhook/Bark SSRF + DNS 重绑定防护 =====================
+
+test('safePushFetch：拒绝内网/非公网 URL（不发起请求）', async () => {
+  let called = false;
+  globalThis.fetch = async () => { called = true; return { ok: true, json: async () => ({}) }; };
+  const r = await safePushFetch('http://169.254.169.254/latest/meta-data/', {});
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'unsafe_url');
+  assert.equal(called, false, '内网地址不应发起任何请求');
+  globalThis.fetch = realFetch;
+});
+
+test('safePushFetch：解析到私有 IP 拒绝（DNS 重绑定），不发起请求', async () => {
+  setDnsResolver(async () => [{ address: '10.0.0.5' }]);
+  let called = false;
+  globalThis.fetch = async () => { called = true; return { ok: true, json: async () => ({}) }; };
+  const r = await safePushFetch('https://my-webhook.example.com/hook', {});
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'dns_rebind');
+  assert.equal(called, false, '疑似 DNS 重绑定不应发起请求');
+  globalThis.fetch = realFetch;
+  restoreResolver();
+});
+
+test('safePushFetch：公开地址 + 解析公开 IP 正常发送', async () => {
+  setDnsResolver(async () => [{ address: '93.184.216.34' }]);
+  let urlSeen;
+  globalThis.fetch = async (url, init) => { urlSeen = url; return { ok: true, status: 200, json: async () => ({}) }; };
+  const r = await safePushFetch('https://my-webhook.example.com/hook', { method: 'POST', body: '{}' });
+  assert.equal(r.ok, true);
+  assert.equal(urlSeen, 'https://my-webhook.example.com/hook');
+  globalThis.fetch = realFetch;
+});
+
+test('sendPush webhook：解析到私有 IP 被拒（dns_rebind）', async () => {
+  setDnsResolver(async () => [{ address: '192.168.1.1' }]);
+  let called = false;
+  globalThis.fetch = async () => { called = true; return { ok: true, status: 200, json: async () => ({}) }; };
+  const r = await sendPush({ channel: 'webhook', webhook: 'https://hook.example.com/x' }, { title: 't', message: 'm' });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'dns_rebind');
+  assert.equal(called, false);
+  globalThis.fetch = realFetch;
+  restoreResolver();
+});
+
+test('sendPush webhook：合法公网地址正常发送成功', async () => {
+  setDnsResolver(async () => [{ address: '93.184.216.34' }]);
+  globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({}) });
+  const r = await sendPush({ channel: 'webhook', webhook: 'https://hook.example.com/x' }, { title: 't', message: 'm' });
+  assert.equal(r.ok, true);
+  globalThis.fetch = realFetch;
+});
+
+test('sendPush bark：自定义 base 解析到私有 IP 被拒（dns_rebind）', async () => {
+  setDnsResolver(async () => [{ address: '10.0.0.9' }]);
+  let called = false;
+  globalThis.fetch = async () => { called = true; return { ok: true, status: 200, json: async () => ({ code: 200 }) }; };
+  const r = await sendPush({ channel: 'bark', token: 'k', webhook: 'https://bark.example.com' }, { title: 't', message: 'm' });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'dns_rebind');
+  assert.equal(called, false);
+  globalThis.fetch = realFetch;
+  restoreResolver();
+});
+
+test('还原 DNS 解析器', () => {
+  restoreResolver();
+  assert.equal(getDnsResolver(), realResolver);
 });

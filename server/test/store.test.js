@@ -7,7 +7,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 
 process.env.DATA_DIR = path.join(os.tmpdir(), 'zdm-store-' + process.pid + '-' + Date.now());
-const { load, mergeBaoliao, localDateStr, todayStr, genId } = await import('../src/store.js');
+const { load, mergeBaoliao, localDateStr, todayStr, genId, persistSoon, flushPersist, persistNow } = await import('../src/store.js');
 
 test('localDateStr 固定日期格式与边界（含闰年 2/29）', () => {
   assert.equal(localDateStr(new Date(2026, 0, 1)), '2026-01-01');
@@ -116,6 +116,22 @@ test('mergeBaoliao 非数组入参返回 0 且不抛', () => {
   assert.equal(mergeBaoliao('x'), 0);
   assert.equal(mergeBaoliao(undefined), 0);
   assert.equal(db.baoliao.length, 0);
+});
+
+// ===================== #183：单写者落盘 + 优雅关机 flush =====================
+
+test('flushPersist 可 await 且最终落盘为合法 JSON', async () => {
+  const db = load();
+  db.users.push({ id: 'flush-u1', nickname: 'flush', cookie: 'sess=x', autoRun: false });
+  persistNow(); // 立即写一版
+  // 触发合并写（debounce）后立刻 flush：flush 应等待在途异步写并再落一次，最终文件合法
+  persistSoon();
+  const r = await flushPersist();
+  assert.equal(r, undefined);
+  const raw = fs.readFileSync(path.join(process.env.DATA_DIR, 'db.json'), 'utf-8');
+  const parsed = JSON.parse(raw); // 不抛即合法
+  assert.ok(Array.isArray(parsed.users));
+  assert.ok(parsed.users.some((u) => u.id === 'flush-u1'));
 });
 
 // 清理临时数据目录

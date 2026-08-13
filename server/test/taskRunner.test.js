@@ -9,7 +9,7 @@ process.env.DATA_DIR = path.join(os.tmpdir(), 'zdm-task-' + process.pid + '-' + 
 process.env.GPT_API_KEY = 'test-key'; // 使 config.gptEnabled=true，runGptBatch 真实路径可达
 process.env.CLOCK_STAGGER_MS = '0'; // 测试关闭错峰，保证批量用例快速且确定
 process.env.CLOCK_STAGGER_JITTER_MS = '0';
-const { runTask, collectArticleIds, resolveUsers, runClockForUser, sampleArticleIds, computeSampleSize } = await import('../src/taskRunner.js');
+const { runTask, collectArticleIds, resolveUsers, runClockForUser, sampleArticleIds, computeSampleSize, withAccountLock } = await import('../src/taskRunner.js');
 const { load } = await import('../src/store.js');
 const { config } = await import('../src/config.js');
 const { smzdm } = await import('../src/smzdm/adapter.js');
@@ -393,4 +393,34 @@ test('runEngagement baoliao 来源随机取样（不遍历全量）+ 拟人化�
 test('还原全局 fetch', () => {
   globalThis.fetch = realFetch;
   assert.ok(true);
+});
+
+// ===================== #183：同账号互斥锁 withAccountLock =====================
+
+test('withAccountLock：同一 userId 的并发执行串行化（不重叠）', async () => {
+  let active = 0;
+  let maxActive = 0;
+  let finished = 0;
+  const make = () =>
+    withAccountLock('u1', async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((r) => setTimeout(r, 10));
+      active -= 1;
+      finished += 1;
+    });
+  // 一次性并发触发 5 次，应全部完成且任意时刻最多 1 个在执行（互斥）
+  await Promise.all([make(), make(), make(), make(), make()]);
+  assert.equal(finished, 5);
+  assert.equal(maxActive, 1, '同账号并发应被互斥锁串行化，最大并发为 1');
+});
+
+test('withAccountLock：不同 userId 互不阻塞', async () => {
+  let a = 0;
+  let b = 0;
+  const runA = withAccountLock('a', async () => { a = 1; await new Promise((r) => setTimeout(r, 15)); a = 2; });
+  const runB = withAccountLock('b', async () => { b = 1; await new Promise((r) => setTimeout(r, 5)); b = 2; });
+  await Promise.all([runA, runB]);
+  assert.equal(a, 2);
+  assert.equal(b, 2);
 });
