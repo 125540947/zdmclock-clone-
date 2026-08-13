@@ -249,6 +249,30 @@
 
 ---
 
+## 批次 10 · 修复后审计报告残留项闭环（M-14/M-03 残留 + 确认 M-07/M-01/H-07 已闭环）（2026-08-13）
+
+**改动要点**
+- 逐条复核 `POST_FIX_AUDIT_REPORT_2026-08-13.md` 在批次 9 后仍列"未闭环"的项，对照当前代码确认真实状态，闭环真正的残留缺口（而非照单重复改动）。
+- **M-14 残留**：`smzdm/realAdapter.js` 的对外请求超时与拟人化间隔窗口此前直接 `Number(process.env.*)` 绕过 `config` 的 `boundedNum` 校验——`Number(env 非数字)` 会变成 `NaN` 直接喂给 `AbortSignal.timeout` 抛异常挂起请求。现改用 `config.smzdmRequestTimeout`（已 boundedNum）与 `boundedNum` 包裹的 `ACTION_JITTER`，拒绝 NaN/负数/极大值。
+- **M-03 残留**：`notifier.js` 的 `sendPush` 直连分支（serverchan / bark 默认 base / telegram）此前直接 `r.json()` 无响应体上限，异常上游可用超大响应占满内存。`safePushFetch`（webhook / 自定义 bark base）早已限制，但直连分支遗漏。新增 `readJsonCapped()` 统一限制 2MB 响应体后替换这三处。
+
+**新增功能**
+- 测试门禁补强：`server/test/config.test.js` 覆盖 `boundedNum` 全部边界（NaN/负数/极大值/越界/类型/空串与 null 语义）；`server/test/notifier.test.js` 新增 `readJsonCapped` 用例（正常解析、>2MB 拒绝、无效 JSON 抛错）。
+
+**问题修复（按审计项）**
+- **M-14**：数值型环境变量校验闭环——`config.js` 早已全量使用 `boundedNum`；本轮补齐 realAdapter 直读 env 的两处残留，确保超时/间隔不会以 NaN/负值进入 `AbortSignal.timeout` 与 `sleep`。
+- **M-03**：响应体大小上限前移闭环——realAdapter 的 `raw`/JSON 路径与 `safePushFetch` 已在批次 9 闭环；本轮补齐 `sendPush` 直连分支，至此所有出站响应读取均受 2MB 上限保护。
+- **纠正批次 9 ⚠️ 说明**：经代码复核，批次 9 误列为"刻意未改"的 **M-07（GET /health/cookies→POST + 前端 `api.post` 同步）、M-01（碎银增量 `silverDelta`→`silver`）、H-07（手动 /do + GPT 自动发布 + startup 经 `runTask` 间接纳入 `withAccountLock`）** 实际已在先前提交闭环（代码注释均标注对应修复）；本轮仅余 M-14/M-03 残留，现已一并闭环。剩余确需专项设计的高风险项收敛为：**H-01 / H-02 / H-03 / H-04 / M-10**（dev 依赖升级，用户此前选择跳过）。
+
+**测试与部署**
+- 后端 `npm test` 全量 **428/0 通过**（新增 8 例：config 5 + notifier 3；含 M-14/M-03 覆盖）。
+- 前端 `npm test -w web` **26/26 通过**。
+- 生产构建 `npm run build` 通过。
+
+**代表提交**：（见本轮合入，git log 中「批次 10」对应提交）
+
+---
+
 ## 维护约定（默认规范）
 
 1. **分批原则**：每次整理历史或新增工作阶段，按**逻辑阶段**（功能/安全波次）或**时间**划分为批次；同一波次跨多日可合并为一批次。

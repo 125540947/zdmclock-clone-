@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { resolvePushSettings, sendPush, notify, isSafeSmzdmUrl, safePushFetch } = await import('../src/notifier.js');
+const { resolvePushSettings, sendPush, notify, isSafeSmzdmUrl, safePushFetch, readJsonCapped } = await import('../src/notifier.js');
 const { setDnsResolver, getDnsResolver } = await import('../src/dnsGuard.js');
 const realFetch = globalThis.fetch;
 const realResolver = getDnsResolver();
@@ -108,7 +108,11 @@ test('sendPush webhook 缺 webhook 返回 missing_webhook', async () => {
 });
 
 test('sendPush serverchan 成功路径（mock fetch 返回 code:0）', async () => {
-  globalThis.fetch = async () => ({ ok: true, json: async () => ({ code: 0 }) });
+  globalThis.fetch = async () => ({
+    ok: true,
+    arrayBuffer: async () => new TextEncoder().encode(JSON.stringify({ code: 0 })).buffer,
+    json: async () => ({ code: 0 })
+  });
   const r = await sendPush({ channel: 'serverchan', token: 'sendkey' }, { title: 't', message: 'm' });
   assert.equal(r.ok, true);
   globalThis.fetch = realFetch;
@@ -197,4 +201,23 @@ test('sendPush bark：自定义 base 解析到私有 IP 被拒（dns_rebind）',
 test('还原 DNS 解析器', () => {
   restoreResolver();
   assert.equal(getDnsResolver(), realResolver);
+});
+
+// ===================== M-03 修复：推送响应体大小限制 =====================
+
+test('readJsonCapped：正常响应体解析为 JSON', async () => {
+  const r = new Response(JSON.stringify({ ok: true }), { status: 200 });
+  const j = await readJsonCapped(r);
+  assert.deepEqual(j, { ok: true });
+});
+
+test('readJsonCapped：超大响应体（>2MB）抛错并拒绝', async () => {
+  const huge = 'x'.repeat(2_000_001);
+  const r = new Response(huge, { status: 200 });
+  await assert.rejects(() => readJsonCapped(r), /响应体过大/);
+});
+
+test('readJsonCapped：无效 JSON 透传解析错误', async () => {
+  const r = new Response('not json', { status: 200 });
+  await assert.rejects(() => readJsonCapped(r));
 });

@@ -15,6 +15,7 @@ import crypto from 'node:crypto';
 import { normalizeArticleId } from './articleId.js';
 import { isSafePushUrl, isSafeSmzdmUrl } from '../notifier.js';
 import { parseJsonp, removeTags } from './parse.js';
+import { config, boundedNum } from '../config.js';
 
 const BASE = (process.env.SMZDM_BASE || 'https://www.smzdm.com').replace(/\/$/, '');
 const API_BASE = (process.env.SMZDM_API_BASE || 'https://user-api.smzdm.com').replace(/\/$/, '');
@@ -62,8 +63,10 @@ const UA_POOL = [
 
 // 拟人化间隔窗口（毫秒）：评论/收藏/点赞的 count 多次动作之间随机等待，打破背靠背请求的固定时序。
 // 默认 800~2500ms；可用同名环境变量覆盖（过大拖慢，过小无效）。
-const ACTION_JITTER_MIN = Number(process.env.SMZDM_ACTION_JITTER_MIN || 800);
-const ACTION_JITTER_MAX = Number(process.env.SMZDM_ACTION_JITTER_MAX || 2500);
+// M-14 修复：拟人化间隔窗口也走 boundedNum，拒绝 NaN/负数/极大值（原 Number() 直接喂给 sleep，
+// 异常值会使错峰窗口退化或异常放大）。
+const ACTION_JITTER_MIN = boundedNum(process.env.SMZDM_ACTION_JITTER_MIN, 0, 60000, 800);
+const ACTION_JITTER_MAX = boundedNum(process.env.SMZDM_ACTION_JITTER_MAX, 0, 60000, 2500);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -129,7 +132,9 @@ export async function call(path, { method = 'GET', cookie, body, ua = UA, base =
       safeExtra[k] = v;
     }
   }
-  const timeoutMs = Number(process.env.SMZDM_REQUEST_TIMEOUT || 10000);
+  // M-14 修复：超时统一用 config 经 boundedNum 校验后的值（拒绝 NaN/负数/极大值），
+  // 避免直接 Number(env) 喂给 AbortSignal.timeout 抛异常导致请求永久挂起。
+  const timeoutMs = config.smzdmRequestTimeout;
   const MAX_REDIRECTS = 3;
   let currentUrl = url;
   let resp;

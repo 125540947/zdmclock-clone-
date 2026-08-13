@@ -50,6 +50,20 @@ function safeJson(text) {
   }
 }
 
+// 推送响应体上限（字节）：固定可信渠道（serverchan/bark/telegram）直连 fetch 也须限制，
+// 防止异常/受控上游返回超大响应占满内存（M-03 修复）。与 safePushFetch 中常量一致。
+const MAX_PUSH_BODY = 2_000_000;
+
+// M-03 修复：直连 fetch（serverchan/bark/telegram 等固定可信域名）也限制响应体大小，
+// 防止超大响应占内存（此前直接 r.json() 无上限，完全绕过限制）。
+export async function readJsonCapped(r) {
+  const buf = await r.arrayBuffer();
+  if (buf.byteLength > MAX_PUSH_BODY) {
+    throw new Error('推送响应体过大，已拒绝');
+  }
+  return JSON.parse(Buffer.from(buf).toString('utf8'));
+}
+
 // Phase 1（P0 严重#1/#2 修复）：Cookie 出口白名单。
 // 用户的 smzdm 登录 Cookie（含 sess / __ckguid）属于高敏感凭据，只能发往 smzdm 自家域名。
 // 此前统一出口 call() 仅用 isSafePushUrl（只挡内网、放行一切公网域名），匿名在 OPEN_MODE 下把
@@ -106,7 +120,6 @@ export async function safePushFetch(url, init = {}) {
       return { ok: false, error: 'redirect_not_allowed', message: `推送目标返回重定向，已拒绝跟随 @ ${url}` };
     }
     // M-03：读取并限制响应体大小，防止超大响应占内存
-    const MAX_PUSH_BODY = 2_000_000;
     const buf = await r.arrayBuffer();
     if (buf.byteLength > MAX_PUSH_BODY) {
       return { ok: false, error: 'body_too_large', message: '推送响应体过大，已拒绝' };
@@ -153,7 +166,7 @@ export async function sendPush(settings, { title, message }) {
           body: new URLSearchParams({ title: title_, desp: body }).toString(),
           signal
         });
-        const j = await r.json().catch(() => ({}));
+        const j = await readJsonCapped(r).catch(() => ({}));
         // Server酱 Turbo 返回 {code:0,...}；旧版返回 {errno:0}
         if (j.code === 0 || j.errno === 0) return { ok: true };
         return { ok: false, error: j.message || j.errmsg || `HTTP ${r.status}` };
@@ -172,7 +185,7 @@ export async function sendPush(settings, { title, message }) {
           return { ok: false, error: j.message || `HTTP ${guard.status}` };
         }
         const r = await fetch(u, { signal });
-        const j = await r.json().catch(() => ({}));
+        const j = await readJsonCapped(r).catch(() => ({}));
         if (j.code === 200 || j.message === 'success') return { ok: true };
         return { ok: false, error: j.message || `HTTP ${r.status}` };
       }
@@ -185,7 +198,7 @@ export async function sendPush(settings, { title, message }) {
           body: JSON.stringify({ chat_id: settings.chatId, text: `${title_}\n${body}` }),
           signal
         });
-        const j = await r.json().catch(() => ({}));
+        const j = await readJsonCapped(r).catch(() => ({}));
         if (j.ok) return { ok: true };
         return { ok: false, error: j.description || `HTTP ${r.status}` };
       }
