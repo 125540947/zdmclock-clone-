@@ -9,6 +9,7 @@ import path from 'node:path';
 process.env.DATA_DIR = path.join(os.tmpdir(), 'zdm-routescore-' + process.pid + '-' + Date.now());
 const { createApp } = await import('../src/index.js');
 const { config } = await import('../src/config.js');
+config.requireAuth = false; // 测试默认匿名（验证业务/校验逻辑）；鉴权由 authRoute/authSecurity 专项覆盖
 const { load } = await import('../src/store.js');
 
 const app = createApp();

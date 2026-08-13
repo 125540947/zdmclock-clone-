@@ -30,7 +30,7 @@ export const config = {
   // 调试开关：仅当显式 ZDM_DEBUG=1 时，错误响应才向客户端回显 err.message 内部细节。
   // 默认关闭（即使 NODE_ENV 未设为 production），确保所有环境错误响应均泛化，杜绝内部路径/查询泄露（S10 纵深加固）。
   debug: process.env.ZDM_DEBUG === '1',
-  requireAuth: parseBool(process.env.REQUIRE_AUTH, false),
+  requireAuth: parseBool(process.env.REQUIRE_AUTH, true),
   adminUsername: process.env.ADMIN_USERNAME || 'admin',
   // 弱口令清单：显式使用这些值时即便非空也视为弱密码，启动时告警（避免 admin123 等"看似已设其实很弱"）。
   // 空值 → 回落到内置 'admin123' 兜底（adminPasswordIsDefault=true，同样告警）。
