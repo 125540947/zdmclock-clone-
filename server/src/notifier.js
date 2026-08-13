@@ -41,6 +41,15 @@ export function isSafePushUrl(url) {
   return true;
 }
 
+// 安全解析 JSON 响应体（容错）
+function safeJson(text) {
+  try {
+    return JSON.parse(text || '');
+  } catch {
+    return {};
+  }
+}
+
 // Phase 1（P0 严重#1/#2 修复）：Cookie 出口白名单。
 // 用户的 smzdm 登录 Cookie（含 sess / __ckguid）属于高敏感凭据，只能发往 smzdm 自家域名。
 // 此前统一出口 call() 仅用 isSafePushUrl（只挡内网、放行一切公网域名），匿名在 OPEN_MODE 下把
@@ -54,7 +63,8 @@ export function isSafeSmzdmUrl(url, allowedExact = []) {
   } catch {
     return false;
   }
-  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+  // H-02 修复：Cookie 只应经 HTTPS 发送，禁止明文 http —— 否则 smzdm 登录凭据会在网络中明文传输。
+  if (u.protocol !== 'https:') return false;
   const host = u.hostname.toLowerCase();
   // 拒 IP 字面量（IPv4 / IPv6 含 [::1]）与 localhost：Cookie 只应发往域名（便于审计与 TLS 校验）
   if (host === 'localhost') return false;
@@ -70,7 +80,10 @@ export function isSafeSmzdmUrl(url, allowedExact = []) {
 // 对用户可控的出站 URL（webhook / bark 自定义 base），先经 isSafePushUrl 拒绝内网/回环/非公网，
 // 再经 assertPublicDns 确认解析到的 IP 全部公开（防 DNS 重绑定把请求导到内网）。
 // 固定公开域名（serverchan/telegram/默认 bark）不经过此路径（非用户可控主机，无需解析）。
-// 返回 { ok, error?, message? }；ok=false 时调用方应放弃发送（绝不回退到裸 fetch）。
+// 返回 { ok, error?, message?, text?, status?, okStatus? }；ok=false 时调用方应放弃发送（绝不回退到裸 fetch）。
+// H-03 修复：使用 redirect:'manual' 并拒绝任何 3xx 重定向（绝不跟随），防止受控 webhook 把推送
+// 重定向到内网地址形成 SSRF；同时先经 assertPublicDns 拒绝 DNS 重绑定。
+// M-03 修复：读取响应体并限制大小，防止异常/受控上游用超大响应撑爆内存。
 export async function safePushFetch(url, init = {}) {
   if (!isSafePushUrl(url)) {
     return { ok: false, error: 'unsafe_url', message: `拒绝向非公网地址推送 @ ${url}` };
@@ -87,8 +100,18 @@ export async function safePushFetch(url, init = {}) {
     return { ok: false, error: 'dns_rebind', message: e && e.message ? e.message : 'DNS 校验失败' };
   }
   try {
-    const r = await fetch(url, init);
-    return { ok: true, response: r };
+    const r = await fetch(url, { ...init, redirect: 'manual' });
+    // H-03：拒绝重定向（不跟随），避免被引向内网/云元数据地址
+    if (r.status >= 300 && r.status < 400) {
+      return { ok: false, error: 'redirect_not_allowed', message: `推送目标返回重定向，已拒绝跟随 @ ${url}` };
+    }
+    // M-03：读取并限制响应体大小，防止超大响应占内存
+    const MAX_PUSH_BODY = 2_000_000;
+    const buf = await r.arrayBuffer();
+    if (buf.byteLength > MAX_PUSH_BODY) {
+      return { ok: false, error: 'body_too_large', message: '推送响应体过大，已拒绝' };
+    }
+    return { ok: true, text: Buffer.from(buf).toString('utf8'), status: r.status, okStatus: r.ok };
   } catch (e) {
     const name = e && e.name;
     if (name === 'TimeoutError' || name === 'AbortError') return { ok: false, error: 'timeout' };
@@ -144,9 +167,9 @@ export async function sendPush(settings, { title, message }) {
         if (settings.webhook) {
           const guard = await safePushFetch(u, { signal });
           if (!guard.ok) return { ok: false, error: guard.error, message: guard.message };
-          const j = await guard.response.json().catch(() => ({}));
+          const j = safeJson(guard.text);
           if (j.code === 200 || j.message === 'success') return { ok: true };
-          return { ok: false, error: j.message || `HTTP ${guard.response.status}` };
+          return { ok: false, error: j.message || `HTTP ${guard.status}` };
         }
         const r = await fetch(u, { signal });
         const j = await r.json().catch(() => ({}));
@@ -177,8 +200,8 @@ export async function sendPush(settings, { title, message }) {
           signal
         });
         if (!guard.ok) return { ok: false, error: guard.error, message: guard.message };
-        if (guard.response.ok) return { ok: true };
-        return { ok: false, error: `HTTP ${guard.response.status}` };
+        if (guard.okStatus) return { ok: true };
+        return { ok: false, error: `HTTP ${guard.status}` };
       }
       default:
         return { ok: false, error: 'unknown_channel' };

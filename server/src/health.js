@@ -14,6 +14,11 @@
 // 迁移时触发一次，不会重复刷屏。
 
 // 校验单个 Cookie 是否有效。adapter 必须提供 getUserInfo（与 smzdm 适配器接口一致）。
+// 返回 { valid, degraded, reason, info }：
+//   - valid:true：身份有效
+//   - valid:false && degraded:false：真实登录失效（返回空身份 / 登录被踢）——应标记 cookieExpired
+//   - valid:false && degraded:true：网络超时 / DNS / 限流 / 服务端 5xx 等异常，无法判定登录态
+//     （H-08 修复：这类异常不得误判为 Cookie 失效，否则一次网络抖动会把全部账号误标并停止自动化）
 export async function checkCookie(cookie, adapter, { retries = 1, retryDelayMs = 800 } = {}) {
   let lastErr = '请求失败';
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -23,38 +28,45 @@ export async function checkCookie(cookie, adapter, { retries = 1, retryDelayMs =
         info &&
         (info.smzdmId || info.nickname || info.points || info.level || info.avatar)
       );
-      if (ok) return { valid: true, reason: '', info: info || {} };
-      // 没抛错但身份为空：Cookie 很可能已失效
-      return { valid: false, reason: '返回空身份（Cookie 可能已失效）', info: info || {} };
+      if (ok) return { valid: true, degraded: false, reason: '', info: info || {} };
+      // 没抛错但身份为空：Cookie 很可能已真实失效
+      return { valid: false, degraded: false, reason: '返回空身份（Cookie 可能已失效）', info: info || {} };
     } catch (e) {
       lastErr = e && e.message ? e.message : '请求失败';
       if (attempt < retries) await new Promise((r) => setTimeout(r, retryDelayMs));
     }
   }
-  return { valid: false, reason: lastErr, info: {} };
+  // 全部尝试均抛错（网络超时 / DNS / 限流 / 服务端 5xx 等）：无法判定登录态。
+  // H-08 修复：返回 degraded，调用方应保留既有 cookieExpired 状态，而非误标为失效。
+  return { valid: false, degraded: true, reason: lastErr, info: {} };
 }
 
 // 批量检测所有账号 Cookie。返回结果数组，并就地更新 db.users[i].cookieExpired。
-// onExpired(user, reason) 仅在「从有效→失效」状态迁移时触发一次，便于推送告警（去重，避免重复刷屏）。
+// onExpired(user, reason) 仅在「从有效→真实失效（非网络异常）」状态迁移时触发一次，便于推送告警（去重）。
+// H-08 修复：
+//   - 并行检测（Promise.all）而非串行：默认 500 账号 × 单请求 10s 超时下，串行可持续数小时，
+//     并行后单轮耗时约等于单次检测超时，避免健康检查长时间阻塞自动化。
+//   - 仅「真实登录失效（degraded=false）」才翻转 cookieExpired；网络类异常（degraded=true）保留既有状态，
+//     杜绝一次外部网络故障把全部账号误标为失效并停止自动化（最长持续到下一次成功检测）。
 export async function checkAccounts(db, adapter, { onExpired } = {}) {
-  const results = [];
-  for (const u of db.users) {
+  const tasks = (db.users || []).map(async (u) => {
     const r = await checkCookie(u.cookie, adapter);
     r.id = u.id;
     r.nickname = u.nickname || '';
     const wasExpired = !!u.cookieExpired;
-    if (!r.valid && !wasExpired && typeof onExpired === 'function') {
+    // 仅真实失效（非网络异常）且为「有效→失效」迁移时推送告警一次（避免重复刷屏）。
+    if (!r.valid && !r.degraded && !wasExpired && typeof onExpired === 'function') {
       try {
         await onExpired(u, r.reason);
       } catch {
         /* 通知失败不影响检测主流程 */
       }
     }
-    // 成功时若此前已失效则自愈清零；失败后标 true（含瞬时失败，靠重试+下一轮自愈兜底）
-    u.cookieExpired = !r.valid;
-    results.push(r);
-  }
-  return results;
+    // 仅真实失效翻转 cookieExpired；网络异常（degraded）保留既有状态（成功检测会自愈）。
+    if (!r.degraded) u.cookieExpired = !r.valid;
+    return r;
+  });
+  return Promise.all(tasks);
 }
 
 // 健康检查探测（#187）：并发检查各依赖，整体受 deadline 约束（AbortSignal.timeout）。

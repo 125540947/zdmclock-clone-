@@ -9,6 +9,8 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: true,
+    // M-09：统一 localStorage 可用性（Node 25 + jsdom 对 opaque origin 的 localStorage 访问会抛错）
+    setupFiles: ['./test/setup.js'],
     include: ['test/**/*.test.{js,ts}'],
     // 单测不应触发 vite build 的全量类型检查
     css: false

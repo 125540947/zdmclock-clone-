@@ -48,28 +48,31 @@ describe('client.js 契约', () => {
     delete instance.defaults.headers.common.Authorization;
   });
 
-  it('login 调用 /auth/login 并在返回 token 时写入 localStorage 与 Authorization 头', async () => {
-    post.mockResolvedValue({ data: { token: 'T123' } });
+  it('login 调用 /auth/login 并经 /auth/config 刷新会话态（不再写 localStorage/Authorization）', async () => {
+    post.mockResolvedValue({ data: { username: 'user' } });
+    get.mockResolvedValue({ data: { loggedIn: true, isAdmin: false, requireAuth: true, openMode: false } });
     const data = await login('user', 'pass');
     expect(post).toHaveBeenCalledWith('/auth/login', { username: 'user', password: 'pass' });
-    expect(localStorage.getItem('zdm_token')).toBe('T123');
-    expect(instance.defaults.headers.common.Authorization).toBe('Bearer T123');
-    expect(data.token).toBe('T123');
+    expect(get).toHaveBeenCalledWith('/auth/config');
+    // #190 / M-13：明文 Token 不再写入前端（HttpOnly 会话 Cookie 承载鉴权），防 XSS 窃取
+    expect(localStorage.getItem('zdm_token')).toBeNull();
+    expect(instance.defaults.headers.common.Authorization).toBeUndefined();
+    expect(data.username).toBe('user');
   });
 
   it('login 无 token 时不设置 Authorization 头', async () => {
     post.mockResolvedValue({ data: {} });
+    get.mockResolvedValue({ data: { loggedIn: false, requireAuth: true } });
     await login('u', 'p');
     expect(instance.defaults.headers.common.Authorization).toBeUndefined();
   });
 
-  it('setToken 设置/清除 token 与 Authorization 头', () => {
+  it('setToken 现为 no-op（明文 Token 不再存于前端，防 XSS 窃取）', () => {
     setToken('X');
-    expect(localStorage.getItem('zdm_token')).toBe('X');
-    expect(instance.defaults.headers.common.Authorization).toBe('Bearer X');
-    setToken(null);
     expect(localStorage.getItem('zdm_token')).toBeNull();
     expect(instance.defaults.headers.common.Authorization).toBeUndefined();
+    setToken(null);
+    expect(localStorage.getItem('zdm_token')).toBeNull();
   });
 
   it('listBaoliao 带 userId 拼接查询串，不带则不拼', async () => {

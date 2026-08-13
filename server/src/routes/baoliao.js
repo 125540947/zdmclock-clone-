@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { load, persist, genId, mergeBaoliao, withWriteLock } from '../store.js';
+import { load, persist, persistAwait, genId, mergeBaoliao, withWriteLock } from '../store.js';
 import { smzdm } from '../smzdm/adapter.js';
 import { config } from '../config.js';
 import {
@@ -49,7 +49,7 @@ router.post('/refresh', mutationGuard, async (req, res) => {
     let added = 0;
     await withWriteLock(() => {
       added = mergeBaoliao(items);
-      persist();
+      return persistAwait();
     });
     res.json({ ok: true, fetched: items.length, added, total: db.baoliao.length });
   } catch (e) {
@@ -172,7 +172,7 @@ router.post('/:id/submit', mutationGuard, async (req, res) => {
     item.status = 'failed';
     item.lastResult = '请先添加 smzdm 账号并录入 Cookie';
     item.updatedAt = new Date().toISOString();
-    await withWriteLock(() => persist());
+    await withWriteLock(() => persistAwait());
     return res.status(400).json({ error: 'no_user', message: '请先添加 smzdm 账号' });
   }
   try {
@@ -188,13 +188,13 @@ router.post('/:id/submit', mutationGuard, async (req, res) => {
     item.lastResult = r.message || '提交成功';
     item.submittedAt = new Date().toISOString();
     item.updatedAt = item.submittedAt;
-    await withWriteLock(() => persist());
+    await withWriteLock(() => persistAwait());
     res.json({ ok: true, result: r, item });
   } catch (e) {
     item.status = 'failed';
     item.lastResult = e.message;
     item.updatedAt = new Date().toISOString();
-    await withWriteLock(() => persist());
+    await withWriteLock(() => persistAwait());
     dbgLog('[baoliao] 任务执行异常：', e.message);
     res.status(502).json({ error: 'adapter_error', message: '任务执行异常，请稍后重试' });
   }

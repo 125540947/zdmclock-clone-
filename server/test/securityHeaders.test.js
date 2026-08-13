@@ -7,6 +7,9 @@ import os from 'node:os';
 import path from 'node:path';
 
 process.env.DATA_DIR = path.join(os.tmpdir(), 'zdm-csp-' + process.pid + '-' + Date.now());
+// M-08 验证场景：模拟「前端在独立域名」的分域部署，后端 CORS 必须返回
+// Access-Control-Allow-Credentials: true，否则浏览器不会在跨域请求中携带 HttpOnly 会话 Cookie。
+process.env.CORS_ORIGIN = 'https://example.com';
 const { createApp } = await import('../src/index.js');
 
 const app = createApp();
@@ -31,6 +34,14 @@ test('CSP 收紧：不再放行被墙的 Google Fonts', async () => {
   const csp = res.headers.get('content-security-policy') || '';
   assert.ok(!csp.includes('fonts.googleapis.com'), 'style-src 不应放行 Google Fonts');
   assert.ok(!csp.includes('fonts.gstatic.com'), 'font-src 不应放行 Google Fonts');
+});
+
+test('M-08：分域部署时 CORS 返回 Access-Control-Allow-Credentials: true', async () => {
+  const res = await fetch(base + '/api/auth/config', {
+    headers: { Origin: 'https://example.com' }
+  });
+  assert.equal(res.headers.get('access-control-allow-origin'), 'https://example.com');
+  assert.equal(res.headers.get('access-control-allow-credentials'), 'true');
 });
 
 test('关闭测试服务器', () => {

@@ -261,7 +261,9 @@ export async function runCustomEndpointTask(task, db, user, adapter = smzdm) {
     silverDelta,
     expDelta,
     levelAfter,
-    explicit: { gold: goldDelta, silverDelta: silverDelta, exp: expDelta, level: levelAfter ?? undefined },
+    // 资产增量字段名须与 applyAssetEffect 的 explicit 契约一致（gold/silver/exp），
+    // 此前误用 silverDelta 导致碎银增量被静默按 0 处理（M-01 修复）。
+    explicit: { gold: goldDelta, silver: silverDelta, exp: expDelta, level: levelAfter ?? undefined },
     result: { success: true, message }
   };
 }

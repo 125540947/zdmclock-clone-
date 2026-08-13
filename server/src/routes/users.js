@@ -2,7 +2,7 @@ import { Router } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { load, persist, genId, withWriteLock } from '../store.js';
+import { load, persistAwait, genId, withWriteLock } from '../store.js';
 import { smzdm } from '../smzdm/adapter.js';
 import { config } from '../config.js';
 import { authRequired, authRequiredOrInstall, maskCookie, getClientIp, sameSegment, isAdminRequest, mutationGuard } from '../auth.js';
@@ -116,7 +116,7 @@ router.post('/', authRequired, async (req, res) => {
     });
   }
   db.users.push(user);
-  await withWriteLock(() => persist());
+  await withWriteLock(() => persistAwait());
   res.json({ ...user, cookie: maskCookie(user.cookie) });
 });
 
@@ -180,7 +180,7 @@ router.post('/import', authRequiredOrInstall, async (req, res) => {
     user.vip = !!info.vip;
     user.smzdmId = user.smzdmId || smzdmId;
   }
-  await withWriteLock(() => persist());
+  await withWriteLock(() => persistAwait());
   res.json({ ...user, cookie: maskCookie(user.cookie), imported: true });
 });
 
@@ -190,7 +190,10 @@ router.post('/import', authRequiredOrInstall, async (req, res) => {
 //   配合脚本把 Cookie 推到攻击者服务器）；② 响应加 Cache-Control: no-store（防代理/浏览器缓存含 Token 的脚本）；
 //   ③ @connect 占位符 __CONNECT__ 注入为本服务真实域名，收紧油猴跨域权限（不再 @connect *）。
 function bakeImportScript(req) {
-  const server = String(req.protocol + '://' + (req.headers.host || ''));
+  // H-04 修复：回传地址改用配置基址 PUBLIC_BASE_URL，而非信任不可靠的 Host 头
+  // （反代未严格限制 Host 时，攻击者可让脚本指向攻击者域名从而窃取 Cookie）。
+  // 未配置时回退到 req.headers.host（仅开发态；生产部署应在 .env 显式设置 PUBLIC_BASE_URL）。
+  const server = config.publicBaseUrl || String(req.protocol + '://' + (req.headers.host || ''));
   const token = config.installToken || '';
   // __CONNECT__ 注入为服务真实主机（host:port，不含 scheme/引号）——油猴 @connect 指令只接受裸域名，
   // 这样脚本仅对自家服务域放行 GM_xmlhttpRequest 跨域，收紧为「非 @connect *」。
@@ -284,7 +287,7 @@ router.put('/:id', mutationGuard, async (req, res) => {
       /* ignore */
     }
   }
-  await withWriteLock(() => persist());
+  await withWriteLock(() => persistAwait());
   res.json({ ...u, cookie: maskCookie(u.cookie) });
 });
 
@@ -295,7 +298,7 @@ router.delete('/:id', mutationGuard, async (req, res) => {
   if (i < 0) return res.status(404).json({ error: 'not_found' });
   await withWriteLock(() => {
     db.users.splice(i, 1);
-    persist();
+    return persistAwait();
   });
   res.json({ ok: true });
 });
@@ -327,7 +330,7 @@ router.post('/:id/refresh', authRequired, async (req, res) => {
     u.level = info.level || u.level;
     u.vip = !!info.vip;
     u.smzdmId = u.smzdmId || info.smzdmId || '';
-    await withWriteLock(() => persist());
+    await withWriteLock(() => persistAwait());
     res.json({ ok: true, info });
   } catch (e) {
     dbgLog('[users] 刷新账号资料失败：', e.message);

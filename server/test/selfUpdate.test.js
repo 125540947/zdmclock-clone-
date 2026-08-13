@@ -191,3 +191,39 @@ test('shouldReexec：决策矩阵（测试环境/ supervisor 托管）', () => {
     else process.env.SELF_UPDATE_NO_REEXEC = prev.SELF_UPDATE_NO_REEXEC;
   }
 });
+
+// M-05：runUpdate 必须报告"更新后"的提交号（此前用的是更新前 state.commit，会把旧提交号误报为已更新版本）。
+test('M-05：runUpdate 返回更新后提交号（非更新前 state.commit）', async () => {
+  let headCalls = 0;
+  const runner = async (cmd, args = []) => {
+    const a = args.join(' ');
+    if (cmd === 'git') {
+      if (a === 'rev-parse --is-inside-work-tree') return okOut('true');
+      if (a === 'rev-parse --show-toplevel') return okOut('/repo');
+      if (a === 'branch --show-current') return okOut('main');
+      if (a === 'log -1 --format=%s') return okOut('feat: base');
+      if (a === 'remote get-url origin') return okOut('https://github.com/x/y.git');
+      if (a === 'status --porcelain') return okOut('');
+      if (a.startsWith('fetch')) return okOut('');
+      if (a.startsWith('rev-list --count HEAD..origin')) return okOut('0');
+      if (a.startsWith('rev-list --count origin')) return okOut('0');
+      if (a.startsWith('rev-parse origin')) return okOut('def789');
+      if (a.startsWith('pull')) return okOut('Fast-forward');
+      if (a.startsWith('diff --name-only')) return okOut('server/src/x.js');
+      if (a === 'rev-parse HEAD') {
+        headCalls += 1;
+        // 前两次（getRepoState / pull 前）= 旧提交；第三次（pull 后）= 新提交
+        return okOut(headCalls <= 2 ? 'abc123def456' : 'zzz999yyy888');
+      }
+    }
+    if (cmd === 'npm') {
+      if (a === 'install') return okOut('added 0');
+      if (a === 'run build') return okOut('built');
+    }
+    return okOut('');
+  };
+  const r = await runUpdate({ restart: false, runner });
+  assert.equal(r.ok, true);
+  assert.equal(r.commit, 'zzz999yyy888', '应报告更新后提交号');
+  assert.equal(r.commitShort, 'zzz999y');
+});

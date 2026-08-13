@@ -293,6 +293,19 @@ export function persist() {
   persistSoon();
 }
 
+// M-04 修复：关键写接口（录入/改删账号、签到、系统配置）应在数据真正落盘后才向调用方确认成功，
+// 避免 debounce 窗口（1.2s）内进程被杀（SIGKILL / 崩溃 / 断电）导致"已确认成功"的数据丢失。
+// 此变体跳过合并写的定时器，立即串行化到写链并 await 真实磁盘写（tmp+rename）完成后再 resolve；
+// 同时清掉待执行的 debounce 定时器，避免重复写。调用方应 `await withWriteLock(() => persistAwait())`，
+// 使响应在磁盘写完成前不返回成功。
+export function persistAwait() {
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  return scheduleWrite();
+}
+
 export function genId(prefix = 'id') {
   return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 }

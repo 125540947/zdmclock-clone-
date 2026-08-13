@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { load, todayStr, localDateStr } from '../store.js';
+import { load, todayStr, todayStrTZ, localDateStr, flushPersist } from '../store.js';
 import { runClockForUser } from '../taskRunner.js';
 import { config } from '../config.js';
 import {
@@ -11,6 +11,12 @@ import {
   isAdminRequest
 } from '../auth.js';
 import { notify } from '../notifier.js';
+import { wrapAsync } from '../wrapAsync.js';
+import { withAccountLock } from '../taskRunner.js';
+
+// H-09：签到状态/记录的"今天"按配置时区（ZDM_TZ）折算，与调度 cron 一致，避免跨日边界把
+// "已执行"误显示为"未执行"或重复执行判断不一致。
+const tzToday = () => (config.tz && config.tz !== 'local' ? todayStrTZ(config.tz) : todayStr());
 
 const router = Router();
 
@@ -58,7 +64,7 @@ router.get('/status', authRequired, (req, res) => {
       return res.status(403).json({ error: 'forbidden', message: '无权访问该账号数据' });
     }
     const records = db.clockRecords.filter((r) => r.userId === userId);
-    const today = todayStr();
+    const today = tzToday();
     res.json({
       today,
       todayChecked: records.some((r) => r.date === today),
@@ -72,7 +78,7 @@ router.get('/status', authRequired, (req, res) => {
   // 无 userId：返回作用域内账号的聚合状态
   const ids = scope ? [...scope] : null;
   const records = ids ? db.clockRecords.filter((r) => ids.includes(r.userId)) : db.clockRecords;
-  const today = todayStr();
+  const today = tzToday();
   res.json({
     today,
     todayChecked: records.some((r) => r.date === today),
@@ -112,15 +118,17 @@ router.get('/history', authRequired, (req, res) => {
 });
 
 // 执行签到（真实动作）：开放模式下强制管理员（mutationGuard），避免匿名用任意 userId 签到（IDOR）。
-router.post('/do', mutationGuard, async (req, res) => {
+// wrapAsync：runClockForUser 内部异常若不捕获会使请求永久挂起（M-15），统一转交错误中间件。
+router.post('/do', mutationGuard, wrapAsync(async (req, res) => {
   const { userId } = req.body || {};
   const db = load();
   const user = userId ? db.users.find((u) => u.id === userId) : db.users[0];
   if (!user) return res.status(400).json({ error: 'no_user', message: '请先添加 smzdm 账号' });
 
   const who = user.nickname || '账号';
-  // 统一走 runClockForUser：含幂等落库 + 失败重试（复用定时签到的同一套逻辑）
-  const result = await runClockForUser(db, user);
+  // H-07 修复：直接签到（手动 /do）也纳入同账号互斥锁，避免与定时调度/启动任务并发打 smzdm
+  // 造成重复签到/限流（此前 runClockForUser 直接调用绕过了账号锁）。
+  const result = await withAccountLock(user.id, () => runClockForUser(db, user));
   if (result.duplicate) {
     notify(db, { title: 'ℹ️ 今日已签到', message: who }).catch(() => {});
     return res.status(409).json({ error: 'already', message: '今日已签到' });
@@ -130,11 +138,14 @@ router.post('/do', mutationGuard, async (req, res) => {
     return res.status(502).json({ error: 'clock_failed', message: result.message });
   }
   notify(db, { title: '✅ 签到成功', message: `${who} ${result.message}` }).catch(() => {});
+  // M-04：手动签到属用户触发的关键写操作，落盘后才向调用方确认成功（避免 debounce 窗口内进程
+  // 被杀导致"已签到成功"的记录丢失）。runClockForUser 内部走合并写（debounce），此处强制 flush。
+  await flushPersist();
   res.json({
     ok: true,
     record: result.record,
     user: { id: user.id, streak: user.streak, points: user.points, total: user.totalClockIn }
   });
-});
+}));
 
 export default router;

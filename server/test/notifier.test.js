@@ -13,14 +13,25 @@ const restoreResolver = () => setDnsResolver(realResolver);
 
 // ===================== Phase 1：Cookie 出口白名单 =====================
 
-test('isSafeSmzdmUrl：放行 smzdm.com 及其子域', () => {
+test('isSafeSmzdmUrl：放行 smzdm.com 及其子域（https）', () => {
   for (const u of [
     'https://www.smzdm.com/',
     'https://user-api.smzdm.com/checkin',
-    'http://zhiyou.smzdm.com/x',
+    'https://zhiyou.smzdm.com/x',
     'https://article-api.smzdm.com/a'
   ]) {
     assert.equal(isSafeSmzdmUrl(u), true, u);
+  }
+});
+
+// H-02 修复：Cookie 只应经 HTTPS 发送，明文 http 一并拒绝（否则 smzdm 凭据在网络中明文传输）
+test('isSafeSmzdmUrl：拒绝明文 http（含 smzdm 子域）', () => {
+  for (const u of [
+    'http://www.smzdm.com/x',
+    'http://zhiyou.smzdm.com/x',
+    'http://user-api.smzdm.com/checkin'
+  ]) {
+    assert.equal(isSafeSmzdmUrl(u), false, u);
   }
 });
 
@@ -141,7 +152,10 @@ test('safePushFetch：解析到私有 IP 拒绝（DNS 重绑定），不发起�
 test('safePushFetch：公开地址 + 解析公开 IP 正常发送', async () => {
   setDnsResolver(async () => [{ address: '93.184.216.34' }]);
   let urlSeen;
-  globalThis.fetch = async (url, init) => { urlSeen = url; return { ok: true, status: 200, json: async () => ({}) }; };
+  globalThis.fetch = async (url, init) => {
+    urlSeen = url;
+    return { ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode('{}').buffer };
+  };
   const r = await safePushFetch('https://my-webhook.example.com/hook', { method: 'POST', body: '{}' });
   assert.equal(r.ok, true);
   assert.equal(urlSeen, 'https://my-webhook.example.com/hook');
@@ -162,7 +176,7 @@ test('sendPush webhook：解析到私有 IP 被拒（dns_rebind）', async () =>
 
 test('sendPush webhook：合法公网地址正常发送成功', async () => {
   setDnsResolver(async () => [{ address: '93.184.216.34' }]);
-  globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({}) });
+  globalThis.fetch = async () => ({ ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode('{}').buffer });
   const r = await sendPush({ channel: 'webhook', webhook: 'https://hook.example.com/x' }, { title: 't', message: 'm' });
   assert.equal(r.ok, true);
   globalThis.fetch = realFetch;

@@ -227,8 +227,15 @@ test('POST /api/tasks/:id/run 不存在 → 404 not_found', async () => {
 });
 
 // ---------- health：Cookie 检测 / 真机自检（无网络分支） ----------
-test('GET /api/health/cookies 无账号 → total 0', async () => {
-  const { status, data } = await j('GET', '/api/health/cookies');
+// M-07 修复：Cookie 检测由 GET 改为 POST（避免 GET 被跨站导航/预取误触发副作用）。
+// GET 不再有该端点，应返回 404（方法未允许）。
+test('GET /api/health/cookies 应被拒绝（M-07：已改为 POST，返回 405）', async () => {
+  const { status } = await j('GET', '/api/health/cookies');
+  assert.equal(status, 405);
+});
+
+test('POST /api/health/cookies 无账号 → total 0', async () => {
+  const { status, data } = await j('POST', '/api/health/cookies');
   assert.equal(status, 200);
   assert.equal(data.total, 0);
   assert.equal(data.message, '暂无账号');

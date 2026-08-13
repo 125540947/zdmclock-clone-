@@ -25,6 +25,16 @@ npm-debug.log*
 .git
 .gitignore
 
+# 代理 / AI 运行时状态（含 daemon 状态、agent 内存库、日志、路径信息，M-12 禁止打进镜像）
+.claude-flow
+.swarm
+.claude
+
+# 本地数据 / 向量库 / 发布包（非运行时必需）
+ruvector.db
+*.db
+releases
+
 # 系统文件
 .DS_Store
 Thumbs.db

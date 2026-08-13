@@ -170,9 +170,9 @@ export async function applyCaptures(items) {
   return data;
 }
 
-// ===== Cookie 健康检测：手动触发全部账号探活 =====
+// ===== Cookie 健康检测：手动触发全部账号探活（M-07：POST，避免 GET 误触发副作用）=====
 export async function checkCookies() {
-  const { data } = await api.get('/health/cookies');
+  const { data } = await api.post('/health/cookies');
   return data;
 }
 

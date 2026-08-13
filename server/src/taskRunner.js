@@ -307,7 +307,11 @@ async function runGptBatch(task, db) {
       };
       if (task.autoPost && aid && user) {
         try {
-          await smzdm.doComment(user.cookie, { count: 1, articleId: aid, content: reply });
+          // H-07 修复：GPT 自动发布直接使用首个账号 Cookie，此前绕过账号锁；
+          // 纳入同账号互斥锁，避免与定时签到/互动并发打 smzdm 造成重复动作/限流。
+          await withAccountLock(user.id, () =>
+            smzdm.doComment(user.cookie, { count: 1, articleId: aid, content: reply })
+          );
           draft.status = 'posted';
           draft.autoPost = true;
           posted += 1;

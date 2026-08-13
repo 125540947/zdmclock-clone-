@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { load, persist, withWriteLock } from '../store.js';
+import { load, persist, persistAwait, withWriteLock } from '../store.js';
 import { sendPush, resolvePushSettings, isSafePushUrl } from '../notifier.js';
 import { authRequired, mutationGuard } from '../auth.js';
 
@@ -47,7 +47,7 @@ router.put('/config', mutationGuard, async (req, res) => {
   if (token !== undefined) p.token = String(token || '').slice(0, 512);
   if (chatId !== undefined) p.chatId = String(chatId || '').slice(0, 128);
   if (webhook !== undefined) p.webhook = String(webhook || '').slice(0, 2048);
-  await withWriteLock(() => persist());
+  await withWriteLock(() => persistAwait());
   res.json({ ok: true, config: { enabled: p.enabled, channel: p.channel, token: masked(p.token), chatId: masked(p.chatId), webhook: masked(p.webhook) } });
 });
 

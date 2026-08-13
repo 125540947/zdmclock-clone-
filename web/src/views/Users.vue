@@ -148,10 +148,10 @@ const schedModes = [
 const autoWindow = ref('08:00~10:59');
 const scriptText = ref('');
 const loadingScript = ref(false);
-// 一键安装链接：指向服务端注入好「服务地址 + 窄权限 INSTALL_TOKEN」的 .user.js，油猴导航到此即弹安装。
-// 链接不再携带会话 token（P1-2 修复）：浏览器直链本就无法带 Authorization 头，原用 ?token= 传入会话 token 会落入
-// 历史/Referer/日志；现改为服务端注入窄权限 INSTALL_TOKEN，URL 干净、泄露面更小。
-const installUrl = computed(() => `/api/users/import-script.user.js?server=${encodeURIComponent(window.location.origin)}`);
+// 一键安装链接：指向服务端注入好「窄权限 INSTALL_TOKEN」的 .user.js，油猴导航到此即弹安装。
+// 链接不再携带 ?server= 参数（H-04 修复：后端已忽略该参数，回传地址改用 PUBLIC_BASE_URL 配置，避免 Host 注入指向攻击者域名）；
+// 也不携带会话 token（P1-2 修复）：改用服务端注入的窄权限 INSTALL_TOKEN，URL 干净、泄露面更小。
+const installUrl = computed(() => `/api/users/import-script.user.js`);
 const showScript = ref(false);
 
 

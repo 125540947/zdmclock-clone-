@@ -172,8 +172,10 @@ export async function call(path, { method = 'GET', cookie, body, ua = UA, base =
   }
   if (!resp.ok) throw new Error(`HTTP ${resp.status} @ ${path}`);
   const text = await resp.text();
-  if (raw) return text; // JSONP / 非 JSON 响应原样返回，由调用方自行解析
+  // M-03 修复：无论 raw（JSONP）还是 JSON 路径，均先限制响应体大小，防止异常/受控上游用超大
+  // 响应占满内存（此前 raw 路径在 size 检查之前直接返回，完全绕过限制）。
   if (text.length > 2_000_000) throw new Error('响应体过大，已拒绝（疑似异常响应）'); // b5：防超大响应占内存
+  if (raw) return text; // JSONP / 非 JSON 响应原样返回，由调用方自行解析
   let json;
   try {
     json = JSON.parse(text);

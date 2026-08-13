@@ -30,7 +30,7 @@
 #   bash deploy.sh --user zdm --port 3000
 #   bash deploy.sh --pull                # 代码已 clone 时，先 git pull --ff-only
 # =============================================================================
-set -uo pipefail
+set -euo pipefail
 
 # ---- 解析参数 ----
 APP_USER="${APP_USER:-zdm}"
@@ -99,7 +99,14 @@ esac
 mkdir -p "$APP_DIR"
 if [ -d "$APP_DIR/.git" ]; then
   echo "==> 已有 git 仓库，更新代码"
-  [ "$DO_PULL" = "1" ] && git -C "$APP_DIR" pull --ff-only || true
+  # M-11 修复：git pull 失败（网络/冲突/本地提交）必须中止部署，绝不能像此前 `|| true` 那样
+  # 静默吞掉后继续用旧代码"成功部署"，否则运维看到"部署完成"实为运行陈旧版本。
+  if [ "$DO_PULL" = "1" ]; then
+    git -C "$APP_DIR" pull --ff-only || {
+      echo "✗ git pull 失败，已终止部署以避免运行旧代码（请先手动 git pull 解决冲突，或用 --repo 重新克隆）。"
+      exit 1
+    }
+  fi
 elif [ -f "$APP_DIR/server/src/index.js" ]; then
   echo "==> 检测到项目文件，原地部署（未检测到 .git，自动更新功能将不可用，可稍后 git init 配置 remote）"
 elif [ -n "$REPO" ]; then
@@ -204,6 +211,16 @@ if [ "$valid_env" -eq 0 ]; then
   # （历史上会导致"重新部署后变回假签到"）。未设置则安全默认 mock。
   PREV_ADAPTER="$(grep -E '^SMZDM_ADAPTER=' .env 2>/dev/null | cut -d= -f2-)"
   SMZDM_ADAPTER_VAL="${PREV_ADAPTER:-mock}"
+  # H-06：标准 TLS 部署（配了域名，走 nginx 反代）下，后端位于反代之后，必须开启 TRUST_PROXY
+  # （让 req.secure 正确识别 HTTPS），并对会话 Cookie 加 Secure，避免签发的 API/Admin 会话 Cookie
+  # 在 HTTP 链路/降级中被发送。直连 http 部署保持关闭（自托管 http 场景 Cookie 需可被发送）。
+  if [ -n "$DOMAIN" ]; then
+    ZDM_TRUST_PROXY="TRUST_PROXY=true"
+    ZDM_COOKIE_SECURE="COOKIE_SECURE=1"
+  else
+    ZDM_TRUST_PROXY="TRUST_PROXY=false"
+    ZDM_COOKIE_SECURE="COOKIE_SECURE=0"
+  fi
   cat > .env <<ZDM_ENV_EOF
 PORT=$PORT
 NODE_ENV=production
@@ -213,12 +230,15 @@ ADMIN_PASSWORD=$ADMIN_PASSWORD
 API_TOKEN=$API_TOKEN
 ADMIN_TOKEN=$ADMIN_TOKEN
 SMZDM_ADAPTER=$SMZDM_ADAPTER_VAL
+$ZDM_TRUST_PROXY
+$ZDM_COOKIE_SECURE
 AUTO_UPDATE_APPLY=false
 UPDATE_CHECK_INTERVAL_MIN=1440
 SELF_UPDATE_NO_REEXEC=1
 CORS_ORIGIN=
 DATA_DIR=$APP_DIR/data
 WEB_DIST=$APP_DIR/web/dist
+ZDM_TZ=Asia/Shanghai
 ZDM_ENV_EOF
   chown "$APP_USER":"$APP_USER" .env
   chmod 600 .env

@@ -7,7 +7,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 
 process.env.DATA_DIR = path.join(os.tmpdir(), 'zdm-store-' + process.pid + '-' + Date.now());
-const { load, mergeBaoliao, localDateStr, todayStr, genId, persistSoon, flushPersist, persistNow } = await import('../src/store.js');
+const { load, mergeBaoliao, localDateStr, todayStr, genId, persistSoon, flushPersist, persistNow, persistAwait } = await import('../src/store.js');
 
 test('localDateStr 固定日期格式与边界（含闰年 2/29）', () => {
   assert.equal(localDateStr(new Date(2026, 0, 1)), '2026-01-01');
@@ -132,6 +132,18 @@ test('flushPersist 可 await 且最终落盘为合法 JSON', async () => {
   const parsed = JSON.parse(raw); // 不抛即合法
   assert.ok(Array.isArray(parsed.users));
   assert.ok(parsed.users.some((u) => u.id === 'flush-u1'));
+});
+
+// M-04：关键写接口应使用 persistAwait（而非 debounce 的 persistSoon），确保"已确认成功"的数据
+// 在响应返回前真正落盘，避免 1.2s 窗口内进程被杀（SIGKILL/崩溃/断电）导致数据丢失。
+test('M-04：persistAwait 立即落盘，await 后磁盘文件已反映变更', async () => {
+  const db = load();
+  db.users.length = 0;
+  db.users.push({ id: 'pa1', nickname: 'p', cookie: 'c', autoRun: false });
+  await persistAwait(); // 关键路径：await 真实磁盘写完成
+  const raw = fs.readFileSync(path.join(process.env.DATA_DIR, 'db.json'), 'utf-8');
+  const parsed = JSON.parse(raw);
+  assert.ok(parsed.users.some((u) => u.id === 'pa1'), 'persistAwait 后数据应已写入磁盘');
 });
 
 // 清理临时数据目录

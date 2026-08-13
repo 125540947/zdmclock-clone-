@@ -210,6 +210,45 @@
 
 ---
 
+## 批次 9 · 修复后审计报告（POST_FIX_AUDIT_REPORT_2026-08-13）整改收口（2026-08-13）
+
+**改动要点**
+- 对照 `POST_FIX_AUDIT_REPORT_2026-08-13.md`（30 项未闭环：0 严重 / 10 高 / 16 中 / 4 低）逐条核实并落地可安全闭环项；以"不引入回归、不削弱生产安全"为前提。
+- 测试工程化：修复因新增登录限流导致的 authRoute 测试 429 误伤（`createApp({ rateLimit:false })` 测试专属关闭，生产默认仍开启）。
+- 持久化耐久：把"关键写接口落盘后才返回成功"从仅 users 扩展到全部用户态写接口。
+
+**新增功能**
+- 无新增用户可见功能；本轮聚焦安全/正确性闭环与测试门禁。
+
+**问题修复（按审计项）**
+- **H-05 / H-06**：代理认证来源校验改取不可伪造的套接字源（`req.socket.remoteAddress`）+ deploy.sh 注入 `TRUST_PROXY=true` 与 `COOKIE_SECURE=1`，标准 TLS 部署下会话 Cookie 带 Secure（测试 H-05/H-06 覆盖）。
+- **H-08**：健康检测并发探测 + `AbortSignal` 截止，慢依赖标 degraded 不致命（`probeHealth` 重构 + 测试）。
+- **H-09**：时区全局口径——`clock.js` 两处 `todayStr()` 改 `tzToday()`；deploy.sh 注入 `ZDM_TZ=Asia/Shanghai`，调度/签到/统计/账本统一按配置时区。
+- **M-04**：`persistAwait()`（跳过 debounce 定时器、await 真实磁盘写）应用到 tasks / baoliao / gpt / notify / admin 全部变更路由；手动签到（`clock.js /do`）成功路径 `await flushPersist()` 强制落盘后再返回 200；users 改写接口此前已应用。
+- **M-05**：自更新 `scheduleRestart` 经 `exitAfterFlush()`（先 `flushPersist` 再退出）避免绕过 SIGTERM flush；`runUpdate` 返回更新后 `HEAD` 提交号（不再误报旧版本）。
+- **M-06**：任务更新全量校验通过后才在写锁内一次性应用，杜绝部分字段残留。
+- **M-08**：CORS 在分域部署时同时返回 `Access-Control-Allow-Credentials:true`，与前端 `withCredentials` 一致。
+- **M-11**：deploy.sh 改 `set -euo pipefail`，`git pull --ff-only` 失败致命化（不再 `|| true` 静默吞错）。
+- **M-12**：Dockerfile 改多阶段构建（build 阶段 `npm ci` + `npm run build` 生成 web/dist，runtime 仅 `--omit=dev` 并 `COPY --from=build`）；.dockerignore 排除 `.claude-flow`/`.swarm`/`.claude`/`ruvector.db`/`*.db`/`releases`。
+- **M-13**：标准/代理/开放模式登录响应不再回显明文 API/Admin Token（HttpOnly 会话 Cookie 承载鉴权）。
+- **M-02**：资产日曲线"部分账号快照"不再误当全体总量而丢失其他账号历史余额；补充跨日不双算 + 多账号部分快照回归测试。
+- **M-09**：前端测试修复——新增 `web/test/setup.js`（Node25/jsdom 下 localStorage 兼容垫片），`client.test.js` 改写为断言 HttpOnly 迁移后行为；`npm test -w web` 由 24/2 失败 → **26/26 通过**。
+- **M-15**：新增 `wrapAsync` 零依赖异步路由包装，Express4 未捕获拒绝不再挂起请求（clock/tasks 等路由接入）。
+- **L-01**：`/assets/*`（内容哈希文件名）改 `public, max-age=86400, immutable`，不再统一 no-store。
+- **L-03**：清理 localStorage Token / `?server=` 等废弃语义注释与链接。
+- **#190 回归**：登录签发 HttpOnly 会话 Cookie 且可被 `authRequired` 接受——此前因登录限流（max:10/60s）被测试内连续登录打满而 429，现测试关闭限流后 **420/420 后端全绿**。
+
+⚠️ 说明（本轮仍刻意未改 / 需后续专项设计，详见「遗留项」）：H-01 匿名真实动作深层覆盖、H-02 Cookie 明文 HTTP + DNS 目标校验、H-03 Webhook 重定向 SSRF 绕过、H-04 安装令牌公开暴露（已收紧 Host 信任）、H-07 互斥锁不完整、M-01 碎银字段名、M-03 响应体上限、M-07 GET 副作用、M-14 数值校验、M-10（engines 已翻 >=20，与测试脚本对齐）。
+
+**测试与部署**
+- 后端 `npm test` 全量 **420/420 通过**（含本轮新增 M-04 路由耐久、H-05/H-06、M-05 提交号、#190 等）。
+- 前端 `npm test -w web` **26/26 通过**（M-09 门禁收口）。
+- 生产构建 `npm run build` 通过；Docker 多阶段构建自源码生成前端。
+
+**代表提交**：（见本轮合入，git log 中「批次 9」对应提交）
+
+---
+
 ## 维护约定（默认规范）
 
 1. **分批原则**：每次整理历史或新增工作阶段，按**逻辑阶段**（功能/安全波次）或**时间**划分为批次；同一波次跨多日可合并为一批次。

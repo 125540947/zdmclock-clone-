@@ -39,9 +39,9 @@ export function authRequired(req, res, next) {
 }
 
 // 允许 Bearer 头或 ?token= 查询参数二选一（用于「一键安装」油猴脚本直链）。
-// 浏览器导航到 .user.js 无法携带 Authorization 头，前端改从已登录会话的 localStorage 取 token 作为 ?token= 传入；
-// 该 token 本就会写进脚本用于自动推送 Cookie，用 query 传不增加额外泄露面，从而开启鉴权时也能一键安装。
-// 同时接受 zb_token 会话 Cookie（#190）。
+// 浏览器导航到 .user.js 无法携带 Authorization 头，故允许用 ?token= 传入「窄权限 INSTALL_TOKEN」
+// （H-04 修复：该 token 仅用于自动推送 Cookie，泄露面有限，且改 .env 即可吊销）；同时接受
+// zb_token 会话 Cookie（#190）。注意：后端早已忽略 ?server= 参数，安装脚本不再依赖它。
 export function authRequiredOrQuery(req, res, next) {
   if (config.openMode || !config.requireAuth) return next();
   const h = req.headers.authorization || '';

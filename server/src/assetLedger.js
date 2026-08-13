@@ -183,53 +183,86 @@ export function dailyAssetSeries(db, days = 30, visibleIds = null) {
     dt.setDate(base.getDate() - i);
     dates.push(localDateStr(dt));
   }
-  const deltaByDate = {};
+  // 每账号每日起增量：deltaByUserDate[date][userId] = {gold,silver,exp}
+  const deltaByUserDate = {};
+  // 每账号每日快照：snapByUserDate[date][userId] = {gold,silver,exp|null}
+  const snapByUserDate = {};
+  const allUserIds = new Set();
   for (const e of ledger) {
     if (visibleIds && !visibleIds.has(e.userId)) continue;
-    if (!deltaByDate[e.date]) deltaByDate[e.date] = { gold: 0, silver: 0, exp: 0 };
-    deltaByDate[e.date].gold += e.goldDelta || 0;
-    deltaByDate[e.date].silver += e.silverDelta || 0;
-    deltaByDate[e.date].exp += e.expDelta || 0;
+    allUserIds.add(e.userId);
+    if (!deltaByUserDate[e.date]) deltaByUserDate[e.date] = {};
+    if (!deltaByUserDate[e.date][e.userId]) deltaByUserDate[e.date][e.userId] = { gold: 0, silver: 0, exp: 0 };
+    deltaByUserDate[e.date][e.userId].gold += e.goldDelta || 0;
+    deltaByUserDate[e.date][e.userId].silver += e.silverDelta || 0;
+    deltaByUserDate[e.date][e.userId].exp += e.expDelta || 0;
   }
-  // 每日快照（跨用户求和），用于锚定累计总量、修正漂移
-  const snapByDate = {};
   for (const s of snaps) {
     if (visibleIds && !visibleIds.has(s.userId)) continue;
-    if (!snapByDate[s.date]) snapByDate[s.date] = { gold: 0, silver: 0, exp: 0, has: false };
-    snapByDate[s.date].gold += s.gold || 0;
-    snapByDate[s.date].silver += s.silver || 0;
-    snapByDate[s.date].exp += s.exp || 0;
-    snapByDate[s.date].has = true;
+    allUserIds.add(s.userId);
+    if (!snapByUserDate[s.date]) snapByUserDate[s.date] = {};
+    snapByUserDate[s.date][s.userId] = {
+      gold: s.gold != null ? s.gold : null,
+      silver: s.silver != null ? s.silver : null,
+      exp: s.exp != null ? s.exp : null
+    };
   }
   const series = [];
-  let run = { gold: 0, silver: 0, exp: 0 };
+  // 每账号累计余额（per-user run）：解决「部分账号快照重置总量」问题（M-02 修复）。
+  //  - 有快照的账号：以快照值为权威当日总额（已含当日增量，不再 +delta，避免双算），
+  //    同时不覆盖无快照账号的历史余额。
+  //  - 无快照但有当日账本的账号：在上一日余额基础上累加当日 delta（carry forward）。
+  //  - 无快照且无当日账本的账号：余额保持不变（carry forward）。
+  // 每日 total = 所有 perUserRun 之和，确保部分账号快照不会令其他账号从历史曲线消失。
+  const perUserRun = {};
+  for (const userId of allUserIds) perUserRun[userId] = { gold: 0, silver: 0, exp: 0 };
   for (const date of dates) {
-    const d = deltaByDate[date] || { gold: 0, silver: 0, exp: 0 };
-    const snap = snapByDate[date];
-    if (snap && snap.has) {
-      // 快照已含当日增量（snap.gold = 当日开始前累计 + 当日 delta），
-      // 直接以快照值重锚 run，避免长期累加漂移；切勿再 +d（会双算并向前放大误差）。
-      run = {
-        gold: snap.gold != null ? snap.gold : run.gold,
-        silver: snap.silver != null ? snap.silver : run.silver,
-        exp: snap.exp != null ? snap.exp : run.exp
-      };
-    } else {
-      // 无快照：在上一日锚点基础上累加当日 delta
-      run = {
-        gold: run.gold + d.gold,
-        silver: run.silver + d.silver,
-        exp: run.exp + d.exp
-      };
+    const snapsForDate = snapByUserDate[date] || {};
+    const deltasForDate = deltaByUserDate[date] || {};
+    for (const userId of allUserIds) {
+      const prev = perUserRun[userId];
+      const snap = snapsForDate[userId];
+      if (snap) {
+        // 快照为权威当日总额（已含当日增量）：直接锚定，不重复累加 delta
+        perUserRun[userId] = {
+          gold: snap.gold != null ? snap.gold : prev.gold,
+          silver: snap.silver != null ? snap.silver : prev.silver,
+          exp: snap.exp != null ? snap.exp : prev.exp
+        };
+      } else if (deltasForDate[userId]) {
+        const ud = deltasForDate[userId];
+        perUserRun[userId] = {
+          gold: prev.gold + ud.gold,
+          silver: prev.silver + ud.silver,
+          exp: prev.exp + ud.exp
+        };
+      }
+      // 否则保持 prev（carry forward）
+    }
+    let goldTotal = 0;
+    let silverTotal = 0;
+    let expTotal = 0;
+    for (const userId of allUserIds) {
+      goldTotal += perUserRun[userId].gold;
+      silverTotal += perUserRun[userId].silver;
+      expTotal += perUserRun[userId].exp;
+    }
+    let dg = 0;
+    let ds = 0;
+    let de = 0;
+    for (const userId of Object.keys(deltasForDate)) {
+      dg += deltasForDate[userId].gold;
+      ds += deltasForDate[userId].silver;
+      de += deltasForDate[userId].exp;
     }
     series.push({
       date,
-      goldDelta: round2(d.gold),
-      silverDelta: round2(d.silver),
-      expDelta: round2(d.exp),
-      goldTotal: round2(run.gold),
-      silverTotal: round2(run.silver),
-      expTotal: round2(run.exp)
+      goldDelta: round2(dg),
+      silverDelta: round2(ds),
+      expDelta: round2(de),
+      goldTotal: round2(goldTotal),
+      silverTotal: round2(silverTotal),
+      expTotal: round2(expTotal)
     });
   }
   return series;

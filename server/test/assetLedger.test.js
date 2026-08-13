@@ -155,3 +155,35 @@ test('dailyAssetSeries 跨日：快照日不双算且误差不向后传播', () 
   assert.equal(s2.goldDelta, 5, '第2天增量=5');
   assert.equal(s2.goldTotal, 35, '第2天累计=30+5=35（误差不向后传播）');
 });
+
+test('M-02 多账号部分快照：不把"部分账号快照"误当"全体总量"而丢失其他账号', () => {
+  const db = freshDb();
+  const today = new Date();
+  const y = new Date(today);
+  y.setDate(today.getDate() - 1);
+  const d1 = localDateStr(y); // 昨天：u2 入账 +50，无快照
+  const d2 = localDateStr(today); // 今天：仅 u1 有快照（gold=100），u2 无快照、无当日账本
+  db.assetLedger.push({ id: 'b1', ts: d1 + 'T08:00:00Z', date: d1, userId: 'u2', taskType: 'clock', taskName: '签到', goldDelta: 50, silverDelta: 0, expDelta: 0, goldAfter: 50, silverAfter: 0, expAfter: 0, levelAfter: null, success: true, message: '' });
+  db.assetSnapshots.push({ userId: 'u1', date: d2, gold: 100, silver: 0, exp: 0, level: null });
+  const series = dailyAssetSeries(db, 7);
+  const s2 = series.find((x) => x.date === d2);
+  assert.ok(s2, '应含今天');
+  // 修复前：snap.has 因 u1 有快照而为真，run 被重置为 u1 的 100，u2 的 50 从历史曲线消失 → 总 100。
+  // 修复后：u2 无快照则 carry forward，total = u1 快照(100) + u2 余额(50) = 150。
+  assert.equal(s2.goldTotal, 150, '部分快照不得丢失其他账号的历史余额');
+  const s1 = series.find((x) => x.date === d1);
+  assert.equal(s1.goldTotal, 50, '昨天仅 u2 的 50 入账');
+});
+
+test('M-02 多账号：既有快照账号不双算、无快照账号正常累加', () => {
+  const db = freshDb();
+  const today = new Date();
+  const d2 = localDateStr(today);
+  // u1：当日账本 +10 且有快照 110（快照为权威总额，不得 +10 双算）
+  db.assetLedger.push({ id: 'c1', ts: d2 + 'T08:00:00Z', date: d2, userId: 'u1', taskType: 'clock', taskName: '签到', goldDelta: 10, silverDelta: 0, expDelta: 0, goldAfter: 110, silverAfter: 0, expAfter: 0, levelAfter: null, success: true, message: '' });
+  db.assetSnapshots.push({ userId: 'u1', date: d2, gold: 110, silver: 0, exp: 0, level: null });
+  // u2：仅当日账本 +20，无快照（正常累加）
+  db.assetLedger.push({ id: 'c2', ts: d2 + 'T09:00:00Z', date: d2, userId: 'u2', taskType: 'point', taskName: '点赞', goldDelta: 20, silverDelta: 0, expDelta: 0, goldAfter: 20, silverAfter: 0, expAfter: 0, levelAfter: null, success: true, message: '' });
+  const series = dailyAssetSeries(db, 1);
+  assert.equal(series[0].goldTotal, 130, 'u1 快照(110) + u2 累加(20) = 130，u1 不双算');
+});

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { load, persist, withWriteLock } from '../store.js';
+import { load, persist, persistAwait, withWriteLock } from '../store.js';
 import { authRequired, mutationGuard } from '../auth.js';
 import { generateReply } from '../gptAdapter.js';
 import { config } from '../config.js';
@@ -41,7 +41,7 @@ router.put('/config', mutationGuard, async (req, res) => {
     }
     gpt.prompt = prompt;
   }
-  await withWriteLock(() => persist());
+  await withWriteLock(() => persistAwait());
   res.json({ config: gpt });
 });
 
@@ -57,12 +57,14 @@ router.delete('/drafts/:id', mutationGuard, async (req, res) => {
   const idx = (db.gptDrafts || []).findIndex((x) => x.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'not_found' });
   db.gptDrafts.splice(idx, 1);
-  await withWriteLock(() => persist());
+  await withWriteLock(() => persistAwait());
   res.json({ ok: true });
 });
 
-// 生成一条回复（真实调用大模型）。需：①服务端已配置 GPT_API_KEY；②前端已启用自动回复
-router.post('/reply', authRequired, async (req, res) => {
+// 生成一条回复（真实调用大模型，消耗服务端配置的模型额度）。
+// H-01 修复：改为 mutationGuard——生成回复属真实外部动作（消耗 API 费用），开放模式下匿名不得调用，
+// 否则任意访客可耗尽服务端模型额度。非开放模式（默认 REQUIRE_AUTH=true）下等价于 authRequired。
+router.post('/reply', mutationGuard, async (req, res) => {
   const db = load();
   if (!db.settings.gpt.enabled) {
     return res.status(400).json({ error: 'gpt_disabled', message: '请先在 GPT 自动回复页启用自动回复' });

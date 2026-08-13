@@ -2,7 +2,7 @@ import { Router } from 'express';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { load, persist, todayStr, withWriteLock } from '../store.js';
+import { load, persist, persistAwait, todayStr, withWriteLock } from '../store.js';
 import { config } from '../config.js';
 import { dbgLog } from '../log.js';
 import { runTask } from '../taskRunner.js';
@@ -10,6 +10,7 @@ import { validateCron } from '../scheduler.js';
 import { authRequired, mutationGuard, adminOrAuthRequired } from '../auth.js';
 import { limitStr, MAX_NAME_LEN } from '../validation.js';
 import { notify, isSafeSmzdmUrl } from '../notifier.js';
+import { wrapAsync } from '../wrapAsync.js';
 import { CUSTOM_TYPES, CUSTOM_TASK_DEFS, TASK_TEMPLATES, REAL_STRATEGY_TYPES } from '../taskMatrix.js';
 
 const router = Router();
@@ -65,7 +66,8 @@ router.get('/templates', adminOrAuthRequired, (req, res) => {
 // 保存某任务类型的接口配置（抓包得到的真实 URL/参数/资产字段映射）。
 // endpoint 传空即清空（回到"待抓包"），但内置真实任务（REAL_STRATEGY_TYPES）允许仅存 params。
 // 仅允许 CUSTOM_TYPES。额外持久化 jsonp / robotToken / referer / headers / tokenField / params。
-router.put('/endpoints', mutationGuard, async (req, res) => {
+// wrapAsync：内部 await withWriteLock 等异常若不捕获会使请求挂起（M-15）。
+router.put('/endpoints', mutationGuard, wrapAsync(async (req, res) => {
   const db = load();
   const { type, endpoint, method, body, assetFields, note, jsonp, robotToken, referer, headers, tokenField, params } = req.body || {};
   if (!CUSTOM_TYPES.includes(type)) {
@@ -113,7 +115,7 @@ router.put('/endpoints', mutationGuard, async (req, res) => {
   // 非内置类型必须提供 endpoint；内置类型允许仅存 params（运行时走内置 handler，无需 endpoint）
   if (epEmpty && !isReal) {
     delete db.settings.taskEndpoints[type];
-    await withWriteLock(() => persist());
+    await withWriteLock(() => persistAwait());
     return res.json({ ok: true, endpoints: db.settings.taskEndpoints });
   }
 
@@ -121,7 +123,7 @@ router.put('/endpoints', mutationGuard, async (req, res) => {
   if (epEmpty) {
     // 内置类型：仅更新 params，保留既有 endpoint（若有）
     db.settings.taskEndpoints[type] = { ...prev, params: parsedParams || prev.params || {} };
-    await withWriteLock(() => persist());
+    await withWriteLock(() => persistAwait());
     return res.json({ ok: true, endpoints: db.settings.taskEndpoints });
   }
 
@@ -146,9 +148,9 @@ router.put('/endpoints', mutationGuard, async (req, res) => {
   if (headers && typeof headers === 'object') cfg.headers = headers;
   if (parsedParams) cfg.params = parsedParams;
   db.settings.taskEndpoints[type] = cfg;
-  await withWriteLock(() => persist());
+  await withWriteLock(() => persistAwait());
   res.json({ ok: true, endpoints: db.settings.taskEndpoints });
-});
+}));
 
 // 扫描 captures 目录：读取 importCapture.mjs 生成的 detected.json（已识别的 smzdm 端点）
 router.get('/captures', authRequired, (req, res) => {
@@ -237,7 +239,7 @@ router.post('/captures/apply', mutationGuard, async (req, res) => {
     });
   }
   try {
-    await withWriteLock(() => persist());
+    await withWriteLock(() => persistAwait());
   } catch (e) {
     dbgLog('[tasks] 保存失败：', e.message);
     return res.status(500).json({ error: 'persist_failed', message: '保存失败，请稍后重试' });
@@ -246,12 +248,20 @@ router.post('/captures/apply', mutationGuard, async (req, res) => {
 });
 
 // 更新任务（启用/停用/名称/cron）
-router.put('/:id', authRequired, async (req, res) => {
+// H-01 修复：改为 mutationGuard——开放模式下任务启停/cron 属真实动作，匿名不得修改（避免改写自动化行为）。
+// 非开放模式（默认 REQUIRE_AUTH=true）下 mutationGuard 等价于 authRequired，行为不变。
+// M-06 修复：先全量校验所有字段，任一非法即返回 400 且「不修改任何内存状态」；
+// 校验全部通过后，再在写锁内一次性应用，杜绝"先改 enabled 再校验 articleId 失败"导致部分修改残留。
+// wrapAsync：内部 await withWriteLock 等异常若不捕获会使请求挂起（M-15）。
+router.put('/:id', mutationGuard, wrapAsync(async (req, res) => {
   const db = load();
   const t = db.tasks.find((x) => x.id === req.params.id);
   if (!t) return res.status(404).json({ error: 'not_found' });
   const { enabled, cron, name, articleId, articleSource, source, autoPost, limit } = req.body || {};
-  if (enabled !== undefined) t.enabled = enabled;
+
+  // 第一阶段：全量校验，收集待应用字段（不触碰 t）。
+  const changes = {};
+  if (enabled !== undefined) changes.enabled = !!enabled;
   if (cron !== undefined) {
     // b3：拒绝非法 cron，避免静默永不触发
     if (!validateCron(cron)) {
@@ -260,45 +270,54 @@ router.put('/:id', authRequired, async (req, res) => {
         message: 'cron 表达式非法（需 5 段：分 时 日 月 周，如 "0 9 * * *"）',
       });
     }
-    t.cron = cron;
+    changes.cron = cron;
   }
   // 评论/收藏/点赞需要目标文章 ID（或文章链接）；允许为空字符串（运行时再校验）
   if (articleId !== undefined) {
     if (typeof articleId !== 'string' || articleId.length > 512) {
       return res.status(400).json({ error: 'invalid_article_id', message: 'articleId 需为不超过 512 字符的字符串' });
     }
-    t.articleId = articleId.trim();
+    changes.articleId = articleId.trim();
   }
   // 文章来源：manual（手填）| baoliao（从好价列表取）
   if (articleSource !== undefined) {
     if (!['manual', 'baoliao'].includes(articleSource)) {
       return res.status(400).json({ error: 'invalid_source', message: 'articleSource 仅支持 manual / baoliao' });
     }
-    t.articleSource = articleSource;
+    changes.articleSource = articleSource;
   }
   // GPT 批量生成任务参数
   if (source !== undefined) {
     if (!['manual', 'baoliao'].includes(source)) {
       return res.status(400).json({ error: 'invalid_source', message: 'source 仅支持 manual / baoliao' });
     }
-    t.source = source;
+    changes.source = source;
   }
-  if (autoPost !== undefined) t.autoPost = !!autoPost;
+  if (autoPost !== undefined) changes.autoPost = !!autoPost;
   if (limit !== undefined) {
     const lim = Number(limit);
     // 兼容两类任务：GPT 批量生成（运行时再钳制到 10）与好价抓取（允许 1~50）
     if (!Number.isFinite(lim) || lim < 1 || lim > 50) {
       return res.status(400).json({ error: 'invalid_limit', message: 'limit 需为 1~50 的整数' });
     }
-    t.limit = Math.floor(lim);
+    changes.limit = Math.floor(lim);
   }
-  if (name !== undefined) t.name = limitStr(name, MAX_NAME_LEN, 'name');
-  await withWriteLock(() => persist());
+  if (name !== undefined) changes.name = limitStr(name, MAX_NAME_LEN, 'name');
+
+  // 第二阶段：校验全部通过后才在写锁内一次性应用，保证原子性（失败也不留部分修改）。
+  // M-04：落盘后才返回成功（persistAwait 跳过 debounce 定时器并 await 真实磁盘写）。
+  await withWriteLock(() => {
+    Object.assign(t, changes);
+    return persistAwait();
+  });
   res.json(t);
-});
+}));
 
 // 手动执行任务（调用适配器；mock 直接返回成功）
-router.post('/:id/run', authRequired, async (req, res) => {
+// H-01 修复：改为 mutationGuard——手动运行任务属真实站外动作（签到/评论/点赞等），
+// 开放模式下匿名不得触发（避免任意访客代表全部账号执行动作、消耗模型额度）。
+// 非开放模式（默认 REQUIRE_AUTH=true）下等价于 authRequired。
+router.post('/:id/run', mutationGuard, async (req, res) => {
   const db = load();
   const t = db.tasks.find((x) => x.id === req.params.id);
   if (!t) return res.status(404).json({ error: 'not_found' });
@@ -312,14 +331,14 @@ router.post('/:id/run', authRequired, async (req, res) => {
     t.lastRun = todayStr();
     t.lastResult = r.result.message;
     t.status = 'done';
-    await withWriteLock(() => persist());
+    await withWriteLock(() => persistAwait());
     notify(db, { title: `✅ 任务完成 · ${t.name}`, message: r.result.message }).catch(() => {});
     res.json({ ok: true, result: r.result });
   } catch (e) {
     notify(db, { title: `❌ 任务异常 · ${t.name}`, message: e.message }).catch(() => {});
     t.lastResult = e.message;
     t.status = 'error';
-    await withWriteLock(() => persist());
+    await withWriteLock(() => persistAwait());
     dbgLog('[tasks] 任务执行异常：', e.message);
     res.status(502).json({ error: 'adapter_error', message: '任务执行异常，请稍后重试' });
   }

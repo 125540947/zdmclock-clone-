@@ -33,14 +33,15 @@ test('GET /api/health 返回 ok 且 scheduler 字段', async () => {
   assert.ok('scheduler' in data);
 });
 
-test('POST /api/auth/login 正确凭据签发 token', async () => {
+test('POST /api/auth/login 正确凭据签发会话（不再回显明文 token，M-13）', async () => {
   const { status, data } = await j('POST', '/api/auth/login', {
     username: config.adminUsername,
     password: config.adminPassword
   });
   assert.equal(status, 200);
-  assert.ok(data.token);
   assert.equal(data.username, config.adminUsername);
+  assert.ok(!('token' in data), 'M-13：登录响应不应回显明文 token（HttpOnly 会话 Cookie 承载鉴权）');
+  assert.ok(!('adminToken' in data), 'M-13：登录响应不应回显明文 adminToken');
 });
 
 test('POST /api/auth/login 错误凭据返回 401', async () => {
@@ -69,6 +70,54 @@ test('PUT /api/tasks/:id 非法 source 返回 400 invalid_source', async () => {
   const { status, data } = await j('PUT', '/api/tasks/t_clock', { source: 'xxx' });
   assert.equal(status, 400);
   assert.equal(data.error, 'invalid_source');
+});
+
+// M-06 修复：校验失败不得留下任何"部分修改"。这里同时传非法 cron 与一个本应生效的 enabled 反转，
+// 断言 400 返回且任务 enabled 字段保持不变（先改后校验 → 校验失败已改的状态残留问题已闭环）。
+test('M-06：PUT /api/tasks/:id 校验失败时不得部分修改（enabled 不变）', async () => {
+  const headers = { Authorization: 'Bearer ' + config.apiToken };
+  const before = await j('GET', '/api/tasks', undefined, headers);
+  const t = before.data.list.find((x) => x.id === 't_clock');
+  const prevEnabled = t.enabled;
+  const { status } = await j('PUT', '/api/tasks/t_clock', { cron: 'bad-cron', enabled: !prevEnabled });
+  assert.equal(status, 400);
+  const after = await j('GET', '/api/tasks', undefined, headers);
+  const t2 = after.data.list.find((x) => x.id === 't_clock');
+  assert.equal(t2.enabled, prevEnabled, '校验失败时 enabled 不应被修改');
+});
+
+// H-01 修复：开放模式下，任务启停/运行属真实动作，匿名（无管理员令牌）必须被拒（mutationGuard）。
+test('H-01：OPEN_MODE 下 PUT /api/tasks/:id 需管理员（匿名 401）', async () => {
+  const prevOpen = config.openMode;
+  config.openMode = true;
+  try {
+    const { status } = await j('PUT', '/api/tasks/t_clock', { enabled: false });
+    assert.equal(status, 401, '开放模式匿名不得修改任务（应要求管理员令牌）');
+  } finally {
+    config.openMode = prevOpen;
+  }
+});
+
+test('H-01：OPEN_MODE 下 POST /api/tasks/:id/run 需管理员（匿名 401）', async () => {
+  const prevOpen = config.openMode;
+  config.openMode = true;
+  try {
+    const { status } = await j('POST', '/api/tasks/t_clock/run', {});
+    assert.equal(status, 401, '开放模式匿名不得手动运行任务（应要求管理员令牌）');
+  } finally {
+    config.openMode = prevOpen;
+  }
+});
+
+test('H-01：OPEN_MODE 下 POST /api/gpt/reply 需管理员（匿名 401）', async () => {
+  const prevOpen = config.openMode;
+  config.openMode = true;
+  try {
+    const { status } = await j('POST', '/api/gpt/reply', { text: 'hi' });
+    assert.equal(status, 401, '开放模式匿名不得消耗模型额度（应要求管理员令牌）');
+  } finally {
+    config.openMode = prevOpen;
+  }
 });
 
 test('POST /api/clock/do 无账号返回 400 no_user', async () => {

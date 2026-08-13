@@ -12,6 +12,7 @@
 
 import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
+import { flushPersist } from './store.js';
 
 // 真实执行器：封装 execFile，统一返回结构并兜底超时。
 export function run(cmd, args = [], opts = {}) {
@@ -181,6 +182,9 @@ export async function runUpdate({ restart = true, onLog, runner = run } = {}) {
     pull.stdout.split('\n').map((x) => x.trim()).filter(Boolean).slice(0, 4).join(' ｜ ') ||
       '已是最新'
   );
+  // M-05 修复：报告"更新后"的提交号（此前用的是更新前 state.commit，会把旧提交号误报为已更新版本）。
+  const afterR = await runner('git', ['rev-parse', 'HEAD'], { cwd: root });
+  const afterCommit = afterR.ok ? afterR.stdout.trim() : state.commit;
 
   // 对比更新前后变更了哪些文件，决定是否需要重装依赖 / 重建前端。
   const diff = await runner('git', ['diff', '--name-only', `${before} HEAD`], { cwd: root });
@@ -220,8 +224,8 @@ export async function runUpdate({ restart = true, onLog, runner = run } = {}) {
     log,
     restarting,
     channel: state.channel,
-    commit: state.commit,
-    commitShort: state.commitShort,
+    commit: afterCommit,
+    commitShort: afterCommit.slice(0, 7),
     needInstall,
     needBuild
   };
@@ -239,11 +243,17 @@ export function shouldReexec() {
   return !supervised;
 }
 
+// 退出前先落盘（M-05）：re-exec / 退出前等待在途写完成，避免丢失 debounce 窗口内的已确认写入。
+// flushPersist 内部先 await 写链再同步立即落盘；无论成功失败都照常退出，不阻塞重启。
+function exitAfterFlush() {
+  flushPersist().finally(() => process.exit(0));
+}
+
 // 自重启：re-exec 当前进程（detached），由新进程接管端口，旧进程退出。
 export function scheduleRestart(delayMs = 900) {
   if (!shouldReexec()) {
     // 交给 supervisor 重启：仅退出，不自己派生子进程。
-    setTimeout(() => process.exit(0), delayMs);
+    setTimeout(exitAfterFlush, delayMs);
     return;
   }
   setTimeout(() => {
@@ -256,6 +266,6 @@ export function scheduleRestart(delayMs = 900) {
     } catch {
       /* 重启失败则保持当前进程继续运行 */
     }
-    process.exit(0);
+    exitAfterFlush();
   }, delayMs);
 }

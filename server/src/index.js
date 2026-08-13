@@ -130,7 +130,10 @@ const BAOLIAO_IMPORT_HTML = `<!doctype html>
 </html>`;
 
 // 构建并配置 Express 应用（不在此处监听端口，便于测试复用同一份中间件装配）
-export function createApp() {
+// rateLimit 默认开启（生产安全）；测试可传 { rateLimit: false } 关闭，避免高频写/认证接口
+// 的固定窗口限流在「同一测试进程内连续多次登录/录入」时被误触（属测试产物，非真实爆破场景）。
+// 限流逻辑本身由 rateLimit.test.js 独立覆盖，关闭不影响逻辑验证。
+export function createApp({ rateLimit: enableRateLimit = true } = {}) {
   const app = express();
   // 信任代理：开启后 req.ip 取真实访客 IP（经 X-Forwarded-For）。
   // 开放录入的「同IP段可见」依赖真实访客 IP，故 OPEN_MODE 开启时默认开；否则默认关。
@@ -141,9 +144,12 @@ export function createApp() {
   const corsOrigins = process.env.CORS_ORIGIN
     ? process.env.CORS_ORIGIN.split(',').map((s) => s.trim()).filter(Boolean)
     : false;
-  app.use(cors({ origin: corsOrigins }));
+  // M-08 修复：分域部署（前端在独立域名）时，后端 CORS 必须同时返回
+  // Access-Control-Allow-Credentials: true，否则浏览器不会在跨域请求中携带 HttpOnly 会话 Cookie，
+  // 登录与全部受保护 API 将失效。同源部署（corsOrigins=false）无需凭据头。
+  app.use(cors({ origin: corsOrigins, credentials: !!corsOrigins }));
   // P2-11：内容安全策略（CSP）。前端为 Vue SPA，构建产物均为外部 JS/CSS 文件（无内联脚本），
-  // 故 script-src 限定 'self' 即可阻断任何内联 / 第三方脚本执行，显著降低 localStorage 会话 token 被 XSS 窃取的风险。
+  // 故 script-src 限定 'self' 即可阻断任何内联 / 第三方脚本执行，显著降低 HttpOnly 会话 Cookie 被 XSS 窃取的风险。
   // style-src 允许 'unsafe-inline'（Vue 的 :style 绑定会生成内联样式）；字体来自 Google Fonts 需放行对应源。
   app.use((req, res, next) => {
     res.setHeader(
@@ -199,11 +205,13 @@ export function createApp() {
   // API 路由
   // P1-1：匿名暴露的高频写/认证接口加固定窗口限流（防爆破 / 防刷量撑爆 db）。
   // 限流状态存内存，按访客 IP 计数；仅对 POST 生效（GET 不受影响）。
-  app.post('/api/auth/login', rateLimit({ windowMs: 60000, max: 10, message: '登录尝试过于频繁，请稍后再试' }));
-  app.post('/api/users', rateLimit({ windowMs: 60000, max: 20, message: '录入请求过于频繁，请稍后再试' }));
-  app.post('/api/users/import', rateLimit({ windowMs: 60000, max: 20, message: '导入请求过于频繁，请稍后再试' }));
-  app.post('/api/baoliao/bulk', rateLimit({ windowMs: 60000, max: 30, message: '好价导入过于频繁，请稍后再试' }));
-  app.use('/api/admin', rateLimit({ windowMs: 60000, max: 30, message: '管理接口请求过于频繁，请稍后再试' }));
+  if (enableRateLimit) {
+    app.post('/api/auth/login', rateLimit({ windowMs: 60000, max: 10, message: '登录尝试过于频繁，请稍后再试' }));
+    app.post('/api/users', rateLimit({ windowMs: 60000, max: 20, message: '录入请求过于频繁，请稍后再试' }));
+    app.post('/api/users/import', rateLimit({ windowMs: 60000, max: 20, message: '导入请求过于频繁，请稍后再试' }));
+    app.post('/api/baoliao/bulk', rateLimit({ windowMs: 60000, max: 30, message: '好价导入过于频繁，请稍后再试' }));
+    app.use('/api/admin', rateLimit({ windowMs: 60000, max: 30, message: '管理接口请求过于频繁，请稍后再试' }));
+  }
   app.use('/api/auth', authRoutes);
   app.use('/api/users', userRoutes);
   app.use('/api/clock', clockRoutes);
@@ -251,7 +259,16 @@ export function createApp() {
         // index:false 让根路径 "/" 落到下方兜底中间件，以便注入构建戳；
         // 真实资源文件（/assets/*）仍由静态中间件直接服务。
         index: false,
-        setHeaders: (res) => res.setHeader('Cache-Control', 'no-store, must-revalidate')
+        // L-01 修复：/assets/* 的文件名已含内容哈希，可长期缓存（public + immutable），
+        // 无需 no-store——此前的统一 no-store 导致每次页面访问都重传 JS/CSS，浪费带宽与静态 IO。
+        // index.html 等 HTML 仍由下方 SPA 兜底强制 no-store（见 L-01）。
+        setHeaders: (res, filePath) => {
+          if (/[\\/]assets[\\/]/.test(String(filePath))) {
+            res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+          } else {
+            res.setHeader('Cache-Control', 'no-store, must-revalidate');
+          }
+        }
       })
     );
     // SPA 兜底：读取 index.html，给 /assets/* 注入 ?v=<构建戳>，保证每次部署都拉最新资源

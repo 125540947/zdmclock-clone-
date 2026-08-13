@@ -2,9 +2,6 @@ import { Router } from 'express';
 import { config } from '../config.js';
 import { safeEqual, getClientIp, parseCidrList, ipInCidrList, parseCookies } from '../auth.js';
 
-// 前置代理来源 IP 白名单（启动时解析一次；为空表示不限制来源，仅靠 proxyAuthHeader 存在性兜底）
-const PROXY_TRUSTED = parseCidrList(config.proxyTrustedIps);
-
 const router = Router();
 
 // #190：会话 Cookie 名称与签发选项。HttpOnly 防止 JS（含 XSS）读取 Token；
@@ -62,23 +59,22 @@ router.post('/login', (req, res) => {
   const { username, password } = req.body || {};
   // 开放模式（OPEN_MODE）：彻底免登录，login 直接返回合法 token，前端可自动注入后正常调用所有接口。
   if (config.openMode) {
-    // 匿名自动登录：仅签发普通 token，绝不向访客泄露管理员 Token（修复：此前会把 ADMIN_TOKEN 发给所有匿名访客，
+    // 匿名自动登录：仅签发普通会话 Cookie，绝不向访客泄露管理员 Token（修复：此前会把 ADMIN_TOKEN 发给所有匿名访客，
     // 导致「匿名不能改删」形同虚设——任何人都能拿到管理员令牌去改删账号、触发系统更新）。
-    // 注意：匿名登录【不】下发 adminToken 字段（而非空串 ''）。
-    // 前端 setToken(token, undefined) 会跳过管理员令牌分支、保留已有令牌；
-    // 若下发 '' 则会被前端当作「清空」处理，把刚登录成功的管理员令牌在页面 reload 时误删，
-    // 导致开放模式下后台入口闪现后消失、#/admin 被守卫弹回前台。
-    const resp = { token: config.apiToken, username: username || 'open' };
-    // 管理员通道：提交正确的 ADMIN_TOKEN（作为 adminToken 或 password 字段）才签发管理员 Token，
+    // M-13 修复：登录响应不再回显静态 API/Admin Token 明文（HttpOnly 会话 Cookie 已承载鉴权，
+    // 回显只会增加 XSS/扩展读取高权限凭据的风险）。
+    const resp = { openMode: true, username: username || 'open', loggedIn: true };
+    // 管理员通道：提交正确的 ADMIN_TOKEN（作为 adminToken 或 password 字段）才签发管理员会话 Cookie，
     // 使「保留管理员改删/更新能力」在开放模式下可用，且不对匿名访客开放。
+    let adminTokenForCookie = null;
     if (config.adminToken) {
       const provided = req.body && (req.body.adminToken || req.body.password || '');
       if (provided && safeEqual(provided, config.adminToken)) {
-        resp.adminToken = config.adminToken;
+        adminTokenForCookie = config.adminToken;
         resp.username = config.adminUsername || 'admin';
       }
     }
-    setSessionCookies(res, req, resp.token, resp.adminToken);
+    setSessionCookies(res, req, config.apiToken, adminTokenForCookie);
     return res.json(resp);
   }
   if (config.trustProxyAuth) {
@@ -94,28 +90,26 @@ router.post('/login', (req, res) => {
     if (!h) {
       return res.status(401).json({ error: 'proxy_unauthenticated', message: '前置代理未认证，拒绝放行' });
     }
-    // 来源 IP 白名单：即便攻击者可伪造 proxyAuthHeader，只要来源不在可信网段（如前置私有接口）即拒绝，
-    // 防直连暴露时绕过代理认证拿到 Token。PROXY_TRUSTED_IPS 未配置时退化为不限制（仅靠请求头兜底）。
-    if (!ipInCidrList(getClientIp(req), PROXY_TRUSTED)) {
+    // 来源 IP 白名单：即便攻击者可伪造 X-Forwarded-For 或 proxyAuthHeader，只要真实连接对端
+    // （套接字源地址，不可伪造）不在可信网段（如前置私有接口）即拒绝，防直连暴露时绕过代理认证拿到 Token。
+    // 注意：此处用 req.socket.remoteAddress（连接源），而非 getClientIp（TRUST_PROXY=true 时会返回访客 XFF，可被伪造）。
+    // 每请求重新解析（支持 .env 启动时配置与热更；空列表退化为不限制来源，仅靠请求头兜底）。
+    const PROXY_TRUSTED = parseCidrList(config.proxyTrustedIps);
+    const peerIp = (req.socket && req.socket.remoteAddress ? String(req.socket.remoteAddress) : '').replace(/^::ffff:/, '');
+    if (!ipInCidrList(peerIp, PROXY_TRUSTED)) {
       return res.status(403).json({ error: 'proxy_source_forbidden', message: '来源 IP 不在可信代理网段，拒绝签发 Token' });
     }
     setSessionCookies(res, req, config.apiToken, config.adminToken || config.apiToken);
-    return res.json({
-      token: config.apiToken,
-      adminToken: config.adminToken || config.apiToken,
-      username: username || 'proxy'
-    });
+    return res.json({ openMode: config.openMode, username: username || 'proxy', loggedIn: true });
   }
   if (
     safeEqual(username, config.adminUsername) &&
     safeEqual(password, config.adminPassword)
   ) {
     setSessionCookies(res, req, config.apiToken, config.adminToken || config.apiToken);
-    return res.json({
-      token: config.apiToken,
-      adminToken: config.adminToken || config.apiToken,
-      username
-    });
+    // M-13 修复：标准密码登录响应不再回显静态 API/Admin Token 明文（HttpOnly 会话 Cookie 已承载鉴权，
+    // 回显只会增加 XSS / 浏览器扩展读取高权限凭据的风险，与 OPEN_MODE / 代理分支保持一致）。
+    return res.json({ username });
   }
   res.status(401).json({ error: 'invalid_credentials', message: '账号或密码错误' });
 });

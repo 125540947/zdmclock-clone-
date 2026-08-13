@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { load, todayStr, withWriteLock, persist } from '../store.js';
+import { load, todayStr, withWriteLock, persist, persistAwait } from '../store.js';
 import { config } from '../config.js';
 import { adminOrAuthRequired } from '../auth.js';
 import { resolvedCheckInTime, parseHM, fmtHM, windowMinutes } from '../clockSchedule.js';
@@ -147,7 +147,7 @@ router.put('/risk-settings', adminOrAuthRequired, async (req, res) => {
   // 防御：最小等待窗口不能大于最大等待窗口
   if (next.preDelayMinMs > next.preDelayMaxMs) next.preDelayMinMs = next.preDelayMaxMs;
   db.settings.risk = next;
-  await withWriteLock(() => persist());
+  await withWriteLock(() => persistAwait());
   res.json({ ok: true, settings: resolveRisk(db) });
 });
 
