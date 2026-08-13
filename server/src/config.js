@@ -32,9 +32,17 @@ export const config = {
   debug: process.env.ZDM_DEBUG === '1',
   requireAuth: parseBool(process.env.REQUIRE_AUTH, false),
   adminUsername: process.env.ADMIN_USERNAME || 'admin',
-  adminPassword: process.env.ADMIN_PASSWORD || 'admin123',
-  // 标记是否仍在使用内置默认密码，便于启动时给出安全告警
+  // 弱口令清单：显式使用这些值时即便非空也视为弱密码，启动时告警（避免 admin123 等"看似已设其实很弱"）。
+  // 空值 → 回落到内置 'admin123' 兜底（adminPasswordIsDefault=true，同样告警）。
+  adminPassword: process.env.ADMIN_PASSWORD && process.env.ADMIN_PASSWORD.length ? process.env.ADMIN_PASSWORD : 'admin123',
+  // 标记是否仍在使用内置默认密码（未显式设置 ADMIN_PASSWORD），便于启动时给出安全告警
   adminPasswordIsDefault: !process.env.ADMIN_PASSWORD,
+  // 弱密码标记：未设置 或 命中常见弱口令清单 → 鉴权开启时启动告警（纵深加固，堵住 .env.example 的 admin123 字面量）
+  adminPasswordIsWeak:
+    !process.env.ADMIN_PASSWORD ||
+    new Set(['admin123', 'admin', 'password', '123456', 'root', 'changeme', 'qwerty', 'letmein']).has(
+      String(process.env.ADMIN_PASSWORD).toLowerCase()
+    ),
   // 前置代理已认证模式：当前置（Cloudflare Access / 宝塔 / nginx 密码等）已完成身份验证时，
   // 应用层不再校验 ADMIN_PASSWORD，login 自动放行并返回 token（写接口仍带 token）。
   // 仅当前置有可靠保护时开启，否则等同于把后台裸奔到公网。

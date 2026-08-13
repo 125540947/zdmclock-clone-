@@ -366,9 +366,9 @@ if (isMain) {
           '如需固定 Token 或启用鉴权，请在 .env 显式设置 API_TOKEN。'
       );
     }
-    if (config.adminPasswordIsDefault && config.requireAuth && !config.trustProxyAuth) {
+    if (config.adminPasswordIsWeak && config.requireAuth && !config.trustProxyAuth) {
       // eslint-disable-next-line no-console
-      console.warn('[zdmclock][安全] 仍在使用默认管理员密码 admin123，请尽快设置强 ADMIN_PASSWORD。');
+      console.warn('[zdmclock][安全] 仍在使用弱管理员密码（admin123 / 空 / 常见弱口令）。请尽快设置强 ADMIN_PASSWORD，否则公网暴露等同于无鉴权。');
     }
     if (config.openMode && !config.adminToken) {
       // eslint-disable-next-line no-console

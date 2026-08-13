@@ -204,24 +204,33 @@ export function dailyAssetSeries(db, days = 30, visibleIds = null) {
   const series = [];
   let run = { gold: 0, silver: 0, exp: 0 };
   for (const date of dates) {
-    if (snapByDate[date] && snapByDate[date].has) {
+    const d = deltaByDate[date] || { gold: 0, silver: 0, exp: 0 };
+    const snap = snapByDate[date];
+    if (snap && snap.has) {
+      // 快照已含当日增量（snap.gold = 当日开始前累计 + 当日 delta），
+      // 直接以快照值重锚 run，避免长期累加漂移；切勿再 +d（会双算并向前放大误差）。
       run = {
-        gold: snapByDate[date].gold,
-        silver: snapByDate[date].silver,
-        exp: snapByDate[date].exp
+        gold: snap.gold != null ? snap.gold : run.gold,
+        silver: snap.silver != null ? snap.silver : run.silver,
+        exp: snap.exp != null ? snap.exp : run.exp
+      };
+    } else {
+      // 无快照：在上一日锚点基础上累加当日 delta
+      run = {
+        gold: run.gold + d.gold,
+        silver: run.silver + d.silver,
+        exp: run.exp + d.exp
       };
     }
-    const d = deltaByDate[date] || { gold: 0, silver: 0, exp: 0 };
     series.push({
       date,
       goldDelta: round2(d.gold),
       silverDelta: round2(d.silver),
       expDelta: round2(d.exp),
-      goldTotal: round2(run.gold + d.gold),
-      silverTotal: round2(run.silver + d.silver),
-      expTotal: round2(run.exp + d.exp)
+      goldTotal: round2(run.gold),
+      silverTotal: round2(run.silver),
+      expTotal: round2(run.exp)
     });
-    run = { gold: run.gold + d.gold, silver: run.silver + d.silver, exp: run.exp + d.exp };
   }
   return series;
 }

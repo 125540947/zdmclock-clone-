@@ -7,7 +7,9 @@ services:
     container_name: zdmclock
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      # 默认仅绑定本机回环（127.0.0.1），避免镜像一启动就暴露在公网。
+      # 如需对外提供服务，请改为 "3000:3000" 并务必先开启鉴权（REQUIRE_AUTH=true + 强密码）+ 反代保护。
+      - "127.0.0.1:3000:3000"
     # 从宿主机 .env 注入配置（API_TOKEN / REQUIRE_AUTH / SMZDM_ADAPTER=cookie 等），
     # 不写死在 compose 中，真实配置可随 .env 生效。
     env_file:

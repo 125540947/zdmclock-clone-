@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { applyAssetEffect, summarizeAssets, dailyAssetSeries, assetByTask, recentLedger } from '../src/assetLedger.js';
+import { localDateStr } from '../src/store.js';
 
 function freshDb() {
   return { users: [], assetLedger: [], assetSnapshots: [] };
@@ -113,7 +114,7 @@ test('visibleIds 过滤：summarize/daily/by-task/ledger 仅统计集合内账�
   assert.equal(list.length, 1);
 });
 
-test('assetLedger 快照 exp 字段名修正：snap.exp 存储且 dailyAssetSeries 读取（非恒为 0）', () => {
+test('assetLedger 快照 exp 字段名修正：snap.exp 存储且 dailyAssetSeries 读取（非恒为 0，不双算）', () => {
   const db = freshDb();
   const user = { id: 'u1', assets: { gold: 0, silver: 0, exp: 0, level: null } };
   db.users.push(user);
@@ -123,5 +124,34 @@ test('assetLedger 快照 exp 字段名修正：snap.exp 存储且 dailyAssetSeri
   assert.equal(snap.expAfter, undefined, '不应再以 expAfter 字段存储（与 gold/silver 命名一致）');
   const series = dailyAssetSeries(db, 1);
   assert.ok(series[0].expTotal > 0, 'expTotal 不应因字段名错配而恒为 0');
-  assert.equal(series[0].expTotal, snap.exp + 7, 'expTotal = 快照(7) + 当日 delta(7)（与 gold 口径一致）');
+  // 快照已含当日增量（snap.gold=10 / snap.exp=7），goldTotal/expTotal 应直接等于快照累计值，
+  // 不得再 +当日 delta（旧实现会双算成 20/14 并向前累积放大）。
+  assert.equal(series[0].goldTotal, snap.gold, 'goldTotal = 快照累计(10)，不含双算');
+  assert.equal(series[0].expTotal, snap.exp, 'expTotal = 快照累计(7)，不含双算');
+  assert.equal(series[0].goldDelta, 10, 'goldDelta 仍为当日增量');
+  assert.equal(series[0].expDelta, 7, 'expDelta 仍为当日增量');
+});
+
+test('dailyAssetSeries 跨日：快照日不双算且误差不向后传播', () => {
+  const db = freshDb();
+  const today = new Date();
+  const y = new Date(today);
+  y.setDate(today.getDate() - 1);
+  const d1 = localDateStr(y); // 昨天（快照日）
+  const d2 = localDateStr(today); // 今天（无快照，靠累加）
+  // 第 1 天（d1）：两条账本（增量 10+20=30）+ 该日快照（累计 30）
+  db.assetLedger.push({ id: 'a1', ts: d1 + 'T08:00:00Z', date: d1, userId: 'u1', taskType: 'clock', taskName: '签到', goldDelta: 10, silverDelta: 0, expDelta: 0, goldAfter: 10, silverAfter: 0, expAfter: 0, levelAfter: null, success: true, message: '' });
+  db.assetLedger.push({ id: 'a2', ts: d1 + 'T09:00:00Z', date: d1, userId: 'u1', taskType: 'point', taskName: '点赞', goldDelta: 20, silverDelta: 0, expDelta: 0, goldAfter: 30, silverAfter: 0, expAfter: 0, levelAfter: null, success: true, message: '' });
+  db.assetSnapshots.push({ userId: 'u1', date: d1, gold: 30, silver: 0, exp: 0, level: null });
+  // 第 2 天（d2）：一条账本 +5（无快照，靠累加）
+  db.assetLedger.push({ id: 'a3', ts: d2 + 'T08:00:00Z', date: d2, userId: 'u1', taskType: 'clock', taskName: '签到', goldDelta: 5, silverDelta: 0, expDelta: 0, goldAfter: 35, silverAfter: 0, expAfter: 0, levelAfter: null, success: true, message: '' });
+  const series = dailyAssetSeries(db, 7);
+  const s1 = series.find((x) => x.date === d1);
+  const s2 = series.find((x) => x.date === d2);
+  assert.ok(s1, '应含昨天（快照日）');
+  assert.ok(s2, '应含今天');
+  assert.equal(s1.goldDelta, 30, '第1天增量=10+20=30');
+  assert.equal(s1.goldTotal, 30, '第1天累计=快照30（旧实现会双算成60）');
+  assert.equal(s2.goldDelta, 5, '第2天增量=5');
+  assert.equal(s2.goldTotal, 35, '第2天累计=30+5=35（误差不向后传播）');
 });
