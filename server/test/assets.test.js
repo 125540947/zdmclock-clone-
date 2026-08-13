@@ -87,4 +87,31 @@ test('GET /api/assets/ledger 带昵称的最近明细 + ?limit 钳制', async ()
   assert.equal(limited.data.list.length, 1);
 });
 
+test('OPEN_MODE 下 /api/assets/summary 仅返回同 /24 网段（或无 recordedIp）账号', async () => {
+  const prevOpen = config.openMode;
+  const prevAdm = config.adminToken;
+  const prevTrust = config.trustProxy;
+  config.openMode = true; // 匿名（无 adminToken）访客，依网段隔离
+  config.adminToken = '';
+  config.trustProxy = true; // 信任 XFF，用受控 IP 模拟访客（避开测试机 loopback 为 IPv6 的干扰）
+  const d = load();
+  // 访客 XFF=203.0.113.99，与 u1.recordedIp=203.0.113.50 同 /24；u2=198.51.100.5 跨段应被排除
+  d.users[0].recordedIp = '203.0.113.50';
+  d.users[1].recordedIp = '198.51.100.5';
+  try {
+    const r = await j('GET', '/api/assets/summary', undefined, { 'X-Forwarded-For': '203.0.113.99' });
+    assert.equal(r.status, 200);
+    assert.equal(r.data.users.length, 1, '跨段账号 u2 应被隔离排除');
+    assert.equal(r.data.users[0].id, 'u1');
+    assert.equal(r.data.totals.users, 1);
+    assert.equal(r.data.totals.gold, 10);
+  } finally {
+    config.openMode = prevOpen;
+    config.adminToken = prevAdm;
+    config.trustProxy = prevTrust;
+    d.users[0].recordedIp = undefined;
+    d.users[1].recordedIp = undefined;
+  }
+});
+
 test('关闭测试服务器', () => { server.close(); });

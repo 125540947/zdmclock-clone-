@@ -296,6 +296,16 @@ if (isMain) {
   process.on('SIGTERM', () => gracefulStop('SIGTERM'));
   process.on('SIGINT', () => gracefulStop('SIGINT'));
 
+  // 致命配置校验（Phase 2 代理认证加固）：TRUST_PROXY_AUTH=true 但未配 PROXY_AUTH_HEADER 时，
+  // 任何人直连 /login 都能拿到 apiToken+adminToken，等同把后台裸奔到公网 —— 直接拒绝启动。
+  if (config.trustProxyAuth && !config.proxyAuthHeader) {
+    console.error(
+      '[zdmclock][致命] TRUST_PROXY_AUTH=true 但未配置 PROXY_AUTH_HEADER —— ' +
+        '任何人可经 /login 获取管理员 Token，已拒绝启动。请设置 PROXY_AUTH_HEADER（并建议 PROXY_TRUSTED_IPS 绑定可信网段）或关闭 TRUST_PROXY_AUTH。'
+    );
+    process.exit(1);
+  }
+
   app.listen(config.port, () => {
     // R4：仅在 production 启动定时调度，避免开发态意外触发真实签到
     if (config.nodeEnv === 'production') {

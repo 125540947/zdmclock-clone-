@@ -1,14 +1,14 @@
 import { Router } from 'express';
 import { load, todayStr, withWriteLock, persist } from '../store.js';
 import { config } from '../config.js';
-import { authRequired } from '../auth.js';
+import { adminOrAuthRequired } from '../auth.js';
 import { resolvedCheckInTime, parseHM, fmtHM, windowMinutes } from '../clockSchedule.js';
 import { resolveRisk } from '../riskControl.js';
 
 const router = Router();
 
-// 管理后台概览数据
-router.get('/stats', authRequired, (req, res) => {
+// 管理后台概览数据（OPEN_MODE 下强制管理员，避免匿名读全量运营统计）
+router.get('/stats', adminOrAuthRequired, (req, res) => {
   const db = load();
   const today = todayStr();
   const todayClocks = db.clockRecords.filter((r) => r.date === today).length;
@@ -30,7 +30,7 @@ router.get('/stats', authRequired, (req, res) => {
 // 已签到数与账号清单，便于运营掌握签到分布与活跃情况。
 // 查询参数：mode=hour|custom，bucketMinutes（custom 模式间隔，默认 60），
 //           start/end（HH:MM，限定统计窗口；缺省为全天 00:00~23:59）。
-router.get('/clock-distribution', authRequired, (req, res) => {
+router.get('/clock-distribution', adminOrAuthRequired, (req, res) => {
   const db = load();
   const today = todayStr();
   const mode = req.query.mode === 'custom' ? 'custom' : 'hour';
@@ -123,13 +123,13 @@ router.get('/clock-distribution', authRequired, (req, res) => {
 });
 
 // 风控（反检测 / 反封号）生效配置：env 默认值被 db.settings.risk 持久化覆盖
-router.get('/risk-settings', authRequired, (req, res) => {
+router.get('/risk-settings', adminOrAuthRequired, (req, res) => {
   const db = load();
   res.json({ settings: resolveRisk(db), tz: config.tz, catchupGraceMin: config.catchupGraceMin });
 });
 
 // 更新风控配置（持久化到 db.settings.risk）。仅接受已知数值字段，非法值回退默认。
-router.put('/risk-settings', authRequired, async (req, res) => {
+router.put('/risk-settings', adminOrAuthRequired, async (req, res) => {
   const db = load();
   const b = (req.body && req.body.settings) || {};
   const num = (v, d) => (Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : d);

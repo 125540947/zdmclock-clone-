@@ -1,6 +1,9 @@
 import { Router } from 'express';
 import { config } from '../config.js';
-import { safeEqual } from '../auth.js';
+import { safeEqual, getClientIp, parseCidrList, ipInCidrList } from '../auth.js';
+
+// 前置代理来源 IP 白名单（启动时解析一次；为空表示不限制来源，仅靠 proxyAuthHeader 存在性兜底）
+const PROXY_TRUSTED = parseCidrList(config.proxyTrustedIps);
 
 const router = Router();
 
@@ -41,11 +44,22 @@ router.post('/login', (req, res) => {
     return res.json(resp);
   }
   if (config.trustProxyAuth) {
-    if (config.proxyAuthHeader) {
-      const h = req.headers[String(config.proxyAuthHeader).toLowerCase()];
-      if (!h) {
-        return res.status(401).json({ error: 'proxy_unauthenticated', message: '前置代理未认证，拒绝放行' });
-      }
+    // 防御纵深：TRUST_PROXY_AUTH=true 但未配 PROXY_AUTH_HEADER 属致命误配，启动阶段已拒绝；
+    // 此处再加一道运行期校验（防止配置热更/遗漏），直接拒签 Token。
+    if (!config.proxyAuthHeader) {
+      return res.status(503).json({
+        error: 'proxy_auth_misconfigured',
+        message: 'TRUST_PROXY_AUTH=true 但未配置 PROXY_AUTH_HEADER，拒绝签发 Token（请修正配置或关闭该模式）'
+      });
+    }
+    const h = req.headers[String(config.proxyAuthHeader).toLowerCase()];
+    if (!h) {
+      return res.status(401).json({ error: 'proxy_unauthenticated', message: '前置代理未认证，拒绝放行' });
+    }
+    // 来源 IP 白名单：即便攻击者可伪造 proxyAuthHeader，只要来源不在可信网段（如前置私有接口）即拒绝，
+    // 防直连暴露时绕过代理认证拿到 Token。PROXY_TRUSTED_IPS 未配置时退化为不限制（仅靠请求头兜底）。
+    if (!ipInCidrList(getClientIp(req), PROXY_TRUSTED)) {
+      return res.status(403).json({ error: 'proxy_source_forbidden', message: '来源 IP 不在可信代理网段，拒绝签发 Token' });
     }
     return res.json({
       token: config.apiToken,

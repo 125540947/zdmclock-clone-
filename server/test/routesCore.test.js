@@ -392,6 +392,38 @@ test('P0-2 修复：默认 trustProxy=false 时伪造 XFF 命中同段也不放�
   }
 });
 
+// ---------- Phase 2：OPEN_MODE 下管理/任务运营端点强制管理员 ----------
+test('OPEN_MODE 下 GET /api/admin/stats 无管理员令牌 → 401，有则 200', async () => {
+  const prevOpen = config.openMode;
+  const prevAdm = config.adminToken;
+  config.openMode = true; config.adminToken = 'SECRET_ADMIN';
+  try {
+    const noTok = await j('GET', '/api/admin/stats');
+    assert.equal(noTok.status, 401, '开放模式匿名应拒');
+    const withTok = await j('GET', '/api/admin/stats', undefined, { 'X-Admin-Token': 'SECRET_ADMIN' });
+    assert.equal(withTok.status, 200);
+    assert.ok('users' in withTok.data);
+  } finally {
+    config.openMode = prevOpen;
+    config.adminToken = prevAdm;
+  }
+});
+
+test('OPEN_MODE 下 GET /api/tasks/endpoints 无管理员令牌 → 401', async () => {
+  const prevOpen = config.openMode;
+  const prevAdm = config.adminToken;
+  config.openMode = true; config.adminToken = 'SECRET_ADMIN';
+  try {
+    const noTok = await j('GET', '/api/tasks/endpoints');
+    assert.equal(noTok.status, 401, '开放模式匿名不应读任务端点配置');
+    const withTok = await j('GET', '/api/tasks/endpoints', undefined, { 'X-Admin-Token': 'SECRET_ADMIN' });
+    assert.equal(withTok.status, 200);
+  } finally {
+    config.openMode = prevOpen;
+    config.adminToken = prevAdm;
+  }
+});
+
 test('关闭测试服务器', () => {
   server.close();
   assert.ok(true);

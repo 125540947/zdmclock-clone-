@@ -80,3 +80,35 @@ test('recentLedger 按时间倒序并带昵称', () => {
   assert.equal(list[0].id, 'a2'); // 倒序
   assert.equal(list[0].nickname, '甲');
 });
+
+// Phase 2：visibleIds 过滤（OPEN_MODE 按 /24 网段隔离，仅统计集合内账号）
+test('visibleIds 过滤：summarize/daily/by-task/ledger 仅统计集合内账号', () => {
+  const db = freshDb();
+  const u1 = { id: 'u1', nickname: '甲', assets: { gold: 110, silver: 0, exp: 50, level: 'Lv.2' }, streak: 3, totalClockIn: 10 };
+  const u2 = { id: 'u2', nickname: '乙', assets: { gold: 5, silver: 0, exp: 2, level: 'Lv.1' }, streak: 1, totalClockIn: 2 };
+  db.users.push(u1, u2);
+  const today = new Date();
+  const ds = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  db.assetLedger.push({ id: 'a1', ts: new Date().toISOString(), date: ds, userId: 'u1', taskType: 'clock', taskName: '每日签到', goldDelta: 10, silverDelta: 0, expDelta: 0, goldAfter: 110, silverAfter: 0, expAfter: 50, levelAfter: 'Lv.2', success: true, message: '' });
+  db.assetLedger.push({ id: 'a2', ts: new Date().toISOString(), date: ds, userId: 'u2', taskType: 'comment', taskName: '自动评论', goldDelta: 3, silverDelta: 0, expDelta: 0, goldAfter: 5, silverAfter: 0, expAfter: 0, levelAfter: null, success: true, message: '' });
+  db.assetSnapshots.push({ userId: 'u1', date: ds, gold: 110, silver: 0, exp: 50, level: 'Lv.2' });
+  db.assetSnapshots.push({ userId: 'u2', date: ds, gold: 5, silver: 0, exp: 0, level: 'Lv.1' });
+
+  const onlyU1 = new Set(['u1']);
+  const s = summarizeAssets(db, onlyU1);
+  assert.equal(s.users.length, 1);
+  assert.equal(s.users[0].id, 'u1');
+  assert.equal(s.totals.gold, 110);
+  assert.equal(s.totals.users, 1);
+
+  const series = dailyAssetSeries(db, 7, onlyU1);
+  assert.equal(series[series.length - 1].goldDelta, 10, '仅 u1 的增量');
+
+  const items = assetByTask(db, 30, onlyU1);
+  assert.ok(items.every((i) => i.taskType === 'clock'));
+  assert.ok(!items.some((i) => i.taskType === 'comment'));
+
+  const list = recentLedger(db, 50, onlyU1);
+  assert.ok(list.every((e) => e.userId === 'u1'));
+  assert.equal(list.length, 1);
+});

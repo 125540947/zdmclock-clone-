@@ -126,8 +126,9 @@ export function applyAssetEffect(db, user, taskType, taskName, opts = {}) {
 }
 
 // 资产总览：每用户当前资产 + 今日增量 + 连击/累计；含全局合计
-export function summarizeAssets(db) {
-  const users = db.users || [];
+// visibleIds：可选 Set<userId>；传入时仅统计该集合内账号（OPEN_MODE 按 /24 网段隔离），null/省略=全部。
+export function summarizeAssets(db, visibleIds = null) {
+  const users = (db.users || []).filter((u) => !visibleIds || visibleIds.has(u.id));
   const ledger = db.assetLedger || [];
   const today = todayStr();
   const perUser = users.map((u) => {
@@ -171,7 +172,8 @@ export function summarizeAssets(db) {
 }
 
 // 日收益序列（含累计总量）：返回最近 days 天，每天 { date, 各增量, 各累计 }
-export function dailyAssetSeries(db, days = 30) {
+// visibleIds：可选 Set<userId>；传入时仅统计该集合内账号（OPEN_MODE 按 /24 网段隔离），null/省略=全部。
+export function dailyAssetSeries(db, days = 30, visibleIds = null) {
   const ledger = db.assetLedger || [];
   const snaps = db.assetSnapshots || [];
   const base = new Date();
@@ -183,6 +185,7 @@ export function dailyAssetSeries(db, days = 30) {
   }
   const deltaByDate = {};
   for (const e of ledger) {
+    if (visibleIds && !visibleIds.has(e.userId)) continue;
     if (!deltaByDate[e.date]) deltaByDate[e.date] = { gold: 0, silver: 0, exp: 0 };
     deltaByDate[e.date].gold += e.goldDelta || 0;
     deltaByDate[e.date].silver += e.silverDelta || 0;
@@ -191,6 +194,7 @@ export function dailyAssetSeries(db, days = 30) {
   // 每日快照（跨用户求和），用于锚定累计总量、修正漂移
   const snapByDate = {};
   for (const s of snaps) {
+    if (visibleIds && !visibleIds.has(s.userId)) continue;
     if (!snapByDate[s.date]) snapByDate[s.date] = { gold: 0, silver: 0, exp: 0, has: false };
     snapByDate[s.date].gold += s.gold || 0;
     snapByDate[s.date].silver += s.silver || 0;
@@ -223,13 +227,15 @@ export function dailyAssetSeries(db, days = 30) {
 }
 
 // 任务贡献统计：最近 days 天内，各任务类型累计的增量与执行次数
-export function assetByTask(db, days = 30) {
+// visibleIds：可选 Set<userId>；传入时仅统计该集合内账号（OPEN_MODE 按 /24 网段隔离），null/省略=全部。
+export function assetByTask(db, days = 30, visibleIds = null) {
   const ledger = db.assetLedger || [];
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - (days - 1));
   const cutoffStr = localDateStr(cutoff);
   const map = {};
   for (const e of ledger) {
+    if (visibleIds && !visibleIds.has(e.userId)) continue;
     if (e.date < cutoffStr) continue;
     if (!map[e.taskType]) {
       map[e.taskType] = { taskType: e.taskType, taskName: taskNameOf(e.taskType), count: 0, goldDelta: 0, silverDelta: 0, expDelta: 0 };
@@ -251,10 +257,12 @@ export function assetByTask(db, days = 30) {
 }
 
 // 最近账本明细（带昵称）
-export function recentLedger(db, limit = 50) {
+// visibleIds：可选 Set<userId>；传入时仅统计该集合内账号（OPEN_MODE 按 /24 网段隔离），null/省略=全部。
+export function recentLedger(db, limit = 50, visibleIds = null) {
   const ledger = db.assetLedger || [];
   const userMap = Object.fromEntries((db.users || []).map((u) => [u.id, u.nickname || u.smzdmId || '未知']));
   return [...ledger]
+    .filter((e) => !visibleIds || visibleIds.has(e.userId))
     .sort((a, b) => b.ts.localeCompare(a.ts))
     .slice(0, limit)
     .map((e) => ({ ...e, nickname: userMap[e.userId] || '未知' }));

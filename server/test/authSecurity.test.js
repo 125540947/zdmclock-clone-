@@ -6,7 +6,8 @@ import assert from 'node:assert/strict';
 import {
   safeEqual, getClientIp, ipToLong, sameSegment, extractAdminToken,
   isAdminRequest, canAccessUser, mutationGuard, requireAdmin,
-  authRequired, authRequiredOrInstall, authRequiredOrQuery, maskCookie
+  authRequired, authRequiredOrInstall, authRequiredOrQuery, maskCookie,
+  computeVisibleUserIds, adminOrAuthRequired, parseCidrList, ipInCidrList
 } from '../src/auth.js';
 import { config } from '../src/config.js';
 
@@ -242,4 +243,61 @@ test('mutationGuard：开放模式走 requireAdmin；非开放走 authRequired',
 test('maskCookie：非空遮罩、空串返回空', () => {
   assert.equal(maskCookie('sess_abc'), '已保存(已隐藏)');
   assert.equal(maskCookie(''), '');
+});
+
+// ---------- computeVisibleUserIds（Phase 2 OPEN_MODE 资产隔离）----------
+test('computeVisibleUserIds：非开放模式返回 null（全部可见）', () => {
+  config.openMode = false;
+  const db = { users: [{ id: 'a', recordedIp: '9.9.9.9' }, { id: 'b', recordedIp: '8.8.8.8' }] };
+  assert.equal(computeVisibleUserIds(db, mockReq()), null);
+});
+test('computeVisibleUserIds：开放模式管理员返回 null（全部可见）', () => {
+  config.openMode = true; config.adminToken = 'SECRET_ADMIN';
+  const db = { users: [{ id: 'a', recordedIp: '9.9.9.9' }] };
+  assert.equal(computeVisibleUserIds(db, mockReq({ headers: { 'x-admin-token': 'SECRET_ADMIN' } })), null);
+});
+test('computeVisibleUserIds：开放模式非管理员仅同 /24 网段 + 无 recordedIp 遗留账号', () => {
+  config.openMode = true; config.adminToken = 'SECRET_ADMIN';
+  const db = {
+    users: [
+      { id: 'a', recordedIp: '192.168.1.10' }, // 同段（访客 192.168.1.50）
+      { id: 'b', recordedIp: '192.168.2.10' }, // 跨段 → 排除
+      { id: 'c', recordedIp: undefined } // 遗留无记录 → 可见
+    ]
+  };
+  const ids = computeVisibleUserIds(db, mockReq({ ip: '192.168.1.50' }));
+  assert.ok(ids instanceof Set);
+  assert.ok(ids.has('a') && ids.has('c'));
+  assert.equal(ids.has('b'), false);
+});
+
+// ---------- adminOrAuthRequired（Phase 2 管理/任务路由隔离）----------
+test('adminOrAuthRequired：非开放模式维持 authRequired（免鉴权放行）', () => {
+  config.openMode = false; config.requireAuth = false;
+  let n = 0; const next = () => { n++; };
+  adminOrAuthRequired(mockReq(), mockRes(), next);
+  assert.equal(n, 1, '非开放免鉴权应放行');
+});
+test('adminOrAuthRequired：开放模式无管理员令牌 → 401，有则放行', () => {
+  config.openMode = true; config.adminToken = 'SECRET_ADMIN'; config.requireAuth = false;
+  let n = 0; const next = () => { n++; };
+  const r = mockRes();
+  adminOrAuthRequired(mockReq(), r, next);
+  assert.equal(r.statusCode, 401, '开放模式匿名应拒');
+  assert.equal(n, 0);
+  const ok = mockRes();
+  adminOrAuthRequired(mockReq({ headers: { 'x-admin-token': 'SECRET_ADMIN' } }), ok, next);
+  assert.equal(n, 1, '开放模式管理员应放行');
+});
+
+// ---------- parseCidrList / ipInCidrList（Phase 2 代理认证来源白名单）----------
+test('parseCidrList / ipInCidrList：CIDR 与单 IP 匹配', () => {
+  const list = parseCidrList('10.0.0.0/8,192.168.1.10,127.0.0.1');
+  assert.equal(list.length, 3);
+  assert.equal(ipInCidrList('10.1.2.3', list), true);
+  assert.equal(ipInCidrList('11.0.0.1', list), false);
+  assert.equal(ipInCidrList('192.168.1.10', list), true);
+  assert.equal(ipInCidrList('192.168.1.11', list), false);
+  assert.equal(ipInCidrList('8.8.8.8', []), true, '空白名单不限制来源');
+  assert.equal(ipInCidrList('not-an-ip', list), false);
 });

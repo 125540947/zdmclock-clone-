@@ -42,6 +42,10 @@ export const config = {
   // 可选：前置代理注入的「已认证用户」请求头（如 Cloudflare Access: Cf-Access-Authenticated-User-Email；
   // nginx auth_request: X-Forwarded-User）。配置后 login 会校验该头存在才放行；留空则只要 trustProxyAuth=true 即放行。
   proxyAuthHeader: process.env.PROXY_AUTH_HEADER || '',
+  // 可选：前置代理来源 IP 白名单（逗号分隔，支持单 IP 或 CIDR，如 10.0.0.0/8,192.168.1.10,127.0.0.1）。
+  // trustProxyAuth 模式下 login 代理分支仅当来源 IP 命中白名单才签发 Token；留空则不限制来源
+  // （仅靠 proxyAuthHeader 存在性兜底 —— 直连暴露时攻击者可自带头绕过，故强烈建议同时配置本项与私有绑定）。
+  proxyTrustedIps: process.env.PROXY_TRUSTED_IPS || '',
   // 开放模式（OPEN_MODE）：彻底移除所有身份验证与登录流程——所有业务/数据接口对匿名访客直接放行，
   // 无需 Token、无需登录、无需前置代理。用于「开放式录入系统」等受信任或隔离网络场景。
   // ⚠️ 高危操作（系统更新 requireAdmin，会执行 git pull + 重启）仍受 ADMIN_TOKEN 保护，不会被匿名放开。

@@ -7,7 +7,7 @@ import { config } from '../config.js';
 import { dbgLog } from '../log.js';
 import { runTask } from '../taskRunner.js';
 import { validateCron } from '../scheduler.js';
-import { authRequired, mutationGuard } from '../auth.js';
+import { authRequired, mutationGuard, adminOrAuthRequired } from '../auth.js';
 import { notify, isSafeSmzdmUrl } from '../notifier.js';
 import { CUSTOM_TYPES, CUSTOM_TASK_DEFS, TASK_TEMPLATES, REAL_STRATEGY_TYPES } from '../taskMatrix.js';
 
@@ -17,7 +17,8 @@ const router = Router();
 const CAPTURES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'captures');
 
 // 任务列表（附带自定义端点任务的"已配置"标记，供前端显示待抓包徽标）
-router.get('/', authRequired, (req, res) => {
+// OPEN_MODE 下强制管理员，避免匿名读取全局任务配置（含用户录入的自定义端点）。
+router.get('/', adminOrAuthRequired, (req, res) => {
   const db = load();
   const endpoints = (db.settings && db.settings.taskEndpoints) || {};
   const list = db.tasks.map((t) => {
@@ -44,7 +45,8 @@ router.get('/', authRequired, (req, res) => {
 });
 
 // 任务接口配置（抓包结果）读取：返回已配置端点 + 自定义任务元数据 + 推荐模板
-router.get('/endpoints', authRequired, (req, res) => {
+// OPEN_MODE 下强制管理员（暴露用户录入的自定义端点 URL，属运营配置）。
+router.get('/endpoints', adminOrAuthRequired, (req, res) => {
   const db = load();
   res.json({
     endpoints: (db.settings && db.settings.taskEndpoints) || {},
@@ -54,7 +56,8 @@ router.get('/endpoints', authRequired, (req, res) => {
 });
 
 // 推荐端点模板（社区逆向的真实形态），前端"加载推荐模板"用，免去记忆 URL
-router.get('/templates', authRequired, (req, res) => {
+// OPEN_MODE 下强制管理员（与 /endpoints 一致，模板用于配置运营任务）。
+router.get('/templates', adminOrAuthRequired, (req, res) => {
   res.json({ templates: TASK_TEMPLATES });
 });
 

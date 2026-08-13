@@ -81,4 +81,21 @@ test('TRUST_PROXY_AUTH：缺注入头 401，带注入头放行', async () => {
   config.proxyAuthHeader = '';
 });
 
+// Phase 2 代理认证加固：trustProxyAuth=true 但未配 proxyAuthHeader 属致命误配，运行期也应拒绝签发（启动期已 process.exit）
+test('TRUST_PROXY_AUTH=true 但未配 PROXY_AUTH_HEADER → /login 拒绝签发（503）', async () => {
+  config.openMode = false;
+  config.trustProxyAuth = true;
+  config.proxyAuthHeader = ''; // 致命误配
+  config.proxyTrustedIps = '';
+  try {
+    const r = await j('POST', '/api/auth/login', { username: 'proxy' });
+    assert.equal(r.status, 503, '误配应拒绝签发 Token');
+    assert.equal(r.data.error, 'proxy_auth_misconfigured');
+  } finally {
+    config.trustProxyAuth = false;
+    config.proxyAuthHeader = '';
+    config.proxyTrustedIps = '';
+  }
+});
+
 test('关闭测试服务器', () => { server.close(); });

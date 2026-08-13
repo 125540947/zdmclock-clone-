@@ -107,6 +107,37 @@ export function sameSegment(ipA, ipB, bits = 24) {
   return (a & mask) === (b & mask);
 }
 
+// 解析 IP/CIDR 白名单字符串（逗号分隔）。返回 [{ base, mask }]，非法项忽略。
+export function parseCidrList(str) {
+  if (!str) return [];
+  return String(str)
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => {
+      if (s.includes('/')) {
+        const [ip, bitsStr] = s.split('/');
+        const bits = Number(bitsStr);
+        const base = ipToLong(ip);
+        if (base === null || !Number.isInteger(bits) || bits < 0 || bits > 32) return null;
+        const mask = bits >= 32 ? 0xffffffff : (0xffffffff << (32 - bits)) >>> 0;
+        return { base, mask };
+      }
+      const ip = ipToLong(s);
+      if (ip === null) return null;
+      return { base: ip, mask: 0xffffffff };
+    })
+    .filter(Boolean);
+}
+
+// 判断 IPv4 是否命中白名单。list 为空（未配置）返回 true（不限制来源，由上层 proxyAuthHeader 兜底）。
+export function ipInCidrList(ip, list) {
+  if (!list || !list.length) return true;
+  const v = ipToLong(ip);
+  if (v === null) return false;
+  return list.some(({ base, mask }) => (v & mask) === (base & mask));
+}
+
 // 从请求中提取管理员 Token（与 requireAdmin 同源）：X-Admin-Token 头 > body.adminToken > Authorization。
 export function extractAdminToken(req) {
   const h = req.headers.authorization || '';
@@ -130,6 +161,31 @@ export function isAdminRequest(req) {
 export function mutationGuard(req, res, next) {
   if (config.openMode) return requireAdmin(req, res, next);
   return authRequired(req, res, next);
+}
+
+// 运营/管理类端点守卫（Phase 2 隔离缺口修复）：
+// 开放模式（OPEN_MODE）下强制 requireAdmin —— 全局运营统计、任务端点配置等不应向匿名访客暴露；
+// 非开放模式维持原 authRequired（含 REQUIRE_AUTH=false 时免鉴权开箱即跑，行为不变）。
+export function adminOrAuthRequired(req, res, next) {
+  if (config.openMode) return requireAdmin(req, res, next);
+  return authRequired(req, res, next);
+}
+
+// 计算当前请求者「可见的账号 id 集合」（用于 OPEN_MODE 资产数据按 /24 网段隔离）。
+// 返回 null 表示「全部可见」（管理员 / 非开放模式）；返回 Set 表示仅这些 id 可见（开放模式非管理员，按网段过滤）。
+// 规则与 canAccessUser 保持一致：无 recordedIp 的遗留账号对所有人可见（迁移兼容），
+// 有 recordedIp 则必须命中访问者网段。
+export function computeVisibleUserIds(db, req) {
+  if (isAdminRequest(req)) return null;
+  if (config.openMode) {
+    const viewerIp = getClientIp(req);
+    const set = new Set();
+    for (const u of db.users || []) {
+      if (!u.recordedIp || sameSegment(viewerIp, u.recordedIp, 24)) set.add(u.id);
+    }
+    return set;
+  }
+  return null;
 }
 
 // 判断是否可访问某个账号的私有数据（签到记录/streak/points、真机自检等）。
