@@ -65,6 +65,7 @@
 import { ref, onMounted, onBeforeUnmount, provide, computed } from 'vue';
 import { useRoute } from 'vue-router';
 import { login, getAuthConfig } from './api/client.js';
+import { session } from './api/session.js';
 
 const nav = [
   { name: 'userclock', label: '签到', icon: '📅' },
@@ -74,7 +75,7 @@ const nav = [
   { name: 'more', label: '更多', icon: '🧭' }
 ];
 
-const needsLogin = ref(!localStorage.getItem('zdm_token'));
+const needsLogin = ref(true);
 const username = ref('admin');
 const password = ref('');
 const busy = ref(false);
@@ -83,8 +84,8 @@ const openMode = ref(false);
 const adminMode = ref(false);
 
 // 是否为管理员（开放模式下持有有效 ADMIN_TOKEN 即视为管理员，可突破同网段/改删限制）。
-// 管理员登录后 App.vue 会 reload，localStorage 中已写入 zdm_admin_token，刷新时即生效。
-const isAdmin = computed(() => !!localStorage.getItem('zdm_admin_token'));
+// #190：不再读 localStorage（HttpOnly Cookie 不可读），改由后端 /api/auth/config 下发的 session.isAdmin 驱动。
+const isAdmin = computed(() => session.isAdmin);
 // 透传给子视图：开放模式 + 非管理员 → 隐藏改删/配置等写按钮（P1-4）
 provide('openMode', openMode);
 provide('isAdmin', isAdmin);
@@ -138,22 +139,25 @@ onMounted(async () => {
   window.addEventListener('zdm:unauthorized', onUnauthorized);
   // 开放模式（OPEN_MODE）/ 前置代理已认证（TRUST_PROXY_AUTH）/ 关闭鉴权（REQUIRE_AUTH=false）：
   // 无需登录，直接进入应用；并尝试自动获取 token 供后续接口调用与油猴脚本「一键安装」使用。
+  // #190：getAuthConfig 内部已用后端下发的 loggedIn / isAdmin 刷新 session（不再依赖 localStorage）。
   try {
     const cfg = await getAuthConfig();
     openMode.value = !!(cfg && cfg.openMode);
-    if (cfg.openMode || cfg.trustProxyAuth || !cfg.requireAuth) {
+    const noAuthNeeded = cfg.openMode || cfg.trustProxyAuth || !cfg.requireAuth;
+    if (noAuthNeeded) {
       needsLogin.value = false;
       if (cfg.openMode || cfg.trustProxyAuth) {
         try {
-          const d = await login('open', '');
-          if (d && d.token) needsLogin.value = false;
+          await login('open', '');
         } catch {
           /* 开放模式下即便登录失败也不挡路，后端会直接放行 */
         }
       }
+    } else {
+      needsLogin.value = !session.loggedIn;
     }
   } catch {
-    /* 配置接口异常时维持默认行为（按 localStorage token 判断） */
+    /* 配置接口异常时维持默认行为（默认显示登录浮层） */
   }
 });
 onBeforeUnmount(() => window.removeEventListener('zdm:unauthorized', onUnauthorized));

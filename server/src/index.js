@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
-import { flushPersist } from './store.js';
+import { load, flushPersist } from './store.js';
 import { rateLimit } from './middleware/rateLimit.js';
 import authRoutes from './routes/auth.js';
 import userRoutes from './routes/users.js';
@@ -18,6 +18,7 @@ import notifyRoutes from './routes/notify.js';
 import assetsRoutes from './routes/assets.js';
 import healthRoutes from './routes/health.js';
 import updateRoutes from './routes/update.js';
+import { probeHealth } from './health.js';
 import { startScheduler, isSchedulerRunning } from './scheduler.js';
 
 // 全局未捕获异常兜底（P1-10）：best-effort 的异步推送/解析若遗漏 try/catch，
@@ -163,10 +164,31 @@ export function createApp() {
   });
   app.use(express.json({ limit: '256kb' })); // P1：限制请求体大小，防超大 payload DoS
 
-  // 健康检查
-  app.get('/api/health', (req, res) => {
+  // 健康检查：并发探测依赖（DB 可读 + real 模式探 smzdm 可达性），整体受 deadline 约束，
+  // 任一依赖慢/超时只标 degraded，不拖垮就绪探针（#187）。
+  app.get('/api/health', async (req, res) => {
+    const db = load();
+    const checks = [];
+    if (config.smzdmAdapter === 'real') {
+      // 仅在 real 模式探外部可达性：HEAD 探 smzdm 关键基址，超时/失败标 degraded（不致命）。
+      // 用 { name, fn } 形式显式命名，确保超时（未能返回）时 details 仍能定位到 smzdm 这一路依赖。
+      checks.push({
+        name: 'smzdm',
+        fn: async ({ signal }) => {
+          try {
+            await fetch('https://user-api.smzdm.com/', { method: 'HEAD', signal, redirect: 'manual' });
+            return { name: 'smzdm', ok: true };
+          } catch (e) {
+            return { name: 'smzdm', ok: false, degraded: true, error: e && e.message };
+          }
+        }
+      });
+    }
+    const h = await probeHealth(db, { timeoutMs: 2000, checks });
     res.json({
-      ok: true,
+      ok: h.ok,
+      degraded: h.degraded,
+      details: h.details,
       env: config.nodeEnv,
       adapter: config.smzdmAdapter,
       scheduler: isSchedulerRunning() ? 'on' : 'off', // b8：如实反映调度状态

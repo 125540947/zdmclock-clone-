@@ -9,6 +9,7 @@ import { authRequired, authRequiredOrInstall, maskCookie, getClientIp, sameSegme
 import { dbgLog } from '../log.js';
 import { resolvedCheckInTime } from '../clockSchedule.js';
 import { resetRisk } from '../riskControl.js';
+import { requireStr, limitStr, MAX_COOKIE_LEN } from '../validation.js';
 
 // 油猴抓取脚本在仓库 tools/ 下，供前端「复制/下载」用。
 const SCRIPT_PATH = path.resolve(
@@ -68,9 +69,12 @@ router.get('/', authRequired, (req, res) => {
 
 // 新增 smzdm 账号（录入 cookie）
 router.post('/', authRequired, async (req, res) => {
-  const { smzdmId, nickname, cookie } = req.body || {};
-  if (typeof cookie !== 'string' || !cookie.trim()) {
-    return res.status(400).json({ error: 'missing_cookie', message: 'cookie 必填且为字符串' });
+  const { smzdmId, nickname } = req.body || {};
+  let cookie;
+  try {
+    cookie = requireStr(req.body && req.body.cookie, MAX_COOKIE_LEN, 'cookie');
+  } catch (e) {
+    return res.status(400).json({ error: e.code || 'invalid_cookie', message: e.message });
   }
   const sched = normalizeSchedule(req.body);
   if (sched.error) return res.status(400).json(sched);
@@ -119,9 +123,12 @@ router.post('/', authRequired, async (req, res) => {
 // 自动抓取导入（油猴脚本等自动工具调用）：按 smzdmId upsert。
 // 与 POST / 的区别：同名账号（同一 smzdmId）只更新 cookie，不重复建号。
 router.post('/import', authRequiredOrInstall, async (req, res) => {
-  const { cookie, nickname } = req.body || {};
-  if (typeof cookie !== 'string' || !cookie.trim()) {
-    return res.status(400).json({ error: 'missing_cookie', message: 'cookie 必填且为字符串' });
+  const { nickname } = req.body || {};
+  let cookie;
+  try {
+    cookie = requireStr(req.body && req.body.cookie, MAX_COOKIE_LEN, 'cookie');
+  } catch (e) {
+    return res.status(400).json({ error: e.code || 'invalid_cookie', message: e.message });
   }
   const db = load();
   let info = {};
@@ -260,7 +267,11 @@ router.put('/:id', mutationGuard, async (req, res) => {
     if (u.schedMode === 'auto') u.checkInTime = resolvedCheckInTime(u);
   }
   if (cookie) {
-    u.cookie = cookie;
+    try {
+      u.cookie = limitStr(cookie, MAX_COOKIE_LEN, 'cookie');
+    } catch (e) {
+      return res.status(400).json({ error: e.code || 'invalid_cookie', message: e.message });
+    }
     u.cookieExpired = false; // 重新录入 Cookie：解除失效标记并重置该账号风控状态
     resetRisk(u.id);
     try {

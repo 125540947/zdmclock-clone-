@@ -4,6 +4,7 @@ import { config } from '../config.js';
 import { adminOrAuthRequired } from '../auth.js';
 import { resolvedCheckInTime, parseHM, fmtHM, windowMinutes } from '../clockSchedule.js';
 import { resolveRisk } from '../riskControl.js';
+import { boundedInt } from '../validation.js';
 
 const router = Router();
 
@@ -132,16 +133,16 @@ router.get('/risk-settings', adminOrAuthRequired, (req, res) => {
 router.put('/risk-settings', adminOrAuthRequired, async (req, res) => {
   const db = load();
   const b = (req.body && req.body.settings) || {};
-  const num = (v, d) => (Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : d);
   const cur = db.settings.risk || {};
+  // #188：所有数值字段钳制到 [0, 合理上限]，杜绝超大/负值导致调度异常或内存浪费
   const next = {
     enabled: b.enabled !== undefined ? !!b.enabled : !!cur.enabled,
-    preDelayMinMs: num(b.preDelayMinMs, cur.preDelayMinMs ?? config.riskPreDelayMinMs),
-    preDelayMaxMs: num(b.preDelayMaxMs, cur.preDelayMaxMs ?? config.riskPreDelayMaxMs),
-    circuitFailures: num(b.circuitFailures, cur.circuitFailures ?? config.riskCircuitFailures),
-    circuitCooldownMs: num(b.circuitCooldownMs, cur.circuitCooldownMs ?? config.riskCircuitCooldownMs),
-    adaptiveStepMs: num(b.adaptiveStepMs, cur.adaptiveStepMs ?? config.riskAdaptiveStepMs),
-    maxExtraMs: num(b.maxExtraMs, cur.maxExtraMs ?? config.riskMaxExtraMs)
+    preDelayMinMs: boundedInt(b.preDelayMinMs, 0, 600000, cur.preDelayMinMs ?? config.riskPreDelayMinMs),
+    preDelayMaxMs: boundedInt(b.preDelayMaxMs, 0, 600000, cur.preDelayMaxMs ?? config.riskPreDelayMaxMs),
+    circuitFailures: boundedInt(b.circuitFailures, 0, 100, cur.circuitFailures ?? config.riskCircuitFailures),
+    circuitCooldownMs: boundedInt(b.circuitCooldownMs, 0, 86400000, cur.circuitCooldownMs ?? config.riskCircuitCooldownMs),
+    adaptiveStepMs: boundedInt(b.adaptiveStepMs, 0, 600000, cur.adaptiveStepMs ?? config.riskAdaptiveStepMs),
+    maxExtraMs: boundedInt(b.maxExtraMs, 0, 600000, cur.maxExtraMs ?? config.riskMaxExtraMs)
   };
   // 防御：最小等待窗口不能大于最大等待窗口
   if (next.preDelayMinMs > next.preDelayMaxMs) next.preDelayMinMs = next.preDelayMaxMs;

@@ -56,3 +56,36 @@ export async function checkAccounts(db, adapter, { onExpired } = {}) {
   }
   return results;
 }
+
+// 健康检查探测（#187）：并发检查各依赖，整体受 deadline 约束（AbortSignal.timeout）。
+// 任一依赖慢/超时不会拖垮 /api/health（避免就绪探针超时导致实例被反复重启）。
+// - db：调用方已完成 load()，这里仅校验结构可用（同步，瞬时）。
+// - checks：调用方注入的额外依赖探测（如 real 模式探 smzdm 可达性）。
+//   每项可为「函数」或「{ name, fn }」：函数签名为 async ({ signal }) => { name, ok, degraded? }，
+//   其返回对象自带 name；若传入 { name, fn } 则 name 优先使用，确保超时（未能返回）时仍能定位是哪路依赖。
+//   可接收 { signal } 自行响应截止；未响应的慢检查由外层 Promise.race 在 deadline 处中断为 degraded。
+export async function probeHealth(db, { timeoutMs = 2000, checks = [] } = {}) {
+  const signal = AbortSignal.timeout(timeoutMs);
+  const abort = new Promise((_, reject) => {
+    if (signal.aborted) return reject(new Error('timeout'));
+    signal.addEventListener('abort', () => reject(new Error('timeout')), { once: true });
+  });
+  // 归一化检查项：保留显式 name，缺省按序号，便于超时后定位
+  const specs = (checks || []).map((c, i) => {
+    if (typeof c === 'function') return { name: `check${i}`, fn: c };
+    return { name: c && c.name ? c.name : `check${i}`, fn: c && (c.fn || c) };
+  });
+  const all = [
+    { name: 'db', value: Promise.resolve({ name: 'db', ok: !!(db && Array.isArray(db.users) && Array.isArray(db.clockRecords)) }) },
+    ...specs.map((s) => ({ name: s.name, value: Promise.resolve().then(() => s.fn({ signal })) }))
+  ];
+  const settled = await Promise.allSettled(all.map((a) => Promise.race([a.value, abort])));
+  const details = settled.map((s, i) =>
+    s.status === 'fulfilled'
+      ? s.value
+      : { name: all[i].name, ok: false, degraded: true, error: String(s.reason && s.reason.message || s.reason) }
+  );
+  const degraded = details.some((d) => d.degraded);
+  const ok = !details.some((d) => !d.ok && !d.degraded);
+  return { ok, degraded, details };
+}

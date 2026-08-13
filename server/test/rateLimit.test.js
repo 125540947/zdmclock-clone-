@@ -74,3 +74,30 @@ test('rateLimit：窗口过期后计数重置', async () => {
   mw(mockReq(), mockRes(), next);
   assert.equal(passed, 2, '窗口过期后应重新放行');
 });
+
+test('rateLimit LRU 容量上限：超出 maxEntries 淘汰最久未访问条目', () => {
+  const mw = rateLimit({ windowMs: 60000, max: 100, maxEntries: 3 });
+  const next = () => {};
+  for (const ip of ['a', 'b', 'c', 'd', 'e']) {
+    mw(mockReq({ ip }), mockRes(), next);
+  }
+  // 仅保留最近访问的 3 个（c,d,e）；最早访问的 a,b 应被 LRU 淘汰
+  assert.equal(mw._store.size, 3, '超出 maxEntries 后应淘汰最旧条目');
+  assert.ok(mw._store.has('c') && mw._store.has('d') && mw._store.has('e'), '应保留最近访问的条目');
+  assert.ok(!mw._store.has('a') && !mw._store.has('b'), '最久未访问的 a,b 应被淘汰');
+  // 被淘汰的旧 key 重新访问应作为新条目（计数从 1 起），不应残留旧计数
+  mw(mockReq({ ip: 'a' }), mockRes(), next);
+  assert.equal(mw._store.get('a').count, 1, '被淘汰后重新访问应重置计数为 1');
+});
+
+test('rateLimit 仍按 max 正确限流（LRU 改造不破坏计数）', () => {
+  const mw = rateLimit({ windowMs: 60000, max: 2, maxEntries: 100 });
+  let passed = 0;
+  const next = () => { passed++; };
+  mw(mockReq({ ip: 'x' }), mockRes(), next);
+  mw(mockReq({ ip: 'x' }), mockRes(), next);
+  const blocked = mockRes();
+  mw(mockReq({ ip: 'x' }), blocked, next);
+  assert.equal(blocked.statusCode, 429, '超过 max 应返回 429');
+  assert.equal(passed, 2);
+});

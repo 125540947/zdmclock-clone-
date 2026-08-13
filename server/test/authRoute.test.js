@@ -98,4 +98,46 @@ test('TRUST_PROXY_AUTH=true 但未配 PROXY_AUTH_HEADER → /login 拒绝签发�
   }
 });
 
+// #190：登录下发 HttpOnly 会话 Cookie，且该 Cookie 能被鉴权中间件接受（不依赖 Bearer / localStorage）。
+test('#190 登录下发 HttpOnly Cookie 且可被 authRequired 接受', async () => {
+  config.openMode = false;
+  config.trustProxyAuth = false;
+  config.requireAuth = true;
+  const loginRes = await fetch(base + '/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: config.adminUsername, password: config.adminPassword })
+  });
+  const setCookie = loginRes.headers.get('set-cookie') || '';
+  assert.ok(/zb_token=/.test(setCookie), '应下发 zb_token Cookie');
+  assert.ok(/HttpOnly/i.test(setCookie), 'Cookie 应为 HttpOnly（防 XSS 读取）');
+  const cookie = setCookie.split(';')[0];
+  // 不带 Cookie 访问受保护接口 → 401
+  const noCookie = await j('GET', '/api/users');
+  assert.equal(noCookie.status, 401, '无 Cookie 应被拒');
+  // 带 Cookie → 200（Cookie 被 authRequired 接受）
+  const withCookie = await j('GET', '/api/users', undefined, { Cookie: cookie });
+  assert.equal(withCookie.status, 200, 'HttpOnly Cookie 应通过鉴权');
+  // /config 由 Cookie 推导 loggedIn
+  const cfg = await j('GET', '/api/auth/config', undefined, { Cookie: cookie });
+  assert.equal(cfg.data.loggedIn, true, '/config 应由 Cookie 推导 loggedIn');
+  config.requireAuth = false;
+});
+
+// #190：登出清除 HttpOnly 会话 Cookie。
+test('#190 登出清除会话 Cookie', async () => {
+  config.openMode = false;
+  config.trustProxyAuth = false;
+  config.requireAuth = false;
+  const loginRes = await fetch(base + '/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: config.adminUsername, password: config.adminPassword })
+  });
+  const cookie = (loginRes.headers.get('set-cookie') || '').split(';')[0];
+  const outRes = await fetch(base + '/api/auth/logout', { method: 'POST', headers: { Cookie: cookie } });
+  const outSc = outRes.headers.get('set-cookie') || '';
+  assert.ok(/zb_token=/i.test(outSc) && /(max-age=0|expires=)/i.test(outSc), '登出应清除 zb_token（置空或过期）');
+});
+
 test('关闭测试服务器', () => { server.close(); });

@@ -1,31 +1,17 @@
 import axios from 'axios';
+import { session, applySession } from './session.js';
 
 const base = import.meta.env.VITE_API_BASE || '/api';
 
 export const api = axios.create({
   baseURL: base,
-  timeout: 15000
+  timeout: 15000,
+  // #190：开启凭据，使浏览器自动携带（同域）HttpOnly 会话 Cookie（zb_token / zb_admin_token），
+  // 无需再把 Token 暴露在 JS 可读的 localStorage 中（防 XSS 窃取）。
+  withCredentials: true
 });
 
-// 若本地已登录，自动携带 Token
-const token = localStorage.getItem('zdm_token');
-if (token) {
-  api.defaults.headers.common['Authorization'] = 'Bearer ' + token;
-}
-
-// 请求拦截器：若本地存有管理员 Token（开放模式下管理员登录后写入），为所有请求附加 X-Admin-Token，
-// 使管理员在开放模式下能突破同网段过滤、执行改删/系统更新等高权限操作；匿名访客无此头，不受影响。
-api.interceptors.request.use((cfg) => {
-  const at = localStorage.getItem('zdm_admin_token');
-  if (at) {
-    cfg.headers = cfg.headers || {};
-    cfg.headers['X-Admin-Token'] = at;
-  }
-  return cfg;
-});
-
-// 全局 401 拦截：凭证失效时清掉本地 token 并广播「需要登录」事件，
-// 由 App.vue 的登录浮层接管。避免各页面各自处理鉴权。
+// 全局 401 拦截：凭证失效时清掉会话并广播「需要登录」事件，由 App.vue 的登录浮层接管。
 // 例外（P1-4）：开放模式下匿名调用「需管理员」的写/触发接口会收到 admin_token_required，
 // 这是预期的「无权」结果，不应弹登录浮层（避免误登出），交由调用方显示错误提示即可。
 api.interceptors.response.use(
@@ -35,8 +21,8 @@ api.interceptors.response.use(
       const body = err.response.data || {};
       const isExpectedNoPermission = body.error === 'admin_token_required';
       if (!isExpectedNoPermission) {
-        // P2-1：真正的 401（非预期的「无权写」）需同时清除管理员令牌，避免残留越权态
-        setToken(null, null);
+        // P2-1 / #190：真正的 401（非预期的「无权写」）→ 调后端清掉 HttpOnly 会话 Cookie，并广播需要登录
+        logout();
         window.dispatchEvent(new Event('zdm:unauthorized'));
       }
     }
@@ -44,34 +30,45 @@ api.interceptors.response.use(
   }
 );
 
-export function setToken(t, adminToken) {
-  if (t) {
-    localStorage.setItem('zdm_token', t);
-    api.defaults.headers.common['Authorization'] = 'Bearer ' + t;
-  } else {
-    localStorage.removeItem('zdm_token');
-    delete api.defaults.headers.common['Authorization'];
-  }
-  if (adminToken !== undefined) {
-    if (adminToken) localStorage.setItem('zdm_admin_token', adminToken);
-    else localStorage.removeItem('zdm_admin_token');
-  }
+// #190：会话 Token 已改为 HttpOnly Cookie，前端不再经手明文 Token。
+// setToken 仅作为「登录成功」的语义钩子（供调用方刷新页面/状态），不再读写 localStorage。
+export function setToken() {
+  /* no-op：明文 Token 不再存于前端 */
 }
 
-// 取独立管理员 Token（用于系统更新等高危操作）；未单独配置时回落为空（客户端不发头，由服务端兜底）。
+// 登出：调后端清除 HttpOnly 会话 Cookie，并同步本地会话状态。
+export async function logout() {
+  try {
+    await api.post('/auth/logout');
+  } catch {
+    /* 忽略网络错误，仍按本地登出处理 */
+  }
+  session.loggedIn = false;
+  session.isAdmin = false;
+}
+
+// 取独立管理员 Token：#190 起由 HttpOnly Cookie 自动携带，前端不再持有明文，故返回空串
+// （历史调用方如系统更新接口无需再手动附加 X-Admin-Token 头）。
 export function getAdminToken() {
-  return localStorage.getItem('zdm_admin_token') || '';
+  return '';
 }
 
 export async function login(username, password) {
   const { data } = await api.post('/auth/login', { username, password });
-  if (data.token) setToken(data.token, data.adminToken);
+  // 后端已在响应里下发 HttpOnly 会话 Cookie；这里用 /config 刷新前端会话态（loggedIn / isAdmin）。
+  try {
+    const cfg = await getAuthConfig();
+    applySession(cfg);
+  } catch {
+    /* 配置失败不阻塞登录流程 */
+  }
   return data;
 }
 
-// 公开鉴权配置：前端据此决定走「密码登录」还是「前置代理自动登录」
+// 公开鉴权配置：前端据此决定走「密码登录」还是「前置代理自动登录」，并感知会话登录/管理员态。
 export async function getAuthConfig() {
   const { data } = await api.get('/auth/config');
+  applySession(data);
   return data;
 }
 
@@ -194,7 +191,7 @@ export async function getCookieGrabberScript() {
 // ===== 系统更新（从 Git 仓库拉取最新代码，需独立管理员 Token）=====
 export async function getUpdateStatus() {
   const { data } = await api.get('/update/status', {
-    headers: { 'X-Admin-Token': getAdminToken() }
+    headers: { 'X-Admin-Token': getAdminToken() } // #190：管理员令牌改由 HttpOnly Cookie 自动携带，此头仅作兼容占位
   });
   return data;
 }

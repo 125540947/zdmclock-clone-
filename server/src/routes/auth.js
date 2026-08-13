@@ -1,20 +1,57 @@
 import { Router } from 'express';
 import { config } from '../config.js';
-import { safeEqual, getClientIp, parseCidrList, ipInCidrList } from '../auth.js';
+import { safeEqual, getClientIp, parseCidrList, ipInCidrList, parseCookies } from '../auth.js';
 
 // 前置代理来源 IP 白名单（启动时解析一次；为空表示不限制来源，仅靠 proxyAuthHeader 存在性兜底）
 const PROXY_TRUSTED = parseCidrList(config.proxyTrustedIps);
 
 const router = Router();
 
-// 公开配置：前端据此决定是否走「前置代理自动登录」（无需弹密码框）。
+// #190：会话 Cookie 名称与签发选项。HttpOnly 防止 JS（含 XSS）读取 Token；
+// sameSite=lax 缓解 CSRF；secure 仅在 HTTPS 部署（COOKIE_SECURE=1 或 production+req.secure）时开启，
+// 自托管 http 场景保持 false 以保证 Cookie 可被发送。
+const TOKEN_COOKIE = 'zb_token';
+const ADMIN_COOKIE = 'zb_admin_token';
+function sessionCookieOpts(req) {
+  return {
+    httpOnly: true,
+    sameSite: 'lax',
+    path: '/',
+    secure: process.env.COOKIE_SECURE === '1' || (config.nodeEnv === 'production' && !!req.secure)
+  };
+}
+function setSessionCookies(res, req, token, adminToken) {
+  const opts = sessionCookieOpts(req);
+  if (token) res.cookie(TOKEN_COOKIE, token, opts);
+  if (adminToken) res.cookie(ADMIN_COOKIE, adminToken, opts);
+}
+function clearSessionCookies(res) {
+  const opts = { httpOnly: true, sameSite: 'lax', path: '/' };
+  res.clearCookie(TOKEN_COOKIE, opts);
+  res.clearCookie(ADMIN_COOKIE, opts);
+}
+
+// 公开配置：前端据此决定是否走「前置代理自动登录」（无需弹密码框），并感知当前会话是否已登录 / 是否管理员。
+// loggedIn / isAdmin 由 #190 引入的 HttpOnly 会话 Cookie 推导（前端无法读取 HttpOnly Cookie，故由后端告知），
+// 供前端决定登录浮层与后台入口显隐，避免再把 Token 落到 localStorage 被 XSS 窃取。
 router.get('/config', (req, res) => {
+  const cookies = parseCookies(req);
+  const loggedIn = !!(cookies.zb_token && safeEqual(cookies.zb_token, config.apiToken));
+  const isAdmin = !!(config.adminToken && cookies.zb_admin_token && safeEqual(cookies.zb_admin_token, config.adminToken));
   res.json({
     openMode: config.openMode,
     trustProxyAuth: config.trustProxyAuth,
     proxyAuthHeader: !!config.proxyAuthHeader,
-    requireAuth: config.requireAuth
+    requireAuth: config.requireAuth,
+    loggedIn,
+    isAdmin
   });
+});
+
+// #190：登出。清除 HttpOnly 会话 Cookie（普通与管理员），前端无需自行清理 localStorage Token。
+router.post('/logout', (req, res) => {
+  clearSessionCookies(res);
+  res.json({ ok: true });
 });
 
 // 管理员登录：校验 ADMIN_USERNAME/ADMIN_PASSWORD，签发通用 API_TOKEN 与独立 adminToken。
@@ -41,6 +78,7 @@ router.post('/login', (req, res) => {
         resp.username = config.adminUsername || 'admin';
       }
     }
+    setSessionCookies(res, req, resp.token, resp.adminToken);
     return res.json(resp);
   }
   if (config.trustProxyAuth) {
@@ -61,6 +99,7 @@ router.post('/login', (req, res) => {
     if (!ipInCidrList(getClientIp(req), PROXY_TRUSTED)) {
       return res.status(403).json({ error: 'proxy_source_forbidden', message: '来源 IP 不在可信代理网段，拒绝签发 Token' });
     }
+    setSessionCookies(res, req, config.apiToken, config.adminToken || config.apiToken);
     return res.json({
       token: config.apiToken,
       adminToken: config.adminToken || config.apiToken,
@@ -71,6 +110,7 @@ router.post('/login', (req, res) => {
     safeEqual(username, config.adminUsername) &&
     safeEqual(password, config.adminPassword)
   ) {
+    setSessionCookies(res, req, config.apiToken, config.adminToken || config.apiToken);
     return res.json({
       token: config.apiToken,
       adminToken: config.adminToken || config.apiToken,

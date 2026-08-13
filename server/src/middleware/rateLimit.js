@@ -18,27 +18,43 @@ export function rateLimit({
   max = 20,
   methods = ['POST'],
   key = (req) => req.ip || 'unknown',
-  message = '请求过于频繁，请稍后再试'
+  message = '请求过于频繁，请稍后再试',
+  // 容量上限（LRU）：Map 按访问顺序维护，超出时淘汰最久未访问的条目，
+  // 防止 IPv6 / 多客户端场景下内存无限增长（P3-限流器 LRU）。
+  maxEntries = 5000
 } = {}) {
-  const hits = new Map(); // key -> { count, resetAt }
+  const hits = new Map(); // key -> { count, resetAt }，按访问顺序（最近使用移到末尾）
 
-  function cleanup(now) {
+  // 清理已过期条目（resetAt 已过期的桶直接丢弃，无需等待 LRU 淘汰）
+  function evictExpired(now) {
     for (const [k, v] of hits) {
       if (v.resetAt <= now) hits.delete(k);
     }
   }
 
-  return function rateLimitMiddleware(req, res, next) {
+  function rateLimitMiddleware(req, res, next) {
     if (!methods.includes(req.method)) return next();
     const now = Date.now();
     const k = key(req);
+    // LRU：访问即移到末尾（最近使用），淘汰时从首部删最久未访问
     let entry = hits.get(k);
+    if (entry) {
+      hits.delete(k);
+      hits.set(k, entry);
+    }
     if (!entry || entry.resetAt <= now) {
       entry = { count: 0, resetAt: now + windowMs };
       hits.set(k, entry);
     }
-    // 周期性清理过期条目，避免 Map 无界增长
-    if (hits.size > 1000) cleanup(now);
+    // 容量上限：先清过期，仍超限则淘汰最久未访问条目，保证内存有界
+    if (hits.size > maxEntries) {
+      evictExpired(now);
+      while (hits.size > maxEntries) {
+        const oldest = hits.keys().next().value;
+        if (oldest === undefined) break;
+        hits.delete(oldest);
+      }
+    }
     entry.count += 1;
     if (entry.count > max) {
       const retryAfter = Math.ceil((entry.resetAt - now) / 1000);
@@ -50,5 +66,8 @@ export function rateLimit({
       });
     }
     next();
-  };
+  }
+  // 测试钩子：暴露内部桶 Map，便于断言 LRU 容量上限行为（不影响运行时逻辑）
+  rateLimitMiddleware._store = hits;
+  return rateLimitMiddleware;
 }

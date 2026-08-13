@@ -112,3 +112,16 @@ test('visibleIds 过滤：summarize/daily/by-task/ledger 仅统计集合内账�
   assert.ok(list.every((e) => e.userId === 'u1'));
   assert.equal(list.length, 1);
 });
+
+test('assetLedger 快照 exp 字段名修正：snap.exp 存储且 dailyAssetSeries 读取（非恒为 0）', () => {
+  const db = freshDb();
+  const user = { id: 'u1', assets: { gold: 0, silver: 0, exp: 0, level: null } };
+  db.users.push(user);
+  applyAssetEffect(db, user, 'clock', '每日签到', { explicit: { gold: 10, silver: 5, exp: 7 }, success: true });
+  const snap = db.assetSnapshots[0];
+  assert.equal(typeof snap.exp, 'number', '快照应以 exp 字段存储经验值');
+  assert.equal(snap.expAfter, undefined, '不应再以 expAfter 字段存储（与 gold/silver 命名一致）');
+  const series = dailyAssetSeries(db, 1);
+  assert.ok(series[0].expTotal > 0, 'expTotal 不应因字段名错配而恒为 0');
+  assert.equal(series[0].expTotal, snap.exp + 7, 'expTotal = 快照(7) + 当日 delta(7)（与 gold 口径一致）');
+});

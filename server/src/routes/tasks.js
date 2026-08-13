@@ -8,6 +8,7 @@ import { dbgLog } from '../log.js';
 import { runTask } from '../taskRunner.js';
 import { validateCron } from '../scheduler.js';
 import { authRequired, mutationGuard, adminOrAuthRequired } from '../auth.js';
+import { limitStr, MAX_NAME_LEN } from '../validation.js';
 import { notify, isSafeSmzdmUrl } from '../notifier.js';
 import { CUSTOM_TYPES, CUSTOM_TASK_DEFS, TASK_TEMPLATES, REAL_STRATEGY_TYPES } from '../taskMatrix.js';
 
@@ -291,7 +292,7 @@ router.put('/:id', authRequired, async (req, res) => {
     }
     t.limit = Math.floor(lim);
   }
-  if (name !== undefined) t.name = name;
+  if (name !== undefined) t.name = limitStr(name, MAX_NAME_LEN, 'name');
   await withWriteLock(() => persist());
   res.json(t);
 });

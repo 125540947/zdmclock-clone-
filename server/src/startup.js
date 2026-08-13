@@ -9,9 +9,9 @@
 //
 // 幂等：签到本身幂等（applyClock 查今日记录），流水线单任务失败不阻断其余任务。
 
-import { persist, withWriteLock, todayStr } from './store.js';
+import { persist, withWriteLock } from './store.js';
 import { runTask } from './taskRunner.js';
-import { resolvedCheckInTime, parseHM, ACCOUNT_PIPELINE_TYPES } from './clockSchedule.js';
+import { resolvedCheckInTime, parseHM, zonedWallClock, ACCOUNT_PIPELINE_TYPES } from './clockSchedule.js';
 import { config } from './config.js';
 import { notify } from './notifier.js';
 
@@ -20,9 +20,10 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // 运行「智能启动调度」：遍历全部参与账号，对在「今日启动时间窗口内」且「尚未跑过」的账号，
 // 启动其完整日常流水线。由调度器每分钟触发一次，但绝大多数 tick 因「未到时间/已跑过」直接跳过。
 export async function runStartupForAccounts(db) {
-  const today = todayStr();
-  const now = new Date();
-  const nowMin = now.getHours() * 60 + now.getMinutes();
+  // 按配置时区（ZDM_TZ）折算"今天/当前分钟"，避免容器 UTC 导致启动时间整体偏移（与 scheduler cron 求值一致）。
+  const z = zonedWallClock(new Date(), config.tz);
+  const today = z.date;
+  const nowMin = z.getHours() * 60 + z.getMinutes();
   const grace = config.startupGraceMin != null ? config.startupGraceMin : config.catchupGraceMin || 30;
 
   const accounts = (db.users || []).filter(

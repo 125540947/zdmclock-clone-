@@ -1,4 +1,5 @@
 import { createRouter, createWebHashHistory } from 'vue-router';
+import { session } from '../api/session.js';
 import UserClock from '../views/UserClock.vue';
 import AddCookies from '../views/AddCookies.vue';
 import Users from '../views/Users.vue';
@@ -100,11 +101,12 @@ const router = createRouter({
 });
 
 // 专用后台访问控制：标记 requiresAdmin 的路由仅管理员可进入。
-// 判定依据是登录后写入 localStorage 的 zdm_admin_token（开放模式管理员通过
-// 「🔐 管理员」浮层登录、默认模式管理员用 ADMIN_TOKEN 登录后写入）。
+// #190：判定依据改为后端下发的 session.isAdmin（HttpOnly Cookie 不可被 JS 读取，故前端不持有明文令牌）。
 // 非管理员（含开放模式匿名访客）访问管理路由一律重定向到首页，既看不到入口也进不去。
+// 注：session 在 /api/auth/config 解析完成后才就绪；未就绪前（如首屏直访 /admin）先放行，
+// 由后端 requireAdmin 兜底鉴权，避免把合法管理员误挡在门外。
 router.beforeEach((to) => {
-  if (to.meta && to.meta.requiresAdmin && !localStorage.getItem('zdm_admin_token')) {
+  if (to.meta && to.meta.requiresAdmin && session.ready && !session.isAdmin) {
     return { name: 'userclock' };
   }
   return true;

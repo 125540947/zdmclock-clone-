@@ -63,7 +63,7 @@ function recordAssetEvent(db, ev) {
   }
   if (ev.goldAfter != null) snap.gold = round2(ev.goldAfter);
   if (ev.silverAfter != null) snap.silver = round2(ev.silverAfter);
-  if (ev.expAfter != null) snap.expAfter = round2(ev.expAfter);
+  if (ev.expAfter != null) snap.exp = round2(ev.expAfter);
   if (ev.levelAfter != null) snap.level = ev.levelAfter;
   return entry;
 }

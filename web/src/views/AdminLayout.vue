@@ -29,6 +29,8 @@
 
 <script setup>
 import { useRouter } from 'vue-router';
+import { logout } from '../api/client.js';
+import { session } from '../api/session.js';
 
 const router = useRouter();
 const sections = [
@@ -44,10 +46,11 @@ function goBack() {
   router.push({ name: 'userclock' });
 }
 
-// 退出管理员权限：清掉 zdm_admin_token（仅影响后台访问与高危接口），
-// 跳回前台。前端 isAdmin / 路由守卫会立即失效，需要再次「🔐 管理员」登录才能回后台。
-function logoutAdmin() {
-  localStorage.removeItem('zdm_admin_token');
+// 退出管理员权限：调后端清除 HttpOnly 管理员 Cookie（#190），同步本地会话态，跳回前台。
+// 前端 isAdmin / 路由守卫会立即失效，需要再次「🔐 管理员」登录才能回后台。
+async function logoutAdmin() {
+  session.isAdmin = false;
+  await logout();
   router.push({ name: 'userclock' });
 }
 </script>

@@ -9,11 +9,31 @@ export function safeEqual(a, b) {
   return crypto.timingSafeEqual(ba, bb);
 }
 
+// 零依赖解析 Cookie 头（项目 VPS 部署为「源码直拉 + 重启」，未引入 cookie-parser，
+// 避免新增运行时依赖破坏部署；express 的 res.cookie 原生可用，仅解析需自实现）。
+export function parseCookies(req) {
+  const out = {};
+  const raw = req && req.headers && req.headers.cookie;
+  if (!raw) return out;
+  for (const part of String(raw).split(';')) {
+    const idx = part.indexOf('=');
+    if (idx <= 0) continue;
+    const k = part.slice(0, idx).trim();
+    let v = part.slice(idx + 1).trim();
+    try { v = decodeURIComponent(v); } catch { /* 保留原值 */ }
+    if (k) out[k] = v;
+  }
+  return out;
+}
+
 // 写操作 / 管理接口鉴权。REQUIRE_AUTH=false 时直接放行，保证开箱即跑。
+// 凭证来源（任一即可）：Authorization: Bearer <token>（API 客户端 / 旧前端）、
+// 或 HttpOnly 会话 Cookie（zb_token，#190 防 XSS 窃取）。
 export function authRequired(req, res, next) {
   if (config.openMode || !config.requireAuth) return next();
   const h = req.headers.authorization || '';
-  const token = h.startsWith('Bearer ') ? h.slice(7) : '';
+  const bearer = h.startsWith('Bearer ') ? h.slice(7) : '';
+  const token = bearer || parseCookies(req).zb_token || '';
   if (token && safeEqual(token, config.apiToken)) return next();
   return res.status(401).json({ error: 'unauthorized', message: '缺少或无效的 Token' });
 }
@@ -21,24 +41,32 @@ export function authRequired(req, res, next) {
 // 允许 Bearer 头或 ?token= 查询参数二选一（用于「一键安装」油猴脚本直链）。
 // 浏览器导航到 .user.js 无法携带 Authorization 头，前端改从已登录会话的 localStorage 取 token 作为 ?token= 传入；
 // 该 token 本就会写进脚本用于自动推送 Cookie，用 query 传不增加额外泄露面，从而开启鉴权时也能一键安装。
+// 同时接受 zb_token 会话 Cookie（#190）。
 export function authRequiredOrQuery(req, res, next) {
   if (config.openMode || !config.requireAuth) return next();
   const h = req.headers.authorization || '';
   const bearer = h.startsWith('Bearer ') ? h.slice(7) : '';
   const q = String(req.query.token || '');
-  if ((bearer && safeEqual(bearer, config.apiToken)) || (q && safeEqual(q, config.apiToken))) return next();
+  const cookie = parseCookies(req).zb_token || '';
+  if (
+    (bearer && safeEqual(bearer, config.apiToken)) ||
+    (q && safeEqual(q, config.apiToken)) ||
+    (cookie && safeEqual(cookie, config.apiToken))
+  ) return next();
   return res.status(401).json({ error: 'unauthorized', message: '缺少或无效的 Token' });
 }
 
 // 录入接口专用：除通用 API_TOKEN / 独立 ADMIN_TOKEN 外，额外接受窄权限 INSTALL_TOKEN（Bearer 或 ?token= 二选一）。
 // 油猴脚本自动推送 Cookie（POST /users/import）使用 INSTALL_TOKEN，避免把全权限会话/API token 固化进可分发脚本（P1-2 修复）。
+// 同时接受 zb_token 会话 Cookie（#190）。
 export function authRequiredOrInstall(req, res, next) {
   if (config.openMode || !config.requireAuth) return next();
   const h = req.headers.authorization || '';
   const bearer = h.startsWith('Bearer ') ? h.slice(7) : '';
   const q = String(req.query.token || '');
+  const cookie = parseCookies(req).zb_token || '';
   const candidates = [config.apiToken, config.adminToken, config.installToken].filter(Boolean);
-  if (candidates.some((c) => (bearer && safeEqual(bearer, c)) || (q && safeEqual(q, c)))) return next();
+  if (candidates.some((c) => (bearer && safeEqual(bearer, c)) || (q && safeEqual(q, c)) || (cookie && safeEqual(cookie, c)))) return next();
   return res.status(401).json({ error: 'unauthorized', message: '缺少或无效的 Token' });
 }
 
@@ -50,8 +78,8 @@ export function authRequiredOrInstall(req, res, next) {
 // 凭证来源：请求头 X-Admin-Token，或 Authorization: Admin <token>，或 POST body 里的 adminToken。
 export function requireAdmin(req, res, next) {
   const h = req.headers.authorization || '';
-  // 凭证来源优先级：X-Admin-Token 头 > POST body.adminToken > Authorization（支持 Admin 与 Bearer 方案）。
-  let provided = req.headers['x-admin-token'] || (req.body && req.body.adminToken) || '';
+  // 凭证来源优先级：X-Admin-Token 头 > POST body.adminToken > zb_admin_token 会话 Cookie（#190）> Authorization（支持 Admin 与 Bearer 方案）。
+  let provided = req.headers['x-admin-token'] || (req.body && req.body.adminToken) || parseCookies(req).zb_admin_token || '';
   if (!provided && h) {
     if (h.startsWith('Admin ')) provided = h.slice(6);
     else if (h.startsWith('Bearer ')) provided = h.slice(7);
@@ -141,7 +169,7 @@ export function ipInCidrList(ip, list) {
 // 从请求中提取管理员 Token（与 requireAdmin 同源）：X-Admin-Token 头 > body.adminToken > Authorization。
 export function extractAdminToken(req) {
   const h = req.headers.authorization || '';
-  let provided = req.headers['x-admin-token'] || (req.body && req.body.adminToken) || '';
+  let provided = req.headers['x-admin-token'] || (req.body && req.body.adminToken) || parseCookies(req).zb_admin_token || '';
   if (!provided && h) {
     if (h.startsWith('Admin ')) provided = h.slice(6);
     else if (h.startsWith('Bearer ')) provided = h.slice(7);

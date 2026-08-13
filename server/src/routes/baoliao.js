@@ -12,6 +12,7 @@ import {
 } from '../auth.js';
 import { dbgLog } from '../log.js';
 import { normalizeArticleId } from '../smzdm/articleId.js';
+import { limitArr, MAX_IMPORT_ITEMS } from '../validation.js';
 
 const router = Router();
 
@@ -72,6 +73,12 @@ router.post('/bulk', authRequiredOrQuery, async (req, res) => {
   else if (typeof body === 'string' && body.trim())
     raw = body.split(/[\s,;]+/).filter(Boolean).map((u) => ({ url: u }));
   const defaultChannelId = typeof body.channelId === 'string' && body.channelId.trim() ? body.channelId.trim().slice(0, 20) : '';
+  // #188：限制导入项数量上限，防止超大数组（粘贴海量链接/超大 items）拖垮合并或撑爆 db
+  try {
+    limitArr(raw, MAX_IMPORT_ITEMS, '导入项');
+  } catch (e) {
+    return res.status(400).json({ error: e.code || 'invalid', message: e.message });
+  }
   const items = [];
   for (const it of raw) {
     const url = typeof it === 'string' ? it : String(it.url || it.smzdmUrl || '');
