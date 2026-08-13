@@ -16,6 +16,7 @@ import { normalizeArticleId } from './articleId.js';
 import { isSafePushUrl, isSafeSmzdmUrl } from '../notifier.js';
 import { parseJsonp, removeTags } from './parse.js';
 import { config, boundedNum } from '../config.js';
+import { assertPublicDns } from '../dnsGuard.js';
 
 const BASE = (process.env.SMZDM_BASE || 'https://www.smzdm.com').replace(/\/$/, '');
 const API_BASE = (process.env.SMZDM_API_BASE || 'https://user-api.smzdm.com').replace(/\/$/, '');
@@ -139,6 +140,14 @@ export async function call(path, { method = 'GET', cookie, body, ua = UA, base =
   let currentUrl = url;
   let resp;
   for (let attempt = 0; ; attempt++) {
+    // H-02 修复：DNS 重绑定防护（仅对带 Cookie 的凭据出口）。白名单 isSafeSmzdmUrl 只校验主机名，
+    // 但真实连接目标由 DNS 决定；若 DNS 被污染/重绑定解析到内网（如 169.254.169.254 云元数据、
+    // 10/8、127/8），完整 smzdm Cookie 会被发往非预期地址。发起请求前先确认当前目标解析到的
+    // 所有 IP 均为公网地址（初始请求与每次重定向均校验）。
+    if (cookie) {
+      const dnsHost = hostOf(currentUrl);
+      if (dnsHost) await assertPublicDns(dnsHost);
+    }
     const init = {
       method,
       headers: headers(cookie, ua),

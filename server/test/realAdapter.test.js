@@ -16,14 +16,21 @@ import {
   extractSess,
   resolveChannelId
 } from '../src/smzdm/realAdapter.js';
+import { setDnsResolver, getDnsResolver } from '../src/dnsGuard.js';
 
 // ---- call() 依赖全局 fetch，统一 mock ----
 let savedFetch = null;
+let savedResolver = null;
+const TEST_PUBLIC_IP = '93.184.216.34'; // example.com 公网地址，仅测试用（不触网）
 before(() => {
   savedFetch = globalThis.fetch;
+  savedResolver = getDnsResolver();
+  // DNS 重绑定防护依赖真实解析器；测试中固定返回公网 IP，避免触网且保证确定性。
+  setDnsResolver(async () => [{ address: TEST_PUBLIC_IP }]);
 });
 after(() => {
   globalThis.fetch = savedFetch;
+  setDnsResolver(savedResolver);
 });
 
 function mockFetch(impl) {
@@ -200,6 +207,18 @@ test('call：带 Cookie 时 302 跳转到非 smzdm 域被拒绝（防 Cookie 泄
     /拒绝跟随重定向到非授权地址/
   );
   assert.equal(calledTarget, false, '绝不应把 Cookie 带往非授权跳转目标');
+});
+
+test('call：带 Cookie 时 DNS 重绑定防护 —— 解析到内网 IP 拒绝发请求', async () => {
+  setDnsResolver(async () => [{ address: '127.0.0.1' }]); // 模拟 DNS 污染/重绑定
+  let called = false;
+  mockFetch(async () => { called = true; return fakeResp({ body: '{}' }); });
+  await assert.rejects(
+    () => realAdapter.requestRaw('https://user-api.smzdm.com/checkin', { cookie: 'sess=abc' }),
+    /DNS 重绑定/
+  );
+  assert.equal(called, false, '解析到非公开地址不应发起任何请求');
+  setDnsResolver(async () => [{ address: TEST_PUBLIC_IP }]); // 还原测试默认
 });
 
 // ===================== 互动方法（注入 callImpl） =====================

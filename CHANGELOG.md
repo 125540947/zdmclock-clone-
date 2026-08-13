@@ -240,6 +240,8 @@
 
 ⚠️ 说明（本轮仍刻意未改 / 需后续专项设计，详见「遗留项」）：H-01 匿名真实动作深层覆盖、H-02 Cookie 明文 HTTP + DNS 目标校验、H-03 Webhook 重定向 SSRF 绕过、H-04 安装令牌公开暴露（已收紧 Host 信任）、H-07 互斥锁不完整、M-01 碎银字段名、M-03 响应体上限、M-07 GET 副作用、M-14 数值校验、M-10（engines 已翻 >=20，与测试脚本对齐）。
 
+> ⚠️ 后续纠正（批次 11）：经代码逐行复核，上述 H-01/H-02/H-03/H-04 的**代码漏洞**均已在后续提交闭环（H-01 写操作改 `mutationGuard` 强制管理员；H-02 拒绝 `http:` 明文 + realAdapter 出站 `assertPublicDns`；H-03 `safePushFetch` `redirect:'manual'` + `assertPublicDns`；H-04 回传地址改用 `config.publicBaseUrl`）。H-07/M-01/M-03/M-07/M-14 亦已闭环。仅 **H-04 安装令牌窄权限嵌入**（scope 仅 `POST /users/import`、默认空、可轮换）与 **H-10 dev 依赖升级**（用户此前跳过）为设计权衡/已决策项，非缺陷。
+
 **测试与部署**
 - 后端 `npm test` 全量 **420/420 通过**（含本轮新增 M-04 路由耐久、H-05/H-06、M-05 提交号、#190 等）。
 - 前端 `npm test -w web` **26/26 通过**（M-09 门禁收口）。
@@ -270,6 +272,36 @@
 - 生产构建 `npm run build` 通过。
 
 **代表提交**：（见本轮合入，git log 中「批次 10」对应提交）
+
+---
+
+## 批次 11 · 审计报告最后残留项闭环（H-02 DNS 重绑定防护）+ 全量纠正说明（2026-08-13）
+
+**改动要点**
+- 审计报告 `POST_FIX_AUDIT_REPORT_2026-08-13.md` 列 30 项（0 严重 / 10 高 / 16 中 / 4 低）。经批次 9/10/11 逐条对照**当前代码**复核与修复，确认报告快照（基于提交 `9c5f5e4`）已严重过时——多数高危/中危项在快照之后已被后续提交闭环，并非"未改"。
+- **H-02（DNS 重绑定防护）**：`smzdm/realAdapter.js` 的 `call()` 带 Cookie 凭据出口此前只校验主机名白名单，未校验 DNS 解析目标。现对**初始请求 + 每次重定向**在发请求前调用 `assertPublicDns`（复用 `dnsGuard.js`）确认目标解析到的所有 IP 均为公网地址，防止 DNS 污染/重绑定把完整 smzdm Cookie 导向内网（169.254.169.254 / 10/8 / 127/8）。失败即 fail-closed 拒绝连接。
+
+**新增功能**
+- 测试：`realAdapter.test.js` 新增「带 Cookie 时 DNS 重绑定防护」用例——mock 解析器返回 `127.0.0.1` 时请求被拒且不发起任何出站请求。
+
+**问题修复（按审计项）**
+- **H-02**：DNS 重绑定防护闭环。`notifier.js:81` 早已拒绝 `http:` 明文、`safePushFetch` 早已 `redirect:'manual'` + `assertPublicDns`；本轮补齐 realAdapter 出站凭据路径的 DNS 校验，至此 Cookie 出口的「明文传输」与「DNS 重绑定」两条路径均受保护。
+- **全量纠正（批次 9/10 过时说明）**：经代码逐行复核，以下项**早已闭环**（代码注释标注对应修复），并非"刻意未改"：
+  - **H-01**：OPEN_MODE 下任务启停/cron/手动运行/GPT 回复等写操作全部改 `mutationGuard`（`tasks.js:251/317`、`gpt.js:65`），匿名不得触发真实站外动作或消耗外部额度。
+  - **H-02**：见上（http 拒绝 + DNS 防护）。
+  - **H-03**：`safePushFetch` 用 `redirect:'manual'` 不跟随重定向 + `assertPublicDns` 拒绝重绑定，受控 webhook 无法把推送重定向到内网。
+  - **H-04**：`bakeImportScript` 回传地址改用 `config.publicBaseUrl`（`users.js:193`），不再信任不可靠的 Host 头。
+  - **H-07 / M-01 / M-03 / M-07 / M-14**：见批次 9/10。
+- **仍属设计权衡 / 用户已决策跳过（非缺陷，不强行改）**：
+  - **H-04 安装令牌公开嵌入**：油猴脚本注入的 `INSTALL_TOKEN` 为窄权限令牌，scope 仅 `POST /users/import`（录入 Cookie），无法读取/删除数据；默认空，改 `.env` 即吊销。这是"可分发自动录入脚本"的固有设计，强行移除会破坏油猴自动推送体验。
+  - **H-10 / M-10**：dev 工具链依赖（vitest/vite/glob/esbuild）漏洞，`npm audit --omit=dev` 为 0，仅影响开发环境；用户此前选择跳过升级。
+
+**测试与部署**
+- 后端 `npm test` 全量 **429/0 通过**（新增 1 例 DNS 重绑定防护；含批次 9/10 累计新增）。
+- 前端 `npm test -w web` **26/26 通过**（本轮未改前端）。
+- 生产构建 `npm run build` 通过。
+
+**代表提交**：（见本轮合入，git log 中「批次 11」对应提交）
 
 ---
 
