@@ -1,9 +1,15 @@
 <template>
   <div class="admin-shell">
     <header class="admin-bar">
-      <button class="bar-btn" @click="goBack" title="返回前台">← 返回</button>
-      <span class="bar-title">📊 管理后台</span>
-      <button class="bar-btn exit" @click="logoutAdmin" title="退出后台（清除管理员权限并返回前台）">退出后台</button>
+      <button class="bar-btn" @click="goBack" title="返回前台">
+        <AppIcon name="back" :size="17" />
+        返回
+      </button>
+      <span class="bar-title"><AppIcon name="admin" :size="21" /> 管理后台</span>
+      <button class="bar-btn exit" @click="logoutAdmin" title="退出后台（清除管理员权限并返回前台）">
+        <AppIcon name="sign-out" :size="17" />
+        退出后台
+      </button>
     </header>
 
     <nav class="admin-subnav">
@@ -13,8 +19,10 @@
         :to="{ name: s.name }"
         class="sub"
         active-class="on"
-        >{{ s.icon }} {{ s.label }}</router-link
       >
+        <AppIcon :name="s.icon" :size="17" />
+        {{ s.label }}
+      </router-link>
     </nav>
 
     <main class="admin-body">
@@ -31,15 +39,16 @@
 import { useRouter } from 'vue-router';
 import { logout } from '../api/client.js';
 import { session } from '../api/session.js';
+import AppIcon from '../components/AppIcon.vue';
 
 const router = useRouter();
 const sections = [
-  { name: 'admin', label: '总览', icon: '📊' },
-  { name: 'admin-add', label: '录入账号', icon: '🔑' },
-  { name: 'admin-manage', label: '运行台', icon: '🛠️' },
-  { name: 'distribution', label: '签到分布', icon: '📈' },
-  { name: 'update', label: '系统更新', icon: '⬆️' },
-  { name: 'notify', label: '推送通知', icon: '🔔' }
+  { name: 'admin', label: '总览', icon: 'admin' },
+  { name: 'admin-add', label: '录入账号', icon: 'key' },
+  { name: 'admin-manage', label: '运行台', icon: 'tools' },
+  { name: 'distribution', label: '签到分布', icon: 'chart' },
+  { name: 'update', label: '系统更新', icon: 'update' },
+  { name: 'notify', label: '推送通知', icon: 'notify' }
 ];
 
 function goBack() {
@@ -75,6 +84,10 @@ async function logoutAdmin() {
 }
 .bar-title {
   flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   text-align: center;
   font-weight: 600;
   font-size: 16px;
@@ -89,6 +102,9 @@ async function logoutAdmin() {
   color: var(--text-dim);
   font-size: 13px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 .bar-btn.exit {
   color: var(--primary);
@@ -115,6 +131,9 @@ async function logoutAdmin() {
   font-size: 13px;
   text-decoration: none;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   transition: color 0.2s, border-color 0.2s, background 0.2s;
 }
 .admin-subnav .sub.on {
