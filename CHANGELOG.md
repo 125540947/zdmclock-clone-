@@ -386,7 +386,7 @@
 - 前端 `npm run build` 通过，`web/dist` 产物 hash 变更（`index-BDvXw0Te.js` / `index-BJyaUMB5.css`）；已同步更新 `deploy-smart-startup.sh` 的 SHA 与 step-4 资源名。
 - 部署脚本 `deploy-smart-startup.sh`（工作区根，未进仓库）：SHA 更新至本轮提交；拉取白名单已含全部 5 个变更后端文件（`auth.js`/`config.js`/`index.js`/`routes/health.js`/`routes/baoliao.js`），step-4 资源名更新为新 hash。
 
-**代表提交**：（提交后补登，见 git log 最新）
+**代表提交**：`22aa5f1`
 
 ---
 
