@@ -195,6 +195,7 @@ test('shouldReexec：决策矩阵（测试环境/ supervisor 托管）', () => {
 // M-13：依赖/构建失败 → 回滚 HEAD 到更新前提交（原子性，避免重启加载坏代码）
 test('M-13：npm install 失败 → 回滚 HEAD 到更新前提交', async () => {
   let resetArgs = null;
+  let installCalls = 0;
   const runner = async (cmd, args = []) => {
     const a = args.join(' ');
     if (cmd === 'git') {
@@ -215,9 +216,14 @@ test('M-13：npm install 失败 → 回滚 HEAD 到更新前提交', async () =>
         resetArgs = args.slice(2);
         return okOut('HEAD is now at abc123d');
       }
+      if (a.startsWith('clean -fd')) return okOut('');
     }
     if (cmd === 'npm') {
-      if (a === 'install') return failOut('npm ERR! code 1');
+      if (a === 'install') {
+        installCalls += 1;
+        // 首次安装失败触发回滚；回滚会再次 install 以恢复旧依赖树（第二次成功）。
+        return installCalls === 1 ? failOut('npm ERR! code 1') : okOut('added 0 packages');
+      }
       if (a === 'run build') return okOut('built');
     }
     return okOut('');
@@ -227,6 +233,7 @@ test('M-13：npm install 失败 → 回滚 HEAD 到更新前提交', async () =>
   assert.equal(r.rolledBack, true);
   assert.equal(r.beforeCommit, 'abc123def456', '应记录回滚到的更新前提交');
   assert.equal(r.rollbackOk, true);
+  assert.equal(installCalls, 2, '回滚应再次 install 恢复旧依赖树');
   assert.deepEqual(resetArgs, ['abc123def456'], '应执行 git reset --hard <更新前提交>');
 });
 
@@ -300,4 +307,80 @@ test('M-05：runUpdate 返回更新后提交号（非更新前 state.commit）',
   assert.equal(r.ok, true);
   assert.equal(r.commit, 'zzz999yyy888', '应报告更新后提交号');
   assert.equal(r.commitShort, 'zzz999y');
+});
+
+// M-16：git diff 退出码必须被检查——失败不能当作"无变更"而静默跳过 install/build 并误报成功。
+test('M-16：git diff 失败 → 回滚而非误报成功', async () => {
+  const calls = [];
+  const runner = async (cmd, args = []) => {
+    const a = args.join(' ');
+    calls.push(cmd + ' ' + a);
+    if (cmd === 'git') {
+      if (a === 'rev-parse --is-inside-work-tree') return okOut('true');
+      if (a === 'rev-parse --show-toplevel') return okOut('/repo');
+      if (a === 'branch --show-current') return okOut('main');
+      if (a === 'log -1 --format=%s') return okOut('feat: base');
+      if (a === 'remote get-url origin') return okOut('https://github.com/x/y.git');
+      if (a === 'status --porcelain') return okOut('');
+      if (a.startsWith('fetch')) return okOut('');
+      if (a.startsWith('rev-list --count HEAD..origin')) return okOut('0');
+      if (a.startsWith('rev-list --count origin')) return okOut('0');
+      if (a.startsWith('rev-parse origin')) return okOut('def789');
+      if (a.startsWith('pull')) return okOut('Fast-forward');
+      if (a.startsWith('diff --name-only')) return failOut('fatal: bad object');
+      if (a === 'rev-parse HEAD') return okOut('abc123def456');
+      if (a.startsWith('reset --hard')) return okOut('HEAD is now at abc123d');
+      if (a.startsWith('clean -fd')) return okOut('');
+    }
+    if (cmd === 'npm') return okOut('');
+    return okOut('');
+  };
+  const r = await runUpdate({ restart: false, runner });
+  assert.equal(r.ok, false, 'diff 失败应回滚，不得误报成功');
+  assert.equal(r.rolledBack, true);
+  assert.ok(calls.some((c) => c.startsWith('git reset --hard')), '应执行 reset --hard 回滚');
+  assert.ok(calls.some((c) => c.startsWith('git clean -fd')), '回滚应清理 web/dist 残留产物');
+  assert.ok(!calls.includes('npm install'), 'diff 失败时尚无依赖判定，不应调用 npm install');
+});
+
+// M-16：依赖安装失败回滚时，必须重建 node_modules 使依赖树回到更新前状态（真正的事务）。
+test('M-16：npm install 失败 → 回滚重建 node_modules（install 调用两次）', async () => {
+  const calls = [];
+  let installCalls = 0;
+  const runner = async (cmd, args = []) => {
+    const a = args.join(' ');
+    calls.push(cmd + ' ' + a);
+    if (cmd === 'git') {
+      if (a === 'rev-parse --is-inside-work-tree') return okOut('true');
+      if (a === 'rev-parse --show-toplevel') return okOut('/repo');
+      if (a === 'branch --show-current') return okOut('main');
+      if (a === 'log -1 --format=%s') return okOut('feat: base');
+      if (a === 'remote get-url origin') return okOut('https://github.com/x/y.git');
+      if (a === 'status --porcelain') return okOut('');
+      if (a.startsWith('fetch')) return okOut('');
+      if (a.startsWith('rev-list --count HEAD..origin')) return okOut('0');
+      if (a.startsWith('rev-list --count origin')) return okOut('0');
+      if (a.startsWith('rev-parse origin')) return okOut('def789');
+      if (a.startsWith('pull')) return okOut('Fast-forward');
+      if (a.startsWith('diff --name-only')) return okOut('package.json');
+      if (a === 'rev-parse HEAD') return okOut('abc123def456');
+      if (a.startsWith('reset --hard')) return okOut('HEAD is now at abc123d');
+      if (a.startsWith('clean -fd')) return okOut('');
+    }
+    if (cmd === 'npm') {
+      if (a === 'install') {
+        installCalls += 1;
+        // 更新时安装失败 → 回滚再次 install 重建旧依赖树（第二次成功）。
+        return installCalls === 1 ? failOut('npm ERR! peer dep') : okOut('rebuilt');
+      }
+      if (a === 'run build') return okOut('built');
+    }
+    return okOut('');
+  };
+  const r = await runUpdate({ restart: false, runner });
+  assert.equal(r.ok, false);
+  assert.equal(r.rolledBack, true);
+  assert.equal(installCalls, 2, '回滚应再次 install 以恢复旧依赖树');
+  assert.equal(r.depsRestored, true, '回滚依赖重建应成功');
+  assert.ok(calls.some((c) => c.startsWith('git clean -fd')), '回滚应清理 web/dist 残留产物');
 });

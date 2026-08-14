@@ -25,7 +25,7 @@ export function fmtHM(h, mi) {
 // 指定具体 IANA 时区（如 'Asia/Shanghai'）时按该时区折算墙钟。
 const WEEKDAY_MAP = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
 export function zonedWallClock(date, tz) {
-  if (!tz || tz === 'local' || tz === 'UTC') {
+  if (!tz || tz === 'local') {
     return {
       date: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`,
       getTime: () => date.getTime(),
@@ -34,6 +34,23 @@ export function zonedWallClock(date, tz) {
       getDate: () => date.getDate(),
       getMonth: () => date.getMonth(),
       getDay: () => date.getDay()
+    };
+  }
+  if (tz === 'UTC') {
+    const year = date.getUTCFullYear();
+    const month = date.getUTCMonth();
+    const day = date.getUTCDate();
+    const hour = date.getUTCHours();
+    const minute = date.getUTCMinutes();
+    const second = date.getUTCSeconds();
+    return {
+      date: `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
+      getTime: () => Date.UTC(year, month, day, hour, minute, second),
+      getMinutes: () => minute,
+      getHours: () => hour,
+      getDate: () => day,
+      getMonth: () => month,
+      getDay: () => date.getUTCDay()
     };
   }
   const dtf = new Intl.DateTimeFormat('en-CA', {

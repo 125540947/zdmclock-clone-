@@ -1,7 +1,9 @@
 // #182 DNS 重绑定防护单元测试（零依赖、脱离真实网络，解析器注入）
-import { test } from 'node:test';
+import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { isPrivateOrReservedIp, assertPublicDns, setDnsResolver, getDnsResolver } from '../src/dnsGuard.js';
+import http from 'node:http';
+import zlib from 'node:zlib';
+import { isPrivateOrReservedIp, assertPublicDns, setDnsResolver, getDnsResolver, pinnedFetch, __testSetAllowPrivateIps } from '../src/dnsGuard.js';
 
 test('isPrivateOrReservedIp：常见私有/保留段识别', () => {
   for (const ip of ['10.0.0.1', '10.255.255.255', '127.0.0.1', '127.9.9.9', '169.254.169.254', '172.16.0.1', '172.31.255.255', '192.168.1.1', '0.0.0.0', '224.0.0.1', '255.255.255.255']) {
@@ -88,4 +90,82 @@ test('getDnsResolver/setDnsResolver：可还原默认解析器', () => {
   assert.equal(getDnsResolver(), stub);
   setDnsResolver(def);
   assert.equal(getDnsResolver(), def);
+});
+
+// ===================== M-09：pinnedFetch（DNS 重绑定 TOCTOU 闭环） =====================
+// 单独放在子测试套件内，用 t.before/t.after 隔离 __testSetAllowPrivateIps 的测试钩子，
+// 避免污染上面的 isPrivateOrReservedIp 断言（那些用例要求私有 IP 必须被拒绝）。
+test('pinnedFetch（M-09 DNS 重绑定 TOCTOU 闭环）', async (t) => {
+  const savedR = getDnsResolver();
+  let server;
+  let baseUrl;
+  let hits = 0;
+
+  t.before(async () => {
+    // 测试用：把任意主机名解析到本地，并放行内网/回环以便本地服务器验证
+    setDnsResolver(async () => [{ address: '127.0.0.1' }]);
+    __testSetAllowPrivateIps(true);
+    server = http.createServer((req, res) => {
+      hits += 1;
+      if (req.url === '/gzip') {
+        const data = zlib.gzipSync('hello-gzip-world');
+        res.writeHead(200, { 'content-encoding': 'gzip', 'content-type': 'text/plain' });
+        res.end(data);
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/plain', 'x-custom': 'yes' });
+      res.end('hello-world');
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address();
+      baseUrl = `http://local.test:${port}`;
+      resolve();
+    }));
+  });
+  t.after(() => {
+    setDnsResolver(savedR);
+    __testSetAllowPrivateIps(false);
+    server.close();
+  });
+
+  const sub = [];
+  sub.push(t.test('成功路径返回 fetch 兼容响应', async () => {
+    const r = await pinnedFetch(baseUrl + '/');
+    assert.equal(r.status, 200);
+    assert.equal(r.ok, true);
+    assert.equal(r.headers.get('x-custom'), 'yes');
+    assert.equal(r.headers.get('X-CUSTOM'), 'yes', '响应头查询应大小写不敏感');
+    assert.equal(await r.text(), 'hello-world');
+  }));
+
+  sub.push(t.test('透明解压 gzip（content-encoding: gzip）', async () => {
+    const r = await pinnedFetch(baseUrl + '/gzip');
+    assert.equal(r.status, 200);
+    assert.equal(await r.text(), 'hello-gzip-world');
+  }));
+
+  sub.push(t.test('解析到非公开地址（DNS 重绑定）直接拒绝，不发请求', async () => {
+    __testSetAllowPrivateIps(false); // 恢复：127.0.0.1 应判为保留地址
+    setDnsResolver(async () => [{ address: '127.0.0.1' }]);
+    const before = hits;
+    await assert.rejects(() => pinnedFetch('http://evil.invalid/'), /DNS 重绑定|非公开/);
+    assert.equal(hits, before, '拒绝后不应发起任何连接');
+  }));
+
+  sub.push(t.test('钉死校验过的 IP（连接目标 == 校验 IP，绝不二次解析域名）', async () => {
+    // 解析器返回公网 IP 8.8.8.8（而非本地服务器），本地服务器不应收到任何请求——
+    // 证明连接被钉到校验 IP，而不是对 whatever.invalid 做全新 DNS 解析（那样会 ENOTFOUND 且命中本地服务器）。
+    setDnsResolver(async () => [{ address: '8.8.8.8' }]);
+    const before = hits;
+    try {
+      await pinnedFetch('http://whatever.invalid:9/');
+    } catch (e) {
+      // 期望连接级错误（ECONNREFUSED/ENETUNREACH/ETIMEDOUT），而非对 whatever.invalid 的全新 DNS 解析（ENOTFOUND）
+      const conn = new Set(['ECONNREFUSED', 'ENETUNREACH', 'ETIMEDOUT', 'EHOSTUNREACH', 'ECONNRESET']);
+      assert.ok(conn.has(e.code) || e.code == null, `应为连接级错误，实际 code=${e.code}`);
+    }
+    assert.equal(hits, before, '连接被钉到校验 IP（8.8.8.8），本地服务器不应收到请求');
+  }));
+
+  await Promise.all(sub);
 });

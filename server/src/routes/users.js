@@ -267,19 +267,14 @@ router.get('/import-script.user.js', (req, res) => {
   }
 });
 
-// 账号详情。开放模式下：匿名访客无权查看「非同网段」且已记录 IP 的账号。
+// 账号详情。开放模式下：匿名访客无权查看「非同网段」账号（含无 recordedIp 的遗留账号）。
+// M-01 修复：复用 rejectHiddenAccount，移除遗留的 `u.recordedIp &&` 短路，
+// 使无 recordedIp 的遗留账号同样对匿名不可见，杜绝跨网段读取其元数据（水平越权）。
 router.get('/:id', authRequired, (req, res) => {
   const db = load();
   const u = db.users.find((x) => x.id === req.params.id);
   if (!u) return res.status(404).json({ error: 'not_found' });
-  if (
-    config.openMode &&
-    !isAdminRequest(req) &&
-    u.recordedIp &&
-    !sameSegment(getClientIp(req), u.recordedIp, 24)
-  ) {
-    return res.status(404).json({ error: 'not_found', message: '无权查看该账号' });
-  }
+  if (rejectHiddenAccount(res, req, u)) return;
   res.json({ ...u, cookie: maskCookie(u.cookie) });
 });
 
@@ -288,16 +283,18 @@ router.get('/:id', authRequired, (req, res) => {
 // 且所有内存修改与落盘都在 withWriteLock 内一次性进行；校验失败路径不会留下 partial state。
 // M-02 修复：wrapAsync 兜住 withWriteLock/persistAwait 异常，避免请求挂起。
 router.put('/:id', mutationGuard, wrapAsync(async (req, res) => {
-  const db = load();
-  const u = db.users.find((x) => x.id === req.params.id);
-  if (!u) return res.status(404).json({ error: 'not_found' });
   const { nickname, cookie, smzdmId, schedMode, checkInTime } = req.body || {};
+  // 锁外预读：用于早失败（404）与 sched 默认值；网络 I/O（换 cookie 刷新资料）也必须在锁外。
+  // 注意：锁外获得的引用不可用于「改写」，真正的目标定位在写锁内重新执行（M-10 竞态修复）。
+  const dbPre = load();
+  const ref = dbPre.users.find((x) => x.id === req.params.id);
+  if (!ref) return res.status(404).json({ error: 'not_found' });
   // 先算 sched（校验），失败直接 400，此时尚未改动任何内存状态
   let sched = null;
   if (schedMode !== undefined || checkInTime !== undefined) {
     sched = normalizeSchedule({
-      schedMode: schedMode !== undefined ? schedMode : u.schedMode,
-      checkInTime: checkInTime !== undefined ? checkInTime : u.checkInTime
+      schedMode: schedMode !== undefined ? schedMode : ref.schedMode,
+      checkInTime: checkInTime !== undefined ? checkInTime : ref.checkInTime
     });
     if (sched.error) return res.status(400).json(sched);
   }
@@ -319,8 +316,12 @@ router.put('/:id', mutationGuard, wrapAsync(async (req, res) => {
       /* ignore：仍能更新 cookie，不依赖资料 */
     }
   }
-  // M-04：所有内存修改与落盘都在写锁内一次性完成；校验失败路径不会留下 partial state
+  // M-10：写锁内重新定位目标并原子改写+落盘；若锁内已不存在则 404（杜绝修改孤儿对象 / 错误成功响应）
+  let notFound = false;
   await withWriteLock(() => {
+    const db = load();
+    const u = db.users.find((x) => x.id === req.params.id);
+    if (!u) { notFound = true; return; }
     if (nickname !== undefined) u.nickname = nickname;
     if (smzdmId !== undefined) u.smzdmId = smzdmId;
     if (sched) {
@@ -340,18 +341,24 @@ router.put('/:id', mutationGuard, wrapAsync(async (req, res) => {
     }
     return persistAwait();
   });
+  if (notFound) return res.status(404).json({ error: 'not_found' });
+  const db = load();
+  const u = db.users.find((x) => x.id === req.params.id);
   res.json({ ...u, cookie: maskCookie(u.cookie) });
 }));
 
 // 删除账号。开放模式下匿名不可删，须管理员 Token。
 router.delete('/:id', mutationGuard, wrapAsync(async (req, res) => {
-  const db = load();
-  const i = db.users.findIndex((x) => x.id === req.params.id);
-  if (i < 0) return res.status(404).json({ error: 'not_found' });
+  // M-10：索引计算移入写锁内，避免前序删除使索引失效而误删 / 漏删
+  let notFound = false;
   await withWriteLock(() => {
+    const db = load();
+    const i = db.users.findIndex((x) => x.id === req.params.id);
+    if (i < 0) { notFound = true; return; }
     db.users.splice(i, 1);
     return persistAwait();
   });
+  if (notFound) return res.status(404).json({ error: 'not_found' });
   res.json({ ok: true });
 }));
 
@@ -372,17 +379,25 @@ router.get('/:id/smzdm', authRequired, wrapAsync(async (req, res) => {
 
 // 主动刷新账号资料（调用适配器 getUserInfo）
 router.post('/:id/refresh', authRequired, wrapAsync(async (req, res) => {
-  const db = load();
-  const u = db.users.find((x) => x.id === req.params.id);
-  if (!u) return res.status(404).json({ error: 'not_found' });
-  if (rejectHiddenAccount(res, req, u)) return;
+  const dbPre = load();
+  const ref = dbPre.users.find((x) => x.id === req.params.id);
+  if (!ref) return res.status(404).json({ error: 'not_found' });
+  if (rejectHiddenAccount(res, req, ref)) return;
   try {
-    const info = await smzdm.getUserInfo(u.cookie);
-    u.points = info.points || u.points;
-    u.level = info.level || u.level;
-    u.vip = !!info.vip;
-    u.smzdmId = u.smzdmId || info.smzdmId || '';
-    await withWriteLock(() => persistAwait());
+    const info = await smzdm.getUserInfo(ref.cookie);
+    // M-10：资料写入移入写锁内，锁内重新定位目标并原子落盘；已删除则 404
+    let notFound = false;
+    await withWriteLock(() => {
+      const db = load();
+      const u = db.users.find((x) => x.id === req.params.id);
+      if (!u) { notFound = true; return; }
+      u.points = info.points || u.points;
+      u.level = info.level || u.level;
+      u.vip = !!info.vip;
+      u.smzdmId = u.smzdmId || info.smzdmId || '';
+      return persistAwait();
+    });
+    if (notFound) return res.status(404).json({ error: 'not_found' });
     res.json({ ok: true, info });
   } catch (e) {
     dbgLog('[users] 刷新账号资料失败：', e.message);

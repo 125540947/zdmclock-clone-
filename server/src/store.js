@@ -200,9 +200,10 @@ function enforceClockCap() {
   const cap = config.clockRecordsMaxPerUser;
   const recs = cache && cache.clockRecords;
   if (!Array.isArray(recs) || recs.length === 0 || !cap || cap <= 0) return false;
-  // 快速跳过：账号数 * cap 内基本不可能超限，避免无谓的分组/排序开销
-  const guard = (cache.users ? cache.users.length : 0) * cap + 64;
-  if (recs.length <= guard) return false;
+  // 快速跳过：单账号记录数不可能超过总记录数；若总记录数 <= 每账号上限，则任一口径下都不可能
+  // 有账号超限，可安全跳过分组/截断（M-11 修复：原 guard = 账号数*cap+64 过于宽松，单账号可远超
+  // cap 却仍被跳过，导致 db.json 长期不截断）。
+  if (recs.length <= cap) return false;
   const groups = new Map();
   for (const r of recs) {
     const k = r && r.userId != null ? String(r.userId) : '__null__';
@@ -314,7 +315,9 @@ export function genId(prefix = 'id') {
 // 边界处理：① cache 未初始化直接返回 0；② 仅接受合法 http(s) 链接；
 // ③ 已存在的同链接跳过；④ 字段长度钳制，避免异常数据撑爆库。
 // 调用方需在 withWriteLock 内调用，确保与 persist() 原子。
-export function mergeBaoliao(items = []) {
+// recordedIp：可选，录入者来源 IP（开放模式批量导入时由路由传入 viewer IP），
+// 使录入者随后在 /24 网段隔离下仍可见自己导入的好价（M-02 修复）。系统抓取（/refresh、taskRunner）不传，置 null。
+export function mergeBaoliao(items = [], recordedIp) {
   if (!cache) return 0;
   if (!Array.isArray(items)) return 0;
   let added = 0;
@@ -342,6 +345,7 @@ export function mergeBaoliao(items = []) {
       status: 'fetched',
       smzdmUrl: url,
       channelId: String(it.channelId || '').slice(0, 20),
+      recordedIp: recordedIp || null, // M-02：记录批量导入来源 IP，使开放模式录入者随后可见自己导入的好价
       lastResult: '',
       createdAt: now,
       updatedAt: now
@@ -365,9 +369,17 @@ export function todayStr(d = new Date()) {
   return localDateStr(d);
 }
 
-// 时区感知的"今天"：按指定 IANA 时区折算墙钟日期，解决容器 UTC 导致签到日期/时间整体偏移。
+// 时区感知的"今天"：按指定时区折算墙钟日期，解决容器 UTC 导致签到日期/时间整体偏移。
+// tz='local' 走进程本地日期；tz='UTC' 走真实 UTC 日期（不再与 local 等价，M-04 修复）；
+// 其余按 IANA 时区（如 'Asia/Shanghai'）折算墙钟。
 export function todayStrTZ(tz, d = new Date()) {
-  if (!tz || tz === 'local' || tz === 'UTC') return localDateStr(d);
+  if (!tz || tz === 'local') return localDateStr(d);
+  if (tz === 'UTC') {
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(d.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
   const dtf = new Intl.DateTimeFormat('en-CA', {
     timeZone: tz,
     year: 'numeric',

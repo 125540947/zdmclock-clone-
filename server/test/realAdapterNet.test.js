@@ -5,18 +5,21 @@
 // 通过在测试内替换 globalThis.fetch 并校验请求 URL/方法，可完全脱离真实 smzdm 网络覆盖。
 
 import assert from 'node:assert/strict';
-import test from 'node:test';
-import { realAdapter, resolveChannelId } from '../src/smzdm/realAdapter.js';
+import test, { mock } from 'node:test';
 
-const realFetch = globalThis.fetch;
+// M-09：realAdapter 真实网络分支经 dnsGuard.pinnedFetch 出口。测试用 mock.module 把 pinnedFetch
+// 替换为受控实现，从而在不触网前提下覆盖 doClockIn / robotCheckIn / resolveChannelId 等分支。
+const dnsGuardReal = await import('../src/dnsGuard.js?realcopy');
 let fetchImpl = null;
+mock.module('../src/dnsGuard.js', {
+  namedExports: { ...dnsGuardReal, pinnedFetch: (url, init) => fetchImpl(url, init) }
+});
+const { realAdapter, resolveChannelId } = await import('../src/smzdm/realAdapter.js');
 
 function installFetch(impl) {
   fetchImpl = impl;
-  globalThis.fetch = (url, init) => impl(url, init);
 }
 function uninstallFetch() {
-  globalThis.fetch = realFetch;
   fetchImpl = null;
 }
 

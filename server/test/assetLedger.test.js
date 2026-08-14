@@ -8,6 +8,19 @@ function freshDb() {
   return { users: [], assetLedger: [], assetSnapshots: [] };
 }
 
+// M-12：assetSnapshots 按「账号 × 日期」增长，必须受上限裁剪，避免 db.json 无限膨胀
+test('M-12：assetSnapshots 超出上限时被裁剪到 5000', () => {
+  const db = freshDb();
+  // 预置 5001 条历史快照（不同 userId），触发下一次写入时的裁剪
+  for (let i = 0; i < 5001; i++) {
+    db.assetSnapshots.push({ userId: 'hist' + i, date: '2020-01-01', gold: 1, silver: 1, exp: 1, level: 1 });
+  }
+  const user = { id: 'u_new', assets: { gold: 0, silver: 0, exp: 0, level: null } };
+  applyAssetEffect(db, user, 'clock', '每日签到', { explicit: { gold: 10 }, success: true });
+  assert.ok(db.assetSnapshots.length <= 5000, '快照数应被裁到上限 5000，实际 ' + db.assetSnapshots.length);
+  assert.ok(db.assetSnapshots.some((s) => s.userId === 'u_new'), '最新快照应保留');
+});
+
 test('applyAssetEffect 用显式增量落账并更新 user.assets', () => {
   const db = freshDb();
   const user = { id: 'u1', nickname: '甲', assets: { gold: 100, silver: 0, exp: 50, level: 'Lv.2' } };

@@ -9,7 +9,34 @@ const router = Router();
 // 自托管 http 场景保持 false 以保证 Cookie 可被发送。
 const TOKEN_COOKIE = 'zb_token';
 const ADMIN_COOKIE = 'zb_admin_token';
+// M-08 修复：跨站部署（前端在独立域名）时，浏览器不会在跨站 XHR 中发送 SameSite=Lax 的会话 Cookie，
+// 导致登录后仍 401。需在跨站场景将 Cookie 设为 SameSite=None; Secure（Secure 是 None 的硬性要求，
+// 跨站凭据 Cookie 也必须经 TLS 传输）。判定：比较请求 Origin（前端来源）与 Host 的注册域——
+// 子域（a.x.com / b.x.com）视为同站保留 Lax；完全不同的域名视为跨站改为 None;Secure。
+// 无 Origin（非浏览器/同源导航）按同站处理，不影响同源部署。
+function originHostOf(header) {
+  if (!header) return null;
+  try {
+    return new URL(header).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+function isCrossSiteRequest(req) {
+  const origin = originHostOf(req.headers && req.headers.origin);
+  if (!origin) return false;
+  const host = originHostOf((req.headers && req.headers.host) ? 'http://' + req.headers.host : '');
+  if (!host) return false;
+  if (origin === host) return false;
+  // 子域关系视为同站（a.x.com 与 b.x.com、x.com 与 a.x.com）
+  if (origin.endsWith('.' + host) || host.endsWith('.' + origin)) return false;
+  return true;
+}
 function sessionCookieOpts(req) {
+  if (isCrossSiteRequest(req)) {
+    // 跨站：SameSite=None 必须配合 Secure；跨站凭据 Cookie 也要求 TLS，故强制 secure。
+    return { httpOnly: true, sameSite: 'none', path: '/', secure: true };
+  }
   return {
     httpOnly: true,
     sameSite: 'lax',
@@ -22,8 +49,10 @@ function setSessionCookies(res, req, token, adminToken) {
   if (token) res.cookie(TOKEN_COOKIE, token, opts);
   if (adminToken) res.cookie(ADMIN_COOKIE, adminToken, opts);
 }
-function clearSessionCookies(res) {
-  const opts = { httpOnly: true, sameSite: 'lax', path: '/' };
+function clearSessionCookies(req, res) {
+  const cross = isCrossSiteRequest(req);
+  const opts = { httpOnly: true, sameSite: cross ? 'none' : 'lax', path: '/' };
+  if (cross) opts.secure = true;
   res.clearCookie(TOKEN_COOKIE, opts);
   res.clearCookie(ADMIN_COOKIE, opts);
 }
@@ -47,7 +76,7 @@ router.get('/config', (req, res) => {
 
 // #190：登出。清除 HttpOnly 会话 Cookie（普通与管理员），前端无需自行清理 localStorage Token。
 router.post('/logout', (req, res) => {
-  clearSessionCookies(res);
+  clearSessionCookies(req, res);
   res.json({ ok: true });
 });
 

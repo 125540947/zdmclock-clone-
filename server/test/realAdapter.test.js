@@ -5,36 +5,41 @@
 //  2. call() 统一出口 —— SSRF 纵深防御、JSON / )]}' 前缀解析、超大响应拒绝、HTTP 非 2xx、超时、raw 模式
 //  3. 互动方法（评论/收藏/点赞/爆料）—— 通过注入 callImpl / sleepImpl / resolveChannelIdImpl 完全脱离网络
 //  4. fetchBaoliao —— 通过 mock globalThis.fetch 覆盖挑战页/验证页/正常解析三分支
-import { test, before, after } from 'node:test';
+import { test, before, after, mock } from 'node:test';
 import assert from 'node:assert/strict';
 
-import {
+// M-09：realAdapter.call 改用 dnsGuard.pinnedFetch 发起连接（把校验通过的 IP 钉死到 TCP 连接，
+// 消除「先校验再 fetch」之间的 DNS 重绑定时间窗）。测试通过 mock.module 把 pinnedFetch 替换为受控实现，
+// 其余 dnsGuard 导出（assertPublicDns / setDnsResolver 等）保持真实，从而在不触网前提下验证 call() 出口行为。
+const dnsGuardReal = await import('../src/dnsGuard.js?realcopy');
+let fetchImpl = null; // 受测的 pinnedFetch 实现（由 mockFetch 注入）
+mock.module('../src/dnsGuard.js', {
+  namedExports: { ...dnsGuardReal, pinnedFetch: (url, init) => fetchImpl(url, init) }
+});
+const {
   realAdapter,
   signFormData,
   pickUA,
   actionJitter,
   extractSess,
   resolveChannelId
-} from '../src/smzdm/realAdapter.js';
-import { setDnsResolver, getDnsResolver } from '../src/dnsGuard.js';
+} = await import('../src/smzdm/realAdapter.js');
+const { setDnsResolver, getDnsResolver } = dnsGuardReal;
 
-// ---- call() 依赖全局 fetch，统一 mock ----
-let savedFetch = null;
+// ---- call() 依赖 pinnedFetch，统一 mock ----
 let savedResolver = null;
 const TEST_PUBLIC_IP = '93.184.216.34'; // example.com 公网地址，仅测试用（不触网）
 before(() => {
-  savedFetch = globalThis.fetch;
   savedResolver = getDnsResolver();
   // DNS 重绑定防护依赖真实解析器；测试中固定返回公网 IP，避免触网且保证确定性。
   setDnsResolver(async () => [{ address: TEST_PUBLIC_IP }]);
 });
 after(() => {
-  globalThis.fetch = savedFetch;
   setDnsResolver(savedResolver);
 });
 
 function mockFetch(impl) {
-  globalThis.fetch = impl;
+  fetchImpl = impl;
 }
 function fakeResp({ ok = true, status = 200, body = '', headers = {} } = {}) {
   // 同时提供 arrayBuffer 以兼容 realAdapter 改用 readBodyCapped 的流式读取（无 body 流时走 arrayBuffer 兜底）
@@ -214,13 +219,14 @@ test('call：带 Cookie 时 302 跳转到非 smzdm 域被拒绝（防 Cookie 泄
 
 test('call：带 Cookie 时 DNS 重绑定防护 —— 解析到内网 IP 拒绝发请求', async () => {
   setDnsResolver(async () => [{ address: '127.0.0.1' }]); // 模拟 DNS 污染/重绑定
-  let called = false;
-  mockFetch(async () => { called = true; return fakeResp({ body: '{}' }); });
+  // M-09：DNS 重绑定防护已下沉到 dnsGuard.pinnedFetch（连接前先校验所有解析 IP 均公开，再钉死连接）。
+  // 此处走真实 pinnedFetch 以验证「解析到非公开地址即拒绝、绝不发起请求」的闭环（realAdapter 测试里 pinnedFetch 被 mock，故显式取真实实现）。
+  fetchImpl = dnsGuardReal.pinnedFetch;
   await assert.rejects(
     () => realAdapter.requestRaw('https://user-api.smzdm.com/checkin', { cookie: 'sess=abc' }),
     /DNS 重绑定/
   );
-  assert.equal(called, false, '解析到非公开地址不应发起任何请求');
+  fetchImpl = null;
   setDnsResolver(async () => [{ address: TEST_PUBLIC_IP }]); // 还原测试默认
 });
 

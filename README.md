@@ -85,8 +85,8 @@ npm start
 |---|---|---|
 | `PORT` | `3000` | 后端监听端口 |
 | `NODE_ENV` | `development` | `production` 时后端托管前端 `dist` |
-| `REQUIRE_AUTH` | `false` | `true` 时写操作需 Bearer Token |
-| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | `admin` / `admin123` | 管理登录凭据 |
+| `REQUIRE_AUTH` | `true` | 默认开启鉴权（secure-by-default）；`false` 退回匿名开放（仅本机/可信局域网调试） |
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | `admin` / 留空=启动随机生成强密码 | 管理登录凭据；`ADMIN_PASSWORD` 未设时启动自动生成随机强密码（不再使用静态 `admin123`） |
 | `API_TOKEN` | 留空=启动随机生成 | 登录签发给前端的 Token。生产请显式设置强随机值（默认已不再使用静态 `zdmclock-dev-token`） |
 | `CORS_ORIGIN` | 留空=仅同源 | 跨域白名单，逗号分隔。默认不返回 CORS 头，杜绝任意域调用 |
 | `SMZDM_ADAPTER` | `mock` | `mock`（仿真）｜ `real`（需自行实现） |
@@ -107,7 +107,7 @@ npm start
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/health` | 健康检查 |
-| GET | `/api/health/cookies` | 手动触发全部账号 Cookie 健康检测（检测 + 标记失效 + 推送告警） |
+| POST | `/api/health/cookies` | 手动触发全部账号 Cookie 健康检测（检测 + 标记失效 + 推送告警；GET 已改为 405 拒绝误触发） |
 | POST | `/api/auth/login` | 管理员登录，签发 Token |
 | GET | `/api/users` | 账号列表（cookie 遮罩） |
 | POST | `/api/users` | 录入 smzdm 账号（cookie） |
@@ -145,7 +145,7 @@ npm start
 Cookie 失效后任务只会静默标 `error`，难以察觉。本工具内置 **Cookie 健康检测**：
 
 - **定时**：调度器每轮轮询时，按 `COOKIE_HEALTH_INTERVAL_MIN`（默认 360 分钟）节流，仅 **real 模式**下对所有账号做一次探活（`server/src/health.js`）。
-- **手动**：`「我的账号」页` 点 **🍪 检测** 按钮（`GET /api/health/cookies`），或任意时刻调用该接口。
+- **手动**：`「我的账号」页` 点 **🍪 检测** 按钮（`POST /api/health/cookies`），或任意时刻调用该接口。
 - **判定**：调用适配器 `getUserInfo`——返回有效身份即有效；抛错（网络/超时/被踢线重定向）或返回空身份即视为失效。
 - **告警**：失效时通过已配置的推送渠道（`notifier`）发「🍪 Cookie 失效告警」，且**仅在「有效→失效」状态迁移时触发一次**（自愈恢复后清零，不重复刷屏）。
 - 前端「我的账号」列表对失效账号显示 **🍪 Cookie 失效** 红色徽标。
@@ -229,9 +229,9 @@ docker compose up -d --build
 
 ## 安全须知（部署前必读）
 
-本骨架默认以「开箱即跑、本地自用」为优先级：**默认关闭鉴权、明文存储账号 Cookie**。若暴露到公网，请务必处理以下项：
+本骨架默认以「开箱即跑、本地自用」为优先级：**默认开启鉴权（secure-by-default）、明文存储账号 Cookie**。若暴露到公网，请务必处理以下项：
 
-1. **启用鉴权**：在 `.env` 设 `REQUIRE_AUTH=true`，并把 `ADMIN_PASSWORD` 改为强随机值（默认 `admin123` 切勿带入生产）。`API_TOKEN` 现在**默认留空即每次启动随机生成**，生产请显式设置为固定强随机值（如 `openssl rand -hex 24`），不要依赖随机值。开启后，所有写接口（含 `/api/baoliao` 的 POST/PUT/DELETE/submit）均需 `Authorization: Bearer <API_TOKEN>`。
+1. **确认鉴权已开启**：`REQUIRE_AUTH` 默认为 `true`；`ADMIN_PASSWORD` 未设置时启动会自动生成随机强密码（不再使用静态 `admin123`）。生产请将 `ADMIN_PASSWORD` / `API_TOKEN` / `ADMIN_TOKEN` / `INSTALL_TOKEN` 全部改为强随机值（如 `openssl rand -hex 24`）。开启后，所有写接口（含 `/api/baoliao` 的 POST/PUT/DELETE/submit）均需 `Authorization: Bearer <API_TOKEN>`。
 2. **切勿将敏感文件打进镜像**：仓库已提供 `.dockerignore`，排除 `.env`、`server/data*`。Docker 构建依赖它，不要删除或改回 `COPY . .` 全量拷贝。
 3. **真实 Cookie 明文存储**：`server/data*/db.json` 以明文保存 smzdm 登录态（等同于你的账号凭据）。已通过 `.gitignore` 排除，请勿提交、备份或共享这些目录。
 4. **CORS 默认仅同源**：已修复为默认 `cors({ origin: false })`，不返回跨域头，**杜绝任意域调用**。仅在「前端部署在独立域名」时才设置 `CORS_ORIGIN` 环境变量放行你的域名。

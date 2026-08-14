@@ -168,22 +168,38 @@ export async function runUpdate({ restart = true, onLog, runner = run } = {}) {
   const beforeR = await runner('git', ['rev-parse', 'HEAD'], { cwd: root });
   const before = beforeR.stdout.trim();
 
-  // M-13 修复：依赖/构建失败回滚原子性。
-  // git pull --ff-only 成功后 HEAD 已前移；若随后 npm install / npm run build 失败，
-  // 工作区会停留在"新代码 + 损坏依赖/产物"的状态，若此刻重启将加载坏代码。
-  // 因此 install/build 失败时回滚到更新前的 HEAD（reset --hard），保证"全有或全无"。
+  // M-16 修复：回滚须为真正的事务——除还原受控源码外，还要：
+  //  1) 重建 node_modules 以匹配回滚后的旧依赖清单（install 已改变依赖树）；
+  //  2) 清理新构建产生的未跟踪产物（web/dist 中未被 git 跟踪的新哈希文件），
+  //     否则"源码=旧而依赖/产物=新"状态并不一致，与"全有或全无"注释矛盾。
+  // 同时：git diff 退出码必须检查；命令失败不能当作"无变更"而静默跳过 install/build。
+  let needInstall = false;
+  let needBuild = false;
   const rollback = async (reason) => {
     push('✖ ' + reason + '，回滚到更新前提交…');
     const rb = await runner('git', ['reset', '--hard', before], { cwd: root });
-    if (rb.ok) push('↩ 已回滚到 ' + before.slice(0, 7));
-    else push('⚠️ 回滚命令异常（' + (rb.stderr.trim() || rb.code) + '），请手动 git reset --hard ' + before);
+    let depsRestored = true;
+    if (needInstall) {
+      push('• 重建 node_modules 以匹配回滚后的依赖清单…');
+      const ri = await runner('npm', ['install'], { cwd: root, timeout: 300_000 });
+      depsRestored = ri.ok;
+      if (!ri.ok) push('⚠️ 依赖重建失败（' + (ri.stderr.trim() || ri.code) + '），请手动 npm install');
+    }
+    const clean = await runner('git', ['clean', '-fd', 'web/dist'], { cwd: root });
+    if (rb.ok) {
+      if (clean.ok) push('↩ 已回滚到 ' + before.slice(0, 7));
+      else push('⚠️ 清理构建产物异常（' + (clean.stderr.trim() || clean.code) + '），请手动清理 web/dist');
+    } else {
+      push('⚠️ 回滚命令异常（' + (rb.stderr.trim() || rb.code) + '），请手动 git reset --hard ' + before);
+    }
     return {
       ok: false,
       log,
       error: reason,
       rolledBack: true,
       beforeCommit: before,
-      rollbackOk: rb.ok
+      rollbackOk: rb.ok && depsRestored,
+      depsRestored
     };
   };
 
@@ -205,11 +221,15 @@ export async function runUpdate({ restart = true, onLog, runner = run } = {}) {
   const afterR = await runner('git', ['rev-parse', 'HEAD'], { cwd: root });
   const afterCommit = afterR.ok ? afterR.stdout.trim() : state.commit;
 
-  // 对比更新前后变更了哪些文件，决定是否需要重装依赖 / 重建前端。
+  // M-16 修复：git diff 退出码必须检查。命令失败时绝不能把变更集合当作空集合并跳过
+  // install/build（否则可能在依赖/前端已变化却未重建时仍报告更新成功）。
   const diff = await runner('git', ['diff', '--name-only', `${before} HEAD`], { cwd: root });
+  if (!diff.ok) {
+    return rollback('git diff 失败，无法确定变更范围');
+  }
   const changed = diff.stdout.split('\n').map((x) => x.trim()).filter(Boolean);
-  const needInstall = changed.some((f) => /(^|\/)package\.json$|^package-lock\.json$/.test(f));
-  const needBuild = needInstall || changed.some((f) => /^web\//.test(f));
+  needInstall = changed.some((f) => /(^|\/)package\.json$|^package-lock\.json$/.test(f));
+  needBuild = needInstall || changed.some((f) => /^web\//.test(f));
 
   if (needInstall) {
     push('▶ 依赖变化，执行 npm install …');

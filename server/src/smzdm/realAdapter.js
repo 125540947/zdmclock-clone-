@@ -16,7 +16,7 @@ import { normalizeArticleId } from './articleId.js';
 import { isSafePushUrl, isSafeSmzdmUrl, readBodyCapped, BodyTooLargeError } from '../notifier.js';
 import { parseJsonp, removeTags } from './parse.js';
 import { config, boundedNum } from '../config.js';
-import { assertPublicDns } from '../dnsGuard.js';
+import { pinnedFetch } from '../dnsGuard.js';
 
 const BASE = (process.env.SMZDM_BASE || 'https://www.smzdm.com').replace(/\/$/, '');
 const API_BASE = (process.env.SMZDM_API_BASE || 'https://user-api.smzdm.com').replace(/\/$/, '');
@@ -145,16 +145,12 @@ export async function call(path, { method = 'GET', cookie, body, ua = UA, base =
   const MAX_REDIRECTS = 3;
   let currentUrl = url;
   let resp;
-  for (let attempt = 0; ; attempt++) {
-    // H-02 修复：DNS 重绑定防护（仅对带 Cookie 的凭据出口）。白名单 isSafeSmzdmUrl 只校验主机名，
-    // 但真实连接目标由 DNS 决定；若 DNS 被污染/重绑定解析到内网（如 169.254.169.254 云元数据、
-    // 10/8、127/8），完整 smzdm Cookie 会被发往非预期地址。发起请求前先确认当前目标解析到的
-    // 所有 IP 均为公网地址（初始请求与每次重定向均校验）。
-    if (cookie) {
-      const dnsHost = hostOf(currentUrl);
-      if (dnsHost) await assertPublicDns(dnsHost);
-    }
-    const init = {
+    for (let attempt = 0; ; attempt++) {
+      // M-09 修复：DNS 重绑定 TOCTOU 闭环——改用 pinnedFetch（dnsGuard）发起连接。
+      // pinnedFetch 先经 assertPublicDns 校验当前目标解析到的所有 IP 均为公网，再把校验通过的 IP
+      // 钉死到本次 TCP 连接（自定义 lookup 直接返回已校验 IP），消除两次解析间的重绑定时间窗。
+      // 初始请求与每次重定向均经 pinnedFetch 重新校验 + 钉死。
+      const init = {
       method,
       headers: headers(cookie, ua),
       redirect: 'manual',
@@ -168,7 +164,7 @@ export async function call(path, { method = 'GET', cookie, body, ua = UA, base =
       init.body = new URLSearchParams(body).toString();
     }
     try {
-      resp = await fetch(currentUrl, init);
+      resp = await pinnedFetch(currentUrl, init);
     } catch (e) {
       if (e?.name === 'TimeoutError' || e?.name === 'AbortError') {
         throw new Error(`请求超时（>${timeoutMs}ms）@ ${path}，请检查网络或被风控拦截`);

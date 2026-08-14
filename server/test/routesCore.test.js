@@ -241,6 +241,17 @@ test('POST /api/health/cookies 无账号 → total 0', async () => {
   assert.equal(data.message, '暂无账号');
 });
 
+// M-17：补齐 health 路由 accounts-present 分支的 route 级覆盖（此前仅有「无账号」分支）。
+// 默认 mock 适配器下 checkAccounts 不触真实网络，仅校验分支确实进入并检测账号。
+test('POST /api/health/cookies 有账号 → 进入 accounts-present 分支（total≥1）', async () => {
+  await makeUser('health_acc_present');
+  const { status, data } = await j('POST', '/api/health/cookies');
+  assert.equal(status, 200);
+  assert.ok(Array.isArray(data.results));
+  assert.ok(data.total >= 1, '应进入 accounts-present 分支并检测账号');
+  assert.notEqual(data.message, '暂无账号');
+});
+
 test('POST /api/health/verify 账号不存在 → 404', async () => {
   const { status } = await j('POST', '/api/health/verify', { userId: 'no_such' });
   assert.equal(status, 404);

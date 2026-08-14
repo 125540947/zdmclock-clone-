@@ -61,7 +61,7 @@ router.post('/refresh', mutationGuard, wrapAsync(async (req, res) => {
   }
 }));
 
-// 批量导入好价文章链接（浏览器导入入口；支持 ?token= 以便书签/同源页面调用）
+// 批量导入好价文章链接（浏览器导入入口；同域会话 Cookie 鉴权，不再使用 ?token= 查询字符串，M-03 修复）
 // 背景：服务端直抓 smzdm 好价被反爬挡死（首页 202 挑战页 / 内部 JSON 接口要签名 / RSSHub 403），
 // 故改为「数据从用户浏览器来」——用户在 smzdm 页用书签抓取链接，粘贴到 /baoliao-import 同源页面，
 // 由本接口解析 /p/<id> 并合并进 db.baoliao，「从好价列表取」即可正常工作。
@@ -99,7 +99,8 @@ router.post('/bulk', authRequiredOrQuery, wrapAsync(async (req, res) => {
   }
   let added = 0;
   await withWriteLock(() => {
-    added = mergeBaoliao(items);
+    // M-02 修复：批量导入记录录入者来源 IP，使开放模式下录入者随后在 /24 网段隔离中仍可见自己的好价
+    added = mergeBaoliao(items, getClientIp(req));
     return persistAwait();
   });
   res.json({ ok: true, received: items.length, added, total: db.baoliao.length });
@@ -152,68 +153,106 @@ router.post('/', authRequired, wrapAsync(async (req, res) => {
 
 // 更新（标题/价格/分类/状态等）
 router.put('/:id', mutationGuard, wrapAsync(async (req, res) => {
+  const dbPre = load();
+  const ref = dbPre.baoliao.find((x) => x.id === req.params.id);
+  if (!ref) return res.status(404).json({ error: 'not_found' });
+  const { title, url, price, cat, content, status } = req.body || {};
+  // M-10：锁内重新定位目标并原子改写+落盘；已删除则 404
+  let notFound = false;
+  await withWriteLock(() => {
+    const db = load();
+    const item = db.baoliao.find((x) => x.id === req.params.id);
+    if (!item) { notFound = true; return; }
+    if (title !== undefined) item.title = String(title).trim();
+    if (url !== undefined) item.url = String(url);
+    if (price !== undefined) item.price = String(price);
+    if (cat !== undefined) item.cat = String(cat);
+    if (content !== undefined) item.content = String(content);
+    if (status !== undefined) item.status = String(status);
+    item.updatedAt = new Date().toISOString();
+    return persistAwait();
+  });
+  if (notFound) return res.status(404).json({ error: 'not_found' });
   const db = load();
   const item = db.baoliao.find((x) => x.id === req.params.id);
-  if (!item) return res.status(404).json({ error: 'not_found' });
-  const { title, url, price, cat, content, status } = req.body || {};
-  if (title !== undefined) item.title = String(title).trim();
-  if (url !== undefined) item.url = String(url);
-  if (price !== undefined) item.price = String(price);
-  if (cat !== undefined) item.cat = String(cat);
-  if (content !== undefined) item.content = String(content);
-  if (status !== undefined) item.status = String(status);
-  item.updatedAt = new Date().toISOString();
-  await withWriteLock(() => persistAwait());
   res.json({ ok: true, item });
 }));
 
 // 删除
 router.delete('/:id', mutationGuard, wrapAsync(async (req, res) => {
-  const db = load();
-  const idx = db.baoliao.findIndex((x) => x.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: 'not_found' });
+  // M-10：索引计算移入写锁内，避免前序删除使索引失效而误删 / 漏删
+  let notFound = false;
   await withWriteLock(() => {
+    const db = load();
+    const idx = db.baoliao.findIndex((x) => x.id === req.params.id);
+    if (idx === -1) { notFound = true; return; }
     db.baoliao.splice(idx, 1);
     return persistAwait();
   });
+  if (notFound) return res.status(404).json({ error: 'not_found' });
   res.json({ ok: true });
 }));
 
 // 提交到 smzdm（调用适配器；mock 直接返回成功）
 // 真实动作类接口：开放模式下强制管理员（mutationGuard），避免匿名用任意 cookie 提交爆料（IDOR）。
 router.post('/:id/submit', mutationGuard, wrapAsync(async (req, res) => {
-  const db = load();
-  const item = db.baoliao.find((x) => x.id === req.params.id);
-  if (!item) return res.status(404).json({ error: 'not_found' });
+  // 锁外预读：用于早失败（404）与选账号。网络 I/O 必须在锁外；
+  // 真正提交结果在写锁内重新定位 item 后原子落盘（M-10）。
+  const dbPre = load();
+  const ref = dbPre.baoliao.find((x) => x.id === req.params.id);
+  if (!ref) return res.status(404).json({ error: 'not_found' });
   const { userId } = req.body || {};
-  const user = userId ? db.users.find((u) => u.id === userId) : db.users[0];
+  const user = userId ? dbPre.users.find((u) => u.id === userId) : dbPre.users[0];
   if (!user || !user.cookie) {
-    item.status = 'failed';
-    item.lastResult = '请先添加 smzdm 账号并录入 Cookie';
-    item.updatedAt = new Date().toISOString();
-    await withWriteLock(() => persistAwait());
+    let notFound = false;
+    await withWriteLock(() => {
+      const db = load();
+      const item = db.baoliao.find((x) => x.id === req.params.id);
+      if (!item) { notFound = true; return; }
+      item.status = 'failed';
+      item.lastResult = '请先添加 smzdm 账号并录入 Cookie';
+      item.updatedAt = new Date().toISOString();
+      return persistAwait();
+    });
+    if (notFound) return res.status(404).json({ error: 'not_found' });
     return res.status(400).json({ error: 'no_user', message: '请先添加 smzdm 账号' });
   }
   try {
     const r = await smzdm.submitBaoliao(user.cookie, {
-      title: item.title,
-      url: item.url,
-      price: item.price,
-      cat: item.cat,
-      content: item.content
+      title: ref.title,
+      url: ref.url,
+      price: ref.price,
+      cat: ref.cat,
+      content: ref.content
     });
-    item.status = 'submitted';
-    item.smzdmUrl = r.url || '';
-    item.lastResult = r.message || '提交成功';
-    item.submittedAt = new Date().toISOString();
-    item.updatedAt = item.submittedAt;
-    await withWriteLock(() => persistAwait());
+    let notFound = false;
+    await withWriteLock(() => {
+      const db = load();
+      const item = db.baoliao.find((x) => x.id === req.params.id);
+      if (!item) { notFound = true; return; }
+      item.status = 'submitted';
+      item.smzdmUrl = r.url || '';
+      item.lastResult = r.message || '提交成功';
+      item.submittedAt = new Date().toISOString();
+      item.updatedAt = item.submittedAt;
+      return persistAwait();
+    });
+    if (notFound) return res.status(404).json({ error: 'not_found' });
+    const db = load();
+    const item = db.baoliao.find((x) => x.id === req.params.id);
     res.json({ ok: true, result: r, item });
   } catch (e) {
-    item.status = 'failed';
-    item.lastResult = e.message;
-    item.updatedAt = new Date().toISOString();
-    await withWriteLock(() => persistAwait());
+    let notFound = false;
+    await withWriteLock(() => {
+      const db = load();
+      const item = db.baoliao.find((x) => x.id === req.params.id);
+      if (!item) { notFound = true; return; }
+      item.status = 'failed';
+      item.lastResult = e.message;
+      item.updatedAt = new Date().toISOString();
+      return persistAwait();
+    });
+    if (notFound) return res.status(404).json({ error: 'not_found' });
     dbgLog('[baoliao] 任务执行异常：', e.message);
     res.status(502).json({ error: 'adapter_error', message: '任务执行异常，请稍后重试' });
   }

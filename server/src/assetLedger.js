@@ -61,6 +61,12 @@ function recordAssetEvent(db, ev) {
   if (!snap) {
     snap = { userId: ev.userId, date: today, gold: null, silver: null, exp: null, level: null };
     db.assetSnapshots.push(snap);
+    // M-12：限制快照上限，避免「账号 × 日期」无限增长撑大 db.json（与账本同上限策略）。
+    // 超出时丢弃最旧日期的快照——日收益曲线仅依赖近期锚点，历史过旧快照价值低。
+    if (db.assetSnapshots.length > 5000) {
+      db.assetSnapshots.sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
+      db.assetSnapshots.splice(0, db.assetSnapshots.length - 5000);
+    }
   }
   if (ev.goldAfter != null) snap.gold = round2(ev.goldAfter);
   if (ev.silverAfter != null) snap.silver = round2(ev.silverAfter);
@@ -182,7 +188,7 @@ export function dailyAssetSeries(db, days = 30, visibleIds = null, tz = config.t
   // 避免容器 UTC 下资产日报归属与"今天"错位（跨日统计冲突）。
   // 注意 zonedWallClock 返回的是带 getter 的普通对象而非 Date，故这里用 todayStrTZ 取 tz 日历日，
   // 再以 UTC 日历日回推 days 天（日历日运算与时区无关），保证跨时区一致。
-  const tzToday = tz && tz !== 'local' && tz !== 'UTC' ? todayStrTZ(tz) : localDateStr(new Date());
+  const tzToday = todayStrTZ(tz);
   const baseUTC = new Date(tzToday + 'T00:00:00Z');
   const ymd = (d) =>
     `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
@@ -308,7 +314,7 @@ export function dailyAssetSeries(db, days = 30, visibleIds = null, tz = config.t
 export function assetByTask(db, days = 30, visibleIds = null, tz = config.tz) {
   const ledger = db.assetLedger || [];
   // M-09 修复：与 dailyAssetSeries 同源，按配置时区墙钟计算窗口起点
-  const tzToday = tz && tz !== 'local' && tz !== 'UTC' ? todayStrTZ(tz) : localDateStr(new Date());
+  const tzToday = todayStrTZ(tz);
   const cutoffUTC = new Date(tzToday + 'T00:00:00Z');
   cutoffUTC.setUTCDate(cutoffUTC.getUTCDate() - (days - 1));
   const cutoffStr = `${cutoffUTC.getUTCFullYear()}-${String(cutoffUTC.getUTCMonth() + 1).padStart(2, '0')}-${String(cutoffUTC.getUTCDate()).padStart(2, '0')}`;

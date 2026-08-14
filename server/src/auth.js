@@ -46,11 +46,11 @@ export function authRequiredOrQuery(req, res, next) {
   if (config.openMode || !config.requireAuth) return next();
   const h = req.headers.authorization || '';
   const bearer = h.startsWith('Bearer ') ? h.slice(7) : '';
-  const q = String(req.query.token || '');
   const cookie = parseCookies(req).zb_token || '';
+  // M-03 修复：移除 ?token= 查询参数鉴权——全权限 API Token 放入 URL 会落入反向代理访问日志、
+  // 浏览器历史与网络记录，扩大长期静态凭据暴露面。改由 Bearer 头或同域会话 Cookie（zb_token）鉴权。
   if (
     (bearer && safeEqual(bearer, config.apiToken)) ||
-    (q && safeEqual(q, config.apiToken)) ||
     (cookie && safeEqual(cookie, config.apiToken))
   ) return next();
   return res.status(401).json({ error: 'unauthorized', message: '缺少或无效的 Token' });
@@ -115,25 +115,77 @@ export function getClientIp(req) {
   return (req && req.ip) || '';
 }
 
-// 将 IPv4 字符串转为 32 位无符号整数；非法（含非 IPv4）返回 null。
-export function ipToLong(ip) {
-  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(String(ip || '').trim());
-  if (!m) return null;
-  const parts = [m[1], m[2], m[3], m[4]].map(Number);
-  if (parts.some((p) => p > 255)) return null;
-  return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
+// 将 IPv4/IPv6 地址转为字节数组（IPv4=4 字节，IPv6=16 字节）；非法返回 null。
+// M-07 修复：此前仅支持 IPv4，IPv6 访客录入的数据因无法命中同网段判定而对自己不可见。
+export function ipToBytes(ip) {
+  const s = String(ip || '').trim();
+  // IPv4
+  const m4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
+  if (m4) {
+    const parts = [m4[1], m4[2], m4[3], m4[4]].map(Number);
+    if (parts.some((p) => p > 255)) return null;
+    return Uint8Array.from(parts);
+  }
+  // IPv6（支持 :: 压缩与全展开）
+  if (s.includes(':')) return expandIPv6(s);
+  return null;
 }
 
-// 判断两个 IPv4 是否同网段（默认 /24）。任一非 IPv4 返回 false（IPv6 不纳入同段判定）。
+// 展开 IPv6 地址为 16 字节；非法返回 null。
+function expandIPv6(str) {
+  const s = str.toLowerCase().replace(/^:/, '').replace(/:$/, '');
+  let headParts = [];
+  let tailParts = [];
+  if (s.includes('::')) {
+    const [left, right] = s.split('::');
+    headParts = left ? left.split(':').filter(Boolean) : [];
+    tailParts = right ? right.split(':').filter(Boolean) : [];
+    if (headParts.length + tailParts.length > 7) return null; // 含 :: 最多 7 段显式
+  } else {
+    headParts = s.split(':');
+    if (headParts.length !== 8) return null;
+  }
+  const missing = 8 - (headParts.length + tailParts.length);
+  const parts = [...headParts, ...Array(missing).fill('0'), ...tailParts];
+  const bytes = new Uint8Array(16);
+  for (let i = 0; i < 8; i++) {
+    if (!/^[0-9a-f]{1,4}$/.test(parts[i])) return null;
+    const v = parseInt(parts[i], 16);
+    bytes[i * 2] = (v >> 8) & 0xff;
+    bytes[i * 2 + 1] = v & 0xff;
+  }
+  return bytes;
+}
+
+// 生成「前缀掩码」字节数组：低 bits 位清零（bits 按地址族可为 0~32 或 0~128）。
+function prefixMask(bytes, bits) {
+  const out = bytes.slice();
+  const full = Math.floor(bits / 8);
+  const rem = bits % 8;
+  for (let i = 0; i < full; i++) out[i] = 0xff;
+  if (full < out.length && rem > 0) out[full] = (0xff << (8 - rem)) & 0xff;
+  for (let i = full + (rem > 0 ? 1 : 0); i < out.length; i++) out[i] = 0;
+  return out;
+}
+
+// 判断两个 IP（IPv4 或 IPv6）是否同前缀网段。跨协议族（v4 vs v6）返回 false；非法返回 false。
+// M-07 修复：IPv6 默认 /24 过严（IPv6 子网通常为 /64），当调用方使用 IPv4 默认 /24 且双方均为 IPv6 时，
+// 自动放宽到 /64，使同一 IPv6 访客能命中自己录入的数据与资产。
 export function sameSegment(ipA, ipB, bits = 24) {
-  const a = ipToLong(ipA);
-  const b = ipToLong(ipB);
-  if (a === null || b === null) return false;
-  const mask = bits >= 32 ? 0xffffffff : (0xffffffff << (32 - bits)) >>> 0;
-  return (a & mask) === (b & mask);
+  const a = ipToBytes(ipA);
+  const b = ipToBytes(ipB);
+  if (!a || !b || a.length !== b.length) return false;
+  let eff = bits;
+  if (a.length === 16 && eff === 24) eff = 64;
+  const ma = prefixMask(a, eff);
+  for (let i = 0; i < a.length; i++) {
+    if ((a[i] & ma[i]) !== (b[i] & ma[i])) return false;
+  }
+  return true;
 }
 
-// 解析 IP/CIDR 白名单字符串（逗号分隔）。返回 [{ base, mask }]，非法项忽略。
+// 解析 IP/CIDR 白名单字符串（逗号分隔）。返回 [{ bytes, mask }]，非法项忽略。
+// M-07 修复：支持 IPv6 CIDR（如 2001:db8::/32）。
 export function parseCidrList(str) {
   if (!str) return [];
   return String(str)
@@ -141,27 +193,43 @@ export function parseCidrList(str) {
     .map((s) => s.trim())
     .filter(Boolean)
     .map((s) => {
+      let bytes;
+      let bits;
       if (s.includes('/')) {
         const [ip, bitsStr] = s.split('/');
-        const bits = Number(bitsStr);
-        const base = ipToLong(ip);
-        if (base === null || !Number.isInteger(bits) || bits < 0 || bits > 32) return null;
-        const mask = bits >= 32 ? 0xffffffff : (0xffffffff << (32 - bits)) >>> 0;
-        return { base, mask };
+        bits = Number(bitsStr);
+        bytes = ipToBytes(ip);
+        if (!bytes || !Number.isInteger(bits) || bits < 0 || bits > bytes.length * 8) return null;
+      } else {
+        bytes = ipToBytes(s);
+        if (!bytes) return null;
+        bits = bytes.length * 8;
       }
-      const ip = ipToLong(s);
-      if (ip === null) return null;
-      return { base: ip, mask: 0xffffffff };
+      return { bytes, mask: prefixMask(bytes, bits) };
     })
     .filter(Boolean);
 }
 
-// 判断 IPv4 是否命中白名单。list 为空（未配置）返回 true（不限制来源，由上层 proxyAuthHeader 兜底）。
+// 判断 IP（IPv4/IPv6）是否命中白名单。list 为空（未配置）返回 true（不限制来源，由上层 proxyAuthHeader 兜底）。
+// 跨协议族不匹配；非法 IP 返回 false。
 export function ipInCidrList(ip, list) {
   if (!list || !list.length) return true;
-  const v = ipToLong(ip);
-  if (v === null) return false;
-  return list.some(({ base, mask }) => (v & mask) === (base & mask));
+  const v = ipToBytes(ip);
+  if (!v) return false;
+  return list.some(({ bytes, mask }) => {
+    if (v.length !== bytes.length) return false;
+    for (let i = 0; i < v.length; i++) {
+      if ((v[i] & mask[i]) !== (bytes[i] & mask[i])) return false;
+    }
+    return true;
+  });
+}
+
+// 向后兼容：旧调用方可能使用 ipToLong（返回 32 位无符号整数，仅 IPv4）。
+export function ipToLong(ip) {
+  const b = ipToBytes(ip);
+  if (!b || b.length !== 4) return null;
+  return ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]) >>> 0;
 }
 
 // 从请求中提取管理员 Token（与 requireAdmin 同源）：X-Admin-Token 头 > body.adminToken > Authorization。

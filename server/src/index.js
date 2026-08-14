@@ -68,8 +68,7 @@ const BAOLIAO_IMPORT_HTML = `<!doctype html>
 </div>
 <div class="card">
   <h3>② 粘贴并导入</h3>
-  <p class="tip">Token（开启鉴权时需要，默认 <code>zdmclock</code>；未开启可留空）：</p>
-  <p><input type="text" id="token" placeholder="API Token，可留空"></p>
+  <p class="tip">已登录状态下无需填写 Token——浏览器会自动携带会话 Cookie 完成鉴权（同域请求，不暴露在地址栏）。若提示未授权，请先在主界面登录。</p>
   <p><input type="text" id="channelId" placeholder="频道 ID（可选；好价贴必填真实频道，否则点赞/收藏会失败）">
   <button type="button" id="remember" style="background:#2b6cb0">📌 记住</button>
   <button type="button" id="forget" style="background:#888">清除</button>
@@ -111,12 +110,13 @@ const BAOLIAO_IMPORT_HTML = `<!doctype html>
   showRemembered();
   btn.addEventListener('click',function(){
     var text=document.getElementById('links').value;
-    var token=document.getElementById('token').value.trim();
     var channelId=cid.value.trim();
     if(!text.trim()){msg.className='err';msg.textContent='请先粘贴链接';return;}
-    var url='/api/baoliao/bulk'+(token?('?token='+encodeURIComponent(token)):'');
+    // M-03 修复：不再把全权限 API Token 拼入查询字符串（会落入代理访问日志/浏览器历史/网络记录），
+    // 改用同域会话 Cookie（zb_token，HttpOnly）自动携带完成鉴权。
+    var url='/api/baoliao/bulk';
     btn.disabled=true;msg.className='';msg.textContent='导入中…';
-    fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text,channelId:channelId})})
+    fetch(url,{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text,channelId:channelId})})
       .then(function(r){return r.json().then(function(j){return {ok:r.ok,j:j};});})
       .then(function(o){btn.disabled=false;
         if(o.ok&&o.j.ok){msg.className='ok';msg.textContent='成功：解析 '+o.j.received+' 条，新增 '+o.j.added+' 条，列表共 '+o.j.total+' 条。现在可以去「自动任务」选「从好价列表取」了。';}
@@ -351,6 +351,36 @@ if (isMain) {
         '已拒绝启动。请同时设置 PROXY_AUTH_HEADER 与 PROXY_TRUSTED_IPS（绑定可信网段）或关闭 TRUST_PROXY_AUTH。'
     );
     process.exit(1);
+  }
+
+  // M-06 修复：非法 IANA 时区在 Intl.DateTimeFormat 构造时抛 RangeError，
+  // 调度 tick 捕获后整轮跳过、依赖日期的同步 API 经全局错误处理返回 500，错误配置不在启动阶段暴露。
+  // 这里强制校验 ZDM_TZ：仅允许 'local' / 'UTC' / 合法 IANA 时区，否则拒绝启动（fail-fast）。
+  const isValidTimeZone = (t) => {
+    if (!t || t === 'local' || t === 'UTC') return true;
+    try {
+      new Intl.DateTimeFormat('en-CA', { timeZone: t });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (!isValidTimeZone(config.tz)) {
+    console.error(
+      `[zdmclock][致命] ZDM_TZ=${JSON.stringify(config.tz)} 不是合法时区（仅支持 'local' / 'UTC' / IANA 时区如 'Asia/Shanghai'）——` +
+        '已拒绝启动。请修正 ZDM_TZ 后重试。'
+    );
+    process.exit(1);
+  }
+
+  // M-08 安全提示：跨站部署（CORS_ORIGIN 指向独立域名）时，会话 Cookie 会被设为 SameSite=None; Secure，
+  // 必须经 TLS 传输才能被浏览器存储/发送，否则登录失效。未启用 HTTPS（COOKIE_SECURE!=1 且非 production）时提前告警。
+  if (process.env.CORS_ORIGIN && process.env.COOKIE_SECURE !== '1' && config.nodeEnv !== 'production') {
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[zdmclock][安全] 已配置 CORS_ORIGIN（跨站前端）但未启用 TLS（COOKIE_SECURE!=1 且非 production）。' +
+        '跨站凭据 Cookie 需经 HTTPS 传输，否则浏览器不会存储会话 Cookie，登录将失效。请配置 HTTPS 后部署。'
+    );
   }
 
   app.listen(config.port, config.bindAddress, () => {

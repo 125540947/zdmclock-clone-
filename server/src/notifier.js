@@ -9,7 +9,7 @@
 // 任何异常都被捕获并返回 { ok:false, error }，不会向外抛出，保证签到/任务主流程不受影响。
 
 import { config } from './config.js';
-import { assertPublicDns } from './dnsGuard.js';
+import { assertPublicDns, pinnedFetch } from './dnsGuard.js';
 
 // SSRF 防护：用户可控的 webhook（及 bark base）、任务自定义 endpoint / referer 都必须经过校验，
 // 仅允许公网 http/https，拒绝回环 / 私有 / 链路本地地址，防止在 OPEN_MODE 下被匿名
@@ -162,7 +162,9 @@ export async function safePushFetch(url, init = {}) {
     return { ok: false, error: 'dns_rebind', message: e && e.message ? e.message : 'DNS 校验失败' };
   }
   try {
-    const r = await fetch(url, { ...init, redirect: 'manual' });
+    // M-09 修复：改用 pinnedFetch（dnsGuard）发起连接——把 assertPublicDns 校验通过的 IP 钉死到本次
+    // TCP 连接，消除「先校验再 fetch」之间 DNS 重绑定的二次解析时间窗，避免 webhook 凭据被导到内网。
+    const r = await pinnedFetch(url, { ...init, redirect: 'manual' });
     // H-03：拒绝重定向（不跟随），避免被引向内网/云元数据地址
     if (r.status >= 300 && r.status < 400) {
       return { ok: false, error: 'redirect_not_allowed', message: `推送目标返回重定向，已拒绝跟随 @ ${url}` };

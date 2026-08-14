@@ -54,6 +54,44 @@ test('POST /api/users 缺少 cookie 返回 400', async () => {
   assert.equal(status, 400);
 });
 
+test('M-10：并发删除 + 更新账号，最终状态一致且无孤儿复活', async () => {
+  const c = await j('POST', '/api/users', { nickname: 'm10', cookie: 'a=1; b=2' });
+  assert.equal(c.status, 200);
+  const id = c.data.id;
+  // 并发：删除 + 更新昵称 + 再删除（旧实现会把索引算在锁外，前序删除使索引偏移而误删他人或直接 200 复活孤儿）
+  const [del1, put1, del2] = await Promise.all([
+    j('DELETE', '/api/users/' + id),
+    j('PUT', '/api/users/' + id, { nickname: 'changed' }),
+    j('DELETE', '/api/users/' + id)
+  ]);
+  assert.ok(del1.status === 200 || del1.status === 404);
+  assert.ok(put1.status === 200 || put1.status === 404);
+  assert.ok(del2.status === 200 || del2.status === 404);
+  const after = await j('GET', '/api/users/' + id);
+  assert.equal(after.status, 404, '账号被删除后不应被并发 PUT 复活（写锁内重新定位目标）');
+});
+
+test('M-10：并发删除 + 更新爆料，最终状态一致且无孤儿复活', async () => {
+  const b = await j('POST', '/api/baoliao', { title: 't', url: 'http://x', price: '1', cat: 'c', content: 'cc' });
+  assert.equal(b.status, 200);
+  const id = b.data.item.id;
+  const [del1, put1] = await Promise.all([
+    j('DELETE', '/api/baoliao/' + id),
+    j('PUT', '/api/baoliao/' + id, { title: 'changed' })
+  ]);
+  assert.ok(del1.status === 200 || del1.status === 404);
+  assert.equal(put1.status, 404, '并发删除后 PUT 应定位失败返回 404（写锁内重新定位目标）');
+  const list = await j('GET', '/api/baoliao');
+  const stillThere = (list.data.items || []).some((x) => x.id === id);
+  assert.equal(stillThere, false, '爆料被删除后不应出现在列表中（无孤儿复活）');
+});
+
+test('M-13：聚合签到状态接口正常返回（Set 成员判定无回归）', async () => {
+  const { status, data } = await j('GET', '/api/clock/status');
+  assert.equal(status, 200);
+  assert.ok('today' in data && 'todayChecked' in data && 'calendar' in data, '聚合状态应包含 today/todayChecked/calendar');
+});
+
 test('PUT /api/tasks/:id 非法 cron 返回 400 invalid_cron', async () => {
   const { status, data } = await j('PUT', '/api/tasks/t_clock', { cron: 'not-a-cron' });
   assert.equal(status, 400);

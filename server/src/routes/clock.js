@@ -46,7 +46,7 @@ function buildCalendar(records, days = 30, tz) {
   // 避免跨日边界上日历最后一天与"今天"错位（如容器 UTC 与 Asia/Shanghai 并存时状态页自相矛盾）。
   // zonedWallClock 返回的是带 getter 的普通对象而非 Date，故用 todayStrTZ 取 tz 日历日，
   // 再以 UTC 日历日回推 days 天（日历日运算与时区无关），保证跨时区一致。
-  const tzToday = tz && tz !== 'local' && tz !== 'UTC' ? todayStrTZ(tz) : localDateStr(new Date());
+  const tzToday = todayStrTZ(tz);
   const baseUTC = new Date(tzToday + 'T00:00:00Z');
   for (let i = days - 1; i >= 0; i--) {
     const d = new Date(baseUTC);
@@ -83,8 +83,9 @@ router.get('/status', authRequired, (req, res) => {
     return;
   }
   // 无 userId：返回作用域内账号的聚合状态
-  const ids = scope ? [...scope] : null;
-  const records = ids ? db.clockRecords.filter((r) => ids.includes(r.userId)) : db.clockRecords;
+  // M-13 修复：用 Set 做成员判定，将 O(记录数 × 可见账号数) 降为 O(记录数)
+  const ids = scope ? new Set(scope) : null;
+  const records = ids ? db.clockRecords.filter((r) => ids.has(r.userId)) : db.clockRecords;
   const today = tzToday();
   res.json({
     today,

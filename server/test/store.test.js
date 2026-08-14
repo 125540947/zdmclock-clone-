@@ -146,6 +146,26 @@ test('M-04：persistAwait 立即落盘，await 后磁盘文件已反映变更', 
   assert.ok(parsed.users.some((u) => u.id === 'pa1'), 'persistAwait 后数据应已写入磁盘');
 });
 
+// M-11：单账号记录远超 cap 时，enforceClockCap 必须截断（旧 guard 在总记录 < 账号数*cap+64 时跳过，导致不截断）
+test('M-11：单账号超限仍被截断（不依赖总记录数宽松跳过）', async () => {
+  const { config } = await import('../src/config.js');
+  const prevCap = config.clockRecordsMaxPerUser;
+  config.clockRecordsMaxPerUser = 3;
+  try {
+    const db = load();
+    db.clockRecords.length = 0;
+    // 单一账号写入 10 条（远超 cap=3）；总记录 10 < 账号数(1)*3 + 64（旧 guard 阈值），旧实现会跳过截断
+    for (let i = 1; i <= 10; i++) {
+      db.clockRecords.push({ userId: 'u_m11', date: '2026-02-' + String(i).padStart(2, '0') });
+    }
+    persistNow(); // 内部调用 enforceClockCap
+    const kept = db.clockRecords.filter((r) => r.userId === 'u_m11');
+    assert.equal(kept.length, 3, '单账号记录应被截断到 cap=3');
+  } finally {
+    config.clockRecordsMaxPerUser = prevCap;
+  }
+});
+
 // 清理临时数据目录
 test('清理临时 DATA_DIR', () => {
   fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });

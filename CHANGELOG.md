@@ -390,6 +390,40 @@
 
 ---
 
+## 批次 15 · 深度审计整改收尾（剩余 M-08~M-17 + L-01~L-05，2026-08-14）
+
+**改动要点**
+- 依据 `FULL_PROJECT_AUDIT_REPORT_2026-08-14` 的剩余中/低优先级项，系统性闭环 M-08~M-17 与 L-01~L-05，无新增运行时依赖、无架构改动。
+- 三条主线：① 写路径并发安全（定位—修改—落盘原子化）；② 容量/资源硬上限收敛（防 db.json 膨胀与滥用）；③ 测试覆盖补全（health accounts-present、前端 session 登录态驱动、自更新事务性回滚）。
+- 部署脚本（deploy.sh）已重构为标准 `git pull --ff-only + npm install + npm run build` 流程，不再依赖 SHA 白名单/jsDelivr 拉取，前端资产名无需硬编码（构建自动刷新）。
+
+**新增功能**
+- 无（本轮为纯修复与测试补全）。
+
+**问题修复**
+- **M-08 跨站会话 Cookie + 启动告警**：`auth.js` 登录下发的会话 Cookie 收敛 `SameSite`；`index.js` 弱口令/默认令牌告警文案收紧（不回显内部细节）。
+- **M-09 DNS 重绑定防护**：`dnsGuard.js` 用内置 `http`/`https` + 自定义 `lookup` 钉死校验 IP、透明解压 gzip/deflate/br，并修复 `lookup` 回调在 `{all:true}` 下的形态（`(err,[{address,family}])`），使 `realAdapter`/notifier 出口校验可靠；新增 17/17 单测。
+- **M-10 写路由并发安全**：`routes/users.js`、`routes/baoliao.js` 的 PUT/DELETE/refresh/submit 将「定位—修改—落盘」移入 `withWriteLock` 回调内，锁外仅预读引用，杜绝并发删除+更新导致的「复活」/索引错位 404 误判；加 2 个并发回归测试（routes 全绿）。
+- **M-11 单账号签到记录截断**：`store.js` `enforceClockCap` 快速跳过条件由 `账号数*cap+64` 收紧为 `recs.length <= cap`，单账号超限仍被截断（此前可绕过上限）；加单测。
+- **M-12 资产快照上限**：`assetLedger.js` `recordAssetEvent` 在 `assetSnapshots` 超 5000 时按日期排序裁剪，防无限膨胀；加单测。
+- **M-13 聚合签到状态性能**：`routes/clock.js` 用 `Set` 替代数组 `includes` 做 userId 过滤；加 route 级聚合状态测试。
+- **M-14 / M-15 依赖与锁治理**：`web/package.json` vite 由 `^5.4.2` 提升到 `^5.4.20`（锁至 5.4.21，修复路径穿越）；删除与根锁不一致的遗留 `web/package-lock.json`（stray，standalone `npm ci` 会失败），根锁为唯一权威源；前端重新构建验证通过。
+- **M-16 自更新事务性回滚**：`selfUpdate.js` 回滚不再仅 `git reset --hard`，而重建 `node_modules` + 重装依赖 + 恢复未跟踪构建产物，保证「全有或全无」；`git diff` 退出码不再被忽略（失败→明确告警而非误报成功）；加 2 个回归测试（selfUpdate 18/18）。
+- **M-17 测试覆盖补全**：补 `POST /api/health/cookies` 有账号分支的 route 级测试（此前仅有「无账号」分支）；补前端 `session.applySession` 登录态驱动单测（H-01 后由它驱动登录浮层）；XFF 代理链早有 `authSecurity.test.js` 覆盖。
+- **L-02 示例配置补全**：`.env.example` 补全此前缺失的 30+ 项（OPEN_MODE / TRUST_PROXY* / PROXY_* / PUBLIC_BASE_URL / HOST_ALLOWLIST / INSTALL_TOKEN / ZDM_TZ / HEALTH_CONCURRENCY / 风控区间 / 容量上限等），使示例完整表达运行时安全边界。
+- **L-03 README 过期修正**：`REQUIRE_AUTH` 默认值 `false`→`true`（secure-by-default）；删除「默认 `admin123`」表述（未设时启动随机生成强密码）；`GET /api/health/cookies`→`POST`（GET 固定 405）。
+- **L-04 前端产物清理**：保留 `vite.config.js` 的 `emptyOutDir:false`（项目有意：避免增量构建白名单破坏）；但 `git rm` 当前 `index.html` 未引用的 6 个历史哈希产物（BDvXw0Te/BJyaUMB5/BdxDtcor/Ck0O1y4P/CzjUULqJ/DDj4U6BL），使入库 dist 仅含被引用资产（CF24pHtE.js / BNNPXNhM.css），减小发布体积。
+- **L-01 / L-05 记录为保持现状**：L-01（根 `lint` 脚本空操作）属 ESLint 未引入的既定决策（H-10 依赖升级已延后），不强行加 lint 门禁；L-05（大模块耦合）为已知架构技术债，重构超本轮范围，记录待后续专项。
+
+**测试与部署**
+- 后端 `npm test -w server` 全量通过（store/assetLedger/routes/routesCore/selfUpdate/dnsGuard 等新增用例：M-10/M-11/M-12/M-13/M-16/M-17 共 +若干，整体 0 失败）。
+- 前端 `npm run build` 通过，新产物 `web/dist/assets/index-CF24pHtE.js` / `index-BNNPXNhM.css`；`npm test -w web` 新增 `session.test.js` 3/3 通过。
+- 部署：沿用 deploy.sh 标准 `git pull + npm install + npm run build`，无需改 SHA/白名单。
+
+**代表提交**：`<TBD>`
+
+---
+
 ## 维护约定（默认规范）
 
 1. **分批原则**：每次整理历史或新增工作阶段，按**逻辑阶段**（功能/安全波次）或**时间**划分为批次；同一波次跨多日可合并为一批次。

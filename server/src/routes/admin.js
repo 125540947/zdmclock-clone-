@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { load, todayStr, withWriteLock, persistAwait } from '../store.js';
+import { load, todayStrTZ, withWriteLock, persistAwait } from '../store.js';
 import { config } from '../config.js';
 import { adminOrAuthRequired } from '../auth.js';
 import { resolvedCheckInTime, parseHM, fmtHM, windowMinutes } from '../clockSchedule.js';
@@ -12,7 +12,7 @@ const router = Router();
 // 管理后台概览数据（OPEN_MODE 下强制管理员，避免匿名读全量运营统计）
 router.get('/stats', adminOrAuthRequired, (req, res) => {
   const db = load();
-  const today = todayStr();
+  const today = todayStrTZ(config.tz);
   const todayClocks = db.clockRecords.filter((r) => r.date === today).length;
   const recent = [...db.clockRecords]
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
@@ -34,7 +34,7 @@ router.get('/stats', adminOrAuthRequired, (req, res) => {
 //           start/end（HH:MM，限定统计窗口；缺省为全天 00:00~23:59）。
 router.get('/clock-distribution', adminOrAuthRequired, (req, res) => {
   const db = load();
-  const today = todayStr();
+  const today = todayStrTZ(config.tz);
   const mode = req.query.mode === 'custom' ? 'custom' : 'hour';
 
   // 统计窗口（分钟）

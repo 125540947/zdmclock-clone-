@@ -172,15 +172,21 @@ test('authRequired：openMode/!requireAuth 放行；requireAuth 校验 Bearer', 
 });
 
 // ---------- authRequiredOrQuery ----------
-test('authRequiredOrQuery：支持 ?token= 查询参数', () => {
+test('authRequiredOrQuery：仅接受 Bearer 头或同域 zb_token Cookie（M-03：不再接受 ?token= 查询参数）', () => {
   config.requireAuth = true;
   let n = 0; const next = () => { n++; };
   const noTok = mockRes();
   authRequiredOrQuery(mockReq(), noTok, next);
-  assert.equal(noTok.statusCode, 401);
+  assert.equal(noTok.statusCode, 401, '无凭据应拒绝');
+  // M-03 修复：?token= 查询参数中的全权限 API Token 不再被接受（避免落入代理/浏览器日志）
   const withQ = mockRes();
   authRequiredOrQuery(mockReq({ query: { token: config.apiToken } }), withQ, next);
-  assert.equal(n, 1);
+  assert.equal(withQ.statusCode, 401, '?token= 查询参数应被拒绝');
+  // Bearer 头仍可用
+  authRequiredOrQuery(mockReq({ headers: { authorization: 'Bearer ' + config.apiToken } }), mockRes(), next);
+  // 同域 zb_token Cookie 仍可用
+  authRequiredOrQuery(mockReq({ headers: { cookie: 'zb_token=' + config.apiToken } }), mockRes(), next);
+  assert.equal(n, 2, 'Bearer 头与 zb_token Cookie 均应放行');
 });
 
 // ---------- authRequiredOrInstall ----------
