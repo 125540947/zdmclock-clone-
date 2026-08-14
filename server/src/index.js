@@ -135,6 +135,8 @@ const BAOLIAO_IMPORT_HTML = `<!doctype html>
 // 限流逻辑本身由 rateLimit.test.js 独立覆盖，关闭不影响逻辑验证。
 export function createApp({ rateLimit: enableRateLimit = true } = {}) {
   const app = express();
+  // 纵深加固：隐藏技术栈标识，避免响应头 X-Powered-By: Express 泄露服务端框架信息（轻微信息泄露面）。
+  app.disable('x-powered-by');
   // 信任代理：开启后 Express 仅当连接来自「受信任代理网段」时才采信 X-Forwarded-For 计算 req.ip。
   // H-01 修复：不再无差别 `true`（那样直连暴露的客户端可伪造 XFF 绕过限流与网段隔离），
   // 而是绑定到具体可信网段（PROXY_TRUSTED_SUBNET，留空默认 loopback 匹配本机 nginx 反代）。

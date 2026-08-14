@@ -44,6 +44,13 @@ test('M-08：分域部署时 CORS 返回 Access-Control-Allow-Credentials: true'
   assert.equal(res.headers.get('access-control-allow-credentials'), 'true');
 });
 
+test('纵深加固：响应不泄露 X-Powered-By: Express 技术栈标识', async () => {
+  for (const p of ['/api/health', '/api/auth/config']) {
+    const res = await fetch(base + p);
+    assert.equal(res.headers.get('x-powered-by'), null, `${p} 不应携带 X-Powered-By 头`);
+  }
+});
+
 test('关闭测试服务器', () => {
   server.close();
   assert.ok(true);
