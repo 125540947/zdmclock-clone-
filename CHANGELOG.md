@@ -420,7 +420,7 @@
 - 前端 `npm run build` 通过，新产物 `web/dist/assets/index-CF24pHtE.js` / `index-BNNPXNhM.css`；`npm test -w web` 新增 `session.test.js` 3/3 通过。
 - 部署：沿用 deploy.sh 标准 `git pull + npm install + npm run build`，无需改 SHA/白名单。
 
-**代表提交**：`<TBD>`
+**代表提交**：`b8d9d3f`
 
 ---
 
