@@ -48,3 +48,12 @@ test('parseBool 假值/未定义', () => {
   assert.equal(parseBool(undefined), false);
   assert.equal(parseBool(undefined, true), true); // 默认值生效
 });
+
+test('parseBool：未识别值回退默认值（fail-closed，H-03 修复）', () => {
+  // 笔误 "tru" 不应静默关闭鉴权：REQUIRE_AUTH=tru 应回退默认 true，而非被当成 false
+  assert.equal(parseBool('tru', true), true);
+  assert.equal(parseBool('TRUEe', true), true);
+  // 其他随机字符串也严格回退默认（不臆造 false）
+  assert.equal(parseBool('yesplease', false), false);
+  assert.equal(parseBool('', true), true);
+});

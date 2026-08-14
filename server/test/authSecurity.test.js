@@ -50,10 +50,12 @@ test('getClientIp：默认（trustProxy=false）忽略 XFF，返回真实 req.ip
   assert.equal(getClientIp(mockReq({ headers: { 'x-forwarded-for': '203.0.113.9, 70.41.3.18' }, ip: '198.51.100.5' })), '198.51.100.5');
   assert.equal(getClientIp(mockReq({ ip: '10.0.0.5' })), '10.0.0.5');
 });
-test('getClientIp：trustProxy=true 时取 XFF 首段，无 XFF 回退 req.ip', () => {
+test('getClientIp：trustProxy=true 仍只信任 Express 计算的 req.ip，忽略伪造 XFF 首段（H-04 修复）', () => {
   config.trustProxy = true;
-  assert.equal(getClientIp(mockReq({ headers: { 'x-forwarded-for': '203.0.113.9, 70.41.3.18' } })), '203.0.113.9');
-  assert.equal(getClientIp(mockReq({ headers: { 'x-forwarded-for': ' 198.51.100.2 ' } })), '198.51.100.2');
+  // 即便开启代理信任，req.ip 由 proxy-addr 从右向左剔除可信代理得出；客户端伪造的 XFF 左段（203.0.113.9）
+  // 不会被采用，必须返回真实的 req.ip（mockReq 默认 ip 为 127.0.0.1，此处显式给定以模拟可信代理算出的访客 IP）。
+  assert.equal(getClientIp(mockReq({ headers: { 'x-forwarded-for': '203.0.113.9, 70.41.3.18' }, ip: '198.51.100.5' })), '198.51.100.5');
+  assert.equal(getClientIp(mockReq({ headers: { 'x-forwarded-for': ' 198.51.100.2 ' }, ip: '10.0.0.5' })), '10.0.0.5');
   assert.equal(getClientIp(mockReq({ ip: '10.0.0.5' })), '10.0.0.5');
   config.trustProxy = false;
 });
@@ -113,18 +115,18 @@ test('canAccessUser：开放模式无 recordedIp 遗留账号不可见（M-10 �
   // 遗留数据归属不明，不应对匿名访客可见；仅同网段录入或管理员可访问，杜绝跨网段读取。
   assert.equal(canAccessUser(mockReq({ ip: '1.2.3.4' }), { recordedIp: undefined }), false);
 });
-test('canAccessUser：开放模式同段可见、跨段拒绝、无记录拒绝（trustProxy=true 时依据 XFF）', () => {
+test('canAccessUser：开放模式同段可见、跨段拒绝、无记录拒绝（H-04 后 getClientIp 以 req.ip 为准）', () => {
   config.openMode = true;
-  const prevTrust = config.trustProxy;
-  config.trustProxy = true; // 信任代理，XFF 模拟访客 IP 才生效
   try {
-    const sameSeg = mockReq({ headers: { 'x-forwarded-for': '192.168.1.50' } });
+    // H-04 修复后 getClientIp 返回 Express 计算的 req.ip（可信代理场景下由 proxy-addr 从 XFF 算出），
+    // 故单测直接以 mockReq 的 ip 字段模拟「访客真实 IP」。
+    const sameSeg = mockReq({ ip: '192.168.1.50' });
     assert.equal(canAccessUser(sameSeg, { recordedIp: '192.168.1.99' }), true);
-    const diffSeg = mockReq({ headers: { 'x-forwarded-for': '192.168.2.50' } });
+    const diffSeg = mockReq({ ip: '192.168.2.50' });
     assert.equal(canAccessUser(diffSeg, { recordedIp: '192.168.1.99' }), false);
     assert.equal(canAccessUser(mockReq(), undefined), false);
   } finally {
-    config.trustProxy = prevTrust;
+    config.openMode = false;
   }
 });
 

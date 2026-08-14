@@ -339,12 +339,16 @@ if (isMain) {
   process.on('SIGTERM', () => { gracefulStop('SIGTERM'); });
   process.on('SIGINT', () => { gracefulStop('SIGINT'); });
 
-  // 致命配置校验（Phase 2 代理认证加固）：TRUST_PROXY_AUTH=true 但未配 PROXY_AUTH_HEADER 时，
-  // 任何人直连 /login 都能拿到 apiToken+adminToken，等同把后台裸奔到公网 —— 直接拒绝启动。
-  if (config.trustProxyAuth && !config.proxyAuthHeader) {
+  // 致命配置校验（Phase 2 代理认证加固 / H-05 修复）：TRUST_PROXY_AUTH=true 时，必须同时配置
+  // PROXY_AUTH_HEADER（已认证用户请求头）与 PROXY_TRUSTED_IPS（来源 IP 白名单）。
+  // 缺 PROXY_AUTH_HEADER：任何人直连 /login 都能拿到 Token，等同后台裸奔公网；
+  // 缺 PROXY_TRUSTED_IPS：来源 IP 白名单退化为「不限制」（ipInCidrList 空列表返回 true），
+  // 直连暴露时攻击者可自带头绕过代理认证拿到 Token —— 两种误配均直接拒绝启动。
+  if (config.trustProxyAuth && (!config.proxyAuthHeader || !config.proxyTrustedIps)) {
     console.error(
-      '[zdmclock][致命] TRUST_PROXY_AUTH=true 但未配置 PROXY_AUTH_HEADER —— ' +
-        '任何人可经 /login 获取管理员 Token，已拒绝启动。请设置 PROXY_AUTH_HEADER（并建议 PROXY_TRUSTED_IPS 绑定可信网段）或关闭 TRUST_PROXY_AUTH。'
+      '[zdmclock][致命] TRUST_PROXY_AUTH=true 但缺少 PROXY_AUTH_HEADER 或 PROXY_TRUSTED_IPS —— ' +
+        '缺少任一项都会让 /login 代理鉴权分支退化为「任意来源/任意请求」可放行，等同把后台裸奔到公网，' +
+        '已拒绝启动。请同时设置 PROXY_AUTH_HEADER 与 PROXY_TRUSTED_IPS（绑定可信网段）或关闭 TRUST_PROXY_AUTH。'
     );
     process.exit(1);
   }
@@ -385,6 +389,14 @@ if (isMain) {
       console.warn(
         '[zdmclock][安全] 未设置 API_TOKEN，本次已生成随机 Token（重启后变更）。' +
           '如需固定 Token 或启用鉴权，请在 .env 显式设置 API_TOKEN。'
+      );
+    }
+    if (config.adminPasswordGenerated) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[zdmclock][安全] 未设置 ADMIN_PASSWORD，已自动生成随机管理员密码（本次启动有效）：' +
+          config.adminPassword +
+          ' —— 请尽快在 .env 显式设置固定强密码，否则重启后将变更。'
       );
     }
     if (config.adminPasswordIsWeak && config.requireAuth && !config.trustProxyAuth) {

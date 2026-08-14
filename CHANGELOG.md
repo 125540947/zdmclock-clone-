@@ -363,6 +363,33 @@
 
 ---
 
+## 批次 14 · 深度审计 HIGH 级风险闭环（H-01 ~ H-07，2026-08-14）
+
+**改动要点**
+- 依据 `FULL_PROJECT_AUDIT_REPORT_2026-08-14`（基线 HEAD `e002c0e`）识别的 7 项 HIGH 风险，逐项闭环，无新增依赖、无架构改动。
+- 三条核心收敛：① 登录态判定改以 HttpOnly 会话 Cookie 派生的 `/auth/config`（`loggedIn`/`isAdmin`）为准，后端不再在响应体回显明文 token（#190）；② 真实访客 IP 统一以 Express `proxy-addr` 信任边界计算的 `req.ip` 为准，杜绝伪造 `X-Forwarded-For` 命中 `/24` 网段判定（水平越权 P0-3）；③ 未显式设置 `ADMIN_PASSWORD` 时生成一次性随机强密码（secure-by-default），消除静态 `admin123` 可被公网爆破。
+
+**新增功能**
+- 无（本轮为纯安全修复）。
+
+**问题修复**
+- **H-01 前端登录成功判定**：`web/src/App.vue` `doLogin` 由 `data.token`/`data.adminToken` 改为 `session.loggedIn`/`session.isAdmin`（#190 后端不再回显明文 token，原逻辑导致登录永远失败、管理员分支恒误报）。
+- **H-02 health.js 缺失 `persistAwait` 导入**：`POST /api/health/cookies` 在有账号时抛 `ReferenceError`→500（H-08 已用 `persistAwait` 但 import 漏带），补入 `store.js` 的 `persistAwait` 导入。
+- **H-03 parseBool 未识别值 fail-closed**：任意未识别字符串（如笔误 `REQUIRE_AUTH=tru`）不再被当成 `false`，改为回退默认 `d`，防止安全开关被笔误静默关闭；同时显式识别 `0/false/no/off` 为假。
+- **H-04 getClientIp 伪造 XFF 绕过**：不再在 `trustProxy=true` 时自行解析 `X-Forwarded-For` 最左段（绕过 `proxy-addr` 信任边界、可被客户端伪造），统一返回 Express 计算的 `req.ip`（从右向左剔除可信代理），根治开放模式 `/24` 网段水平越权。
+- **H-05 trustProxyAuth 启动守卫收紧**：`index.js` 致命校验由「缺 `PROXY_AUTH_HEADER`」扩展为「缺 `PROXY_AUTH_HEADER` **或** `PROXY_TRUSTED_IPS`」即拒绝启动——后者缺失时 `ipInCidrList` 空列表会退化为允许全部来源，直连暴露可绕过代理认证拿到 Token。
+- **H-06 admin123 默认弱口令治理**：鉴权开启且非开放/代理模式时，未设 `ADMIN_PASSWORD` 自动生成随机强密码（本次启动有效）并打印到启动日志；`adminPasswordIsWeak` 不再把「未设置」误判为弱（因已自动生成强密码），仅显式弱口令才告警。
+- **H-07 开放模式 baoliao 草稿无上限**：`POST /api/baoliao`（开放模式下匿名可经 `authRequired` 放行）补充 `maxBaoliaoItems` 总量上限、字段长度限位（复用 `validation.js` 的 `limitStr`/`requireStr`），并记录 `recordedIp` 使 `/24` 网段隔离生效（此前遗漏 `recordedIp` 会导致草稿对同段创建者也不可见）。
+
+**测试与部署**
+- 后端 `npm test -w server` **427 通过 / 0 失败**（较批次 13 增 2：parseBool fail-closed ×1、baoliao H-07 防护 ×1；并修正 3 处依赖旧 `getClientIp`/`XFF` 行为的集成测试断言，使其以「可信代理场景下 `req.ip` 由 `proxy-addr` 计算」为准——单元测用 `mockReq({ ip })`，集成测新建信任 loopback 代理的应用实例）。
+- 前端 `npm run build` 通过，`web/dist` 产物 hash 变更（`index-BDvXw0Te.js` / `index-BJyaUMB5.css`）；已同步更新 `deploy-smart-startup.sh` 的 SHA 与 step-4 资源名。
+- 部署脚本 `deploy-smart-startup.sh`（工作区根，未进仓库）：SHA 更新至本轮提交；拉取白名单已含全部 5 个变更后端文件（`auth.js`/`config.js`/`index.js`/`routes/health.js`/`routes/baoliao.js`），step-4 资源名更新为新 hash。
+
+**代表提交**：（提交后补登，见 git log 最新）
+
+---
+
 ## 维护约定（默认规范）
 
 1. **分批原则**：每次整理历史或新增工作阶段，按**逻辑阶段**（功能/安全波次）或**时间**划分为批次；同一波次跨多日可合并为一批次。

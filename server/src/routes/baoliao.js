@@ -12,7 +12,7 @@ import {
 } from '../auth.js';
 import { dbgLog } from '../log.js';
 import { normalizeArticleId } from '../smzdm/articleId.js';
-import { limitArr, MAX_IMPORT_ITEMS } from '../validation.js';
+import { limitArr, MAX_IMPORT_ITEMS, limitStr, requireStr, MAX_NAME_LEN } from '../validation.js';
 import { wrapAsync } from '../wrapAsync.js';
 
 const router = Router();
@@ -106,19 +106,37 @@ router.post('/bulk', authRequiredOrQuery, wrapAsync(async (req, res) => {
 }));
 
 // 新增爆料草稿
+// H-07 修复：开放模式下匿名也可经此接口新增草稿（authRequired 对匿名放行），故须做容量与字段长度防护，
+// 并登记录入来源 IP，避免被刷量撑爆 db.json 或越权读取遗留草稿。
 router.post('/', authRequired, wrapAsync(async (req, res) => {
   const { title, url, price, cat, content, userId } = req.body || {};
   if (!title || !title.trim()) return res.status(400).json({ error: 'invalid', message: '标题不能为空' });
   const db = load();
+  // 总量上限：达到上限后拒绝新增，防止 OPEN_MODE 匿名刷量撑爆 db（maxBaoliaoItems，默认 500）
+  if (config.maxBaoliaoItems && db.baoliao.length >= config.maxBaoliaoItems) {
+    return res.status(400).json({ error: 'too_many', message: `好价草稿已达上限（${config.maxBaoliaoItems}），请先清理或合并` });
+  }
+  // 字段长度上限：复用 #188 的校验辅助，超长字段直接拒绝（400 带明确提示），防超大字段撑爆 db
+  let safeTitle, safeUrl, safePrice, safeCat, safeContent;
+  try {
+    safeTitle = requireStr(title, config.maxNoteLen, '标题').trim();
+    safeUrl = url ? limitStr(url, config.maxNoteLen, '链接') : '';
+    safePrice = price ? limitStr(price, MAX_NAME_LEN, '价格') : '';
+    safeCat = cat ? limitStr(cat, MAX_NAME_LEN, '分类') : '';
+    safeContent = content ? limitStr(content, config.maxNoteLen, '内容') : '';
+  } catch (e) {
+    return res.status(400).json({ error: e.code || 'invalid', message: e.message });
+  }
   const now = new Date().toISOString();
   const item = {
     id: genId('bl'),
     userId: userId || null,
-    title: String(title).trim(),
-    url: url ? String(url) : '',
-    price: price ? String(price) : '',
-    cat: cat ? String(cat) : '',
-    content: content ? String(content) : '',
+    title: safeTitle,
+    url: safeUrl,
+    price: safePrice,
+    cat: safeCat,
+    content: safeContent,
+    recordedIp: getClientIp(req), // H-07：登记录入来源 IP，使开放模式 /24 网段隔离生效（也防止遗留草稿对所有人可见）
     status: 'draft', // draft | submitted | failed
     smzdmUrl: '',
     lastResult: '',

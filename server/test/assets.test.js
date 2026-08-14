@@ -93,13 +93,28 @@ test('OPEN_MODE 下 /api/assets/summary 仅返回同 /24 网段账号（遗留�
   const prevTrust = config.trustProxy;
   config.openMode = true; // 匿名（无 adminToken）访客，依网段隔离
   config.adminToken = '';
-  config.trustProxy = true; // 信任 XFF，用受控 IP 模拟访客（避开测试机 loopback 为 IPv6 的干扰）
+  config.trustProxy = true; // 信任 loopback 代理，使来自本机且带 XFF 的请求按 XFF 计算 req.ip（H-04 后隔离以 req.ip 为准）
+  // 创建一份信任代理的应用实例，XFF 才会被 proxy-addr 采信算作访客 IP（模块级 app 默认不信任代理）。
+  const testApp = createApp();
+  const testServer = testApp.listen(0);
+  await new Promise((r) => testServer.once('listening', r));
+  const testBase = 'http://localhost:' + testServer.address().port;
+  async function tj(method, p, body, headers = {}) {
+    const res = await fetch(testBase + p, {
+      method,
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: body !== undefined ? JSON.stringify(body) : undefined
+    });
+    let data = null;
+    try { data = await res.json(); } catch { /* 可能无 JSON 体 */ }
+    return { status: res.status, data };
+  }
   const d = load();
   // 访客 XFF=203.0.113.99，与 u1.recordedIp=203.0.113.50 同 /24；u2=198.51.100.5 跨段应被排除
   d.users[0].recordedIp = '203.0.113.50';
   d.users[1].recordedIp = '198.51.100.5';
   try {
-    const r = await j('GET', '/api/assets/summary', undefined, { 'X-Forwarded-For': '203.0.113.99' });
+    const r = await tj('GET', '/api/assets/summary', undefined, { 'X-Forwarded-For': '203.0.113.99' });
     assert.equal(r.status, 200);
     assert.equal(r.data.users.length, 1, '跨段账号 u2 应被隔离排除');
     assert.equal(r.data.users[0].id, 'u1');
@@ -111,6 +126,10 @@ test('OPEN_MODE 下 /api/assets/summary 仅返回同 /24 网段账号（遗留�
     config.trustProxy = prevTrust;
     d.users[0].recordedIp = undefined;
     d.users[1].recordedIp = undefined;
+    await new Promise((r) => {
+      try { testServer.closeAllConnections?.(); } catch { /* 旧版 node 无此方法 */ }
+      testServer.close(r);
+    });
   }
 });
 

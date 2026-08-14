@@ -134,8 +134,10 @@ async function doLogin() {
   const u = adminMode.value ? 'admin' : username.value.trim();
   try {
     const data = await login(u, password.value);
-    if (data && data.token) {
-      if (adminMode.value && !data.adminToken) {
+    // #190 / H-01：后端不再在响应体回显明文 token，登录是否成功以 /auth/config 下发的会话态为准
+    // （login() 内部已刷新 session.loggedIn / session.isAdmin）。
+    if (session.loggedIn) {
+      if (adminMode.value && !session.isAdmin) {
         err.value = '管理员 Token 不正确，或未在 .env 配置 ADMIN_TOKEN';
         return;
       }

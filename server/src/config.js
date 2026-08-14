@@ -8,9 +8,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 // 解析布尔型环境变量（导出便于单测，语义不变）
+// H-03 修复：未识别值（如笔误 "tru"）回退默认值 d，而非一律返回 false（fail-closed），
+// 防止 REQUIRE_AUTH=tru 等笔误静默关闭鉴权 / 风控等安全开关。
 export const parseBool = (v, d = false) => {
   if (v === undefined) return d;
-  return ['1', 'true', 'yes', 'on'].includes(String(v).toLowerCase());
+  const s = String(v).toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(s)) return true;
+  if (['0', 'false', 'no', 'off'].includes(s)) return false;
+  return d;
 };
 
 // M-14 修复：数值型环境变量统一做「有限值 + 上下界」校验，拒绝 NaN / 负数 / 极大值 / 上下界倒置。
@@ -43,6 +48,9 @@ const adminTokenFromEnv = process.env.ADMIN_TOKEN || null;
 // 与通用 API_TOKEN / 独立 ADMIN_TOKEN 完全隔离。泄露后仅能新增/更新被录入的 smzdm 账号，
 // 无法读取或删除已有数据；改 .env 的 INSTALL_TOKEN 即可立即吊销。默认空。
 const installTokenFromEnv = process.env.INSTALL_TOKEN || null;
+// 管理员密码（H-06 治理）：未显式设置 ADMIN_PASSWORD 时，鉴权场景（REQUIRE_AUTH 开、非开放/代理模式）
+// 将由启动期一致性逻辑生成一次性随机强密码，避免静态可猜测的 admin123 被公网爆破（生成的密码会打印到启动日志）。
+const adminPasswordFromEnv = process.env.ADMIN_PASSWORD || null;
 
 export const config = {
   // M-15 修复：PORT 必须为本机合法 TCP 端口（1~65535 整数）。非法值（非数字 / 0 / 超大 / 负数）
@@ -58,15 +66,17 @@ export const config = {
   requireAuth: parseBool(process.env.REQUIRE_AUTH, true),
   adminUsername: process.env.ADMIN_USERNAME || 'admin',
   // 弱口令清单：显式使用这些值时即便非空也视为弱密码，启动时告警（避免 admin123 等"看似已设其实很弱"）。
-  // 空值 → 回落到内置 'admin123' 兜底（adminPasswordIsDefault=true，同样告警）。
-  adminPassword: process.env.ADMIN_PASSWORD && process.env.ADMIN_PASSWORD.length ? process.env.ADMIN_PASSWORD : 'admin123',
-  // 标记是否仍在使用内置默认密码（未显式设置 ADMIN_PASSWORD），便于启动时给出安全告警
-  adminPasswordIsDefault: !process.env.ADMIN_PASSWORD,
-  // 弱密码标记：未设置 或 命中常见弱口令清单 → 鉴权开启时启动告警（纵深加固，堵住 .env.example 的 admin123 字面量）
+  // 未显式设置（adminPasswordFromEnv 为空）→ 回落到内置 'admin123' 占位，但启动期一致性逻辑（见文件末尾）
+  // 会在「需密码鉴权」场景下将其替换为一次性随机强密码（adminPasswordGenerated=true），故此处默认不视为弱。
+  adminPassword: adminPasswordFromEnv || 'admin123',
+  // 标记是否仍在使用内置默认/未设置密码（便于启动时给出安全告警）
+  adminPasswordIsDefault: !adminPasswordFromEnv,
+  // 弱密码标记：仅当「显式设置」且命中常见弱口令清单 → 鉴权开启时启动告警（纵深加固）。
+  // 未设置（adminPasswordFromEnv 为空）本应走随机强密码生成，不在此判弱；生成的随机密码在一致性逻辑中标记为强。
   adminPasswordIsWeak:
-    !process.env.ADMIN_PASSWORD ||
+    !!adminPasswordFromEnv &&
     new Set(['admin123', 'admin', 'password', '123456', 'root', 'changeme', 'qwerty', 'letmein']).has(
-      String(process.env.ADMIN_PASSWORD).toLowerCase()
+      String(adminPasswordFromEnv).toLowerCase()
     ),
   // 前置代理已认证模式：当前置（Cloudflare Access / 宝塔 / nginx 密码等）已完成身份验证时，
   // 应用层不再校验 ADMIN_PASSWORD，login 自动放行并返回 token（写接口仍带 token）。
@@ -217,3 +227,13 @@ config.engagementDelayMaxMs = Math.max(config.engagementDelayMaxMs, config.engag
 config.engagementDelayLongMaxMs = Math.max(config.engagementDelayLongMaxMs, config.engagementDelayMinMs);
 config.engagementSampleDefaultMax = Math.max(config.engagementSampleDefaultMax, config.engagementSampleDefaultMin);
 config.clockStaggerJitterMs = Math.max(config.clockStaggerJitterMs, 0);
+
+// H-06 修复：未显式设置 ADMIN_PASSWORD 且处于「需要密码鉴权」场景（REQUIRE_AUTH 开、非开放模式、非前置代理已认证）时，
+// 生成一次性随机强密码替换静态 admin123，杜绝默认弱口令被公网爆破。生成的密码为本次启动有效（重启变更），
+// 启动日志会打印（见 index.js 启动告警），生产务必在 .env 显式设置固定强密码。
+config.adminPasswordGenerated = false;
+if (!adminPasswordFromEnv && config.requireAuth && !config.openMode && !config.trustProxyAuth) {
+  config.adminPassword = crypto.randomBytes(18).toString('base64').replace(/[^A-Za-z0-9]/g, '').slice(0, 24);
+  config.adminPasswordGenerated = true;
+  config.adminPasswordIsWeak = false; // 随机生成的密码为强密码，不再视为弱
+}

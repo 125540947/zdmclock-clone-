@@ -106,14 +106,12 @@ export function maskCookie(cookie = '') {
 //   才采用 X-Forwarded-For 首段；否则一律返回真实套接字对端 IP（req.ip，不可伪造）。
 // 绝不默认可信 XFF——否则匿名可伪造 X-Forwarded-For 命中同 /24 网段判定，越权读取他人账号数据。
 // 开放录入的「同IP段可见」依赖此值，故该修复同时加固了 P0-3 水平越权防护。
+// 解析真实访客 IP。安全模型（H-04 修复）：始终返回 Express 依据「受信任代理网段」计算出的真实访客 IP，
+// 不再自行解析 X-Forwarded-For 最左段。Express 底层 proxy-addr 从右向左剔除可信代理，
+// 客户端伪造的 XFF 左段会被忽略，从根本上杜绝「伪造 XFF 命中同 /24 网段判定」的水平越权（P0-3）。
+// 仅当显式信任代理（config.trustProxy=true，即确有多层可信反代已剥离客户端伪造的 XFF）时，
+// proxy-addr 才会采信 XFF；直连暴露时 req.ip 为真实套接字对端、不可伪造。
 export function getClientIp(req) {
-  if (config.trustProxy) {
-    const xff = req.headers && req.headers['x-forwarded-for'];
-    if (xff) {
-      const first = String(xff).split(',')[0].trim();
-      if (first) return first;
-    }
-  }
   return (req && req.ip) || '';
 }
 

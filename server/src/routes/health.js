@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { load, persist, withWriteLock } from '../store.js';
+import { load, persist, withWriteLock, persistAwait } from '../store.js';
 import { smzdm } from '../smzdm/adapter.js';
 import { authRequired, mutationGuard } from '../auth.js';
 import { checkAccounts } from '../health.js';

@@ -351,29 +351,49 @@ test('POST /api/baoliao 合法 → 200 草稿', async () => {
 });
 
 // ---------- openMode 跨网段越权（P0-3 路由级集成） ----------
-test('openMode 下跨 /24 网段访问他人账号 → 403，同段 → 200（trustProxy=true 时依据 XFF）', async () => {
+test('openMode 下跨 /24 网段访问他人账号 → 403，同段 → 200（H-04 后 req.ip 由可信代理计算）', async () => {
   const id = await makeUser('seg_user');
   const db = load();
   const u = db.users.find((x) => x.id === id);
   u.recordedIp = '203.0.113.5'; // TEST-NET-3，公网示例地址
+  // H-04 修复后 getClientIp 返回 Express 的 req.ip；要模拟「可信代理已剥离伪造 XFF、Express 据信任网段算出
+  // 真实访客 IP」的部署形态，需创建一份信任 loopback 代理的应用，使来自本机（loopback）且带 XFF 的请求按 XFF 计算 req.ip。
   const prevOpen = config.openMode;
   const prevTrust = config.trustProxy;
   config.openMode = true;
-  config.trustProxy = true; // 信任代理，XFF 模拟访客 IP 才生效
+  config.trustProxy = true;
+  const testApp = createApp();
+  const testServer = testApp.listen(0);
+  await new Promise((r) => testServer.once('listening', r));
+  const testBase = 'http://localhost:' + testServer.address().port;
+  async function tj(method, p, body, headers = {}) {
+    const res = await fetch(testBase + p, {
+      method,
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: body !== undefined ? JSON.stringify(body) : undefined
+    });
+    let data = null;
+    try { data = await res.json(); } catch { /* 可能无 JSON 体 */ }
+    return { status: res.status, data };
+  }
   try {
-    const cross = await j('GET', '/api/clock/status?userId=' + id, undefined, {
+    const cross = await tj('GET', '/api/clock/status?userId=' + id, undefined, {
       'X-Forwarded-For': '198.51.100.7'
     });
     assert.equal(cross.status, 403, '跨网段应被拒');
     assert.equal(cross.data.error, 'forbidden');
 
-    const same = await j('GET', '/api/clock/status?userId=' + id, undefined, {
+    const same = await tj('GET', '/api/clock/status?userId=' + id, undefined, {
       'X-Forwarded-For': '203.0.113.99'
     });
     assert.equal(same.status, 200, '同网段应放行');
   } finally {
     config.openMode = prevOpen;
     config.trustProxy = prevTrust;
+    await new Promise((r) => {
+      try { testServer.closeAllConnections?.(); } catch { /* 旧版 node 无此方法 */ }
+      testServer.close(r);
+    });
   }
 });
 
