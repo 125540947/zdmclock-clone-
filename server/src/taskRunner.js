@@ -5,7 +5,6 @@ import { normalizeArticleId } from './smzdm/articleId.js';
 import { generateProductComment } from './gptAdapter.js';
 import { config } from './config.js';
 import { resolvedCheckInTime, fmtHM, parseHM, zonedWallClock } from './clockSchedule.js';
-import { runStartupForAccounts } from './startup.js';
 import {
   resolveRisk,
   jitterDelay,
@@ -433,8 +432,15 @@ export function withAccountLock(userId, fn) {
 }
 
 export async function runTask(task, db, opts = {}) {
-  // 智能启动调度：按账号错峰跑完整日常流水线（见 startup.js）
-  if (task.type === 'startup') return runStartupForAccounts(db);
+  // 智能启动调度：按账号错峰跑完整日常流水线（见 startup.js）。
+  // 注意：此处用运行时动态 import 而非静态 import，以打破 taskRunner ↔ startup 的循环依赖——
+  // taskRunner 被 startup 依赖（startup 调用 runTask 执行各流水线任务），startup 又需导出
+  // runStartupForAccounts 供 taskRunner 分发。静态互引虽因 ESM 实时绑定可运行，但模块边界脆弱、
+  // 阻碍单测隔离。改为按需动态加载后，静态模块图变为有向无环（startup → taskRunner，单向）。
+  if (task.type === 'startup') {
+    const { runStartupForAccounts } = await import('./startup.js');
+    return runStartupForAccounts(db);
+  }
   // gpt / fetch 不依赖账号 Cookie，无需账号即可运行（gpt 仅自动发布时用首个账号）
   if (task.type === 'gpt') return runGptBatch(task, db);
   if (task.type === 'fetch') return runFetch(task);

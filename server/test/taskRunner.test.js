@@ -407,6 +407,17 @@ test('还原全局 fetch', () => {
   assert.ok(true);
 });
 
+// ===================== P2：打破 taskRunner ↔ startup 循环依赖的回归测试 =====================
+// 验证 runTask({type:'startup'}) 在「改用动态 import 打破静态互引」后，仍正确委派给
+// startup.runStartupForAccounts，行为不变。用「无合格账号」场景走 early-return，避免真实联网/落库。
+test('runTask(type=startup) 委派给 runStartupForAccounts（循环依赖打破后行为不变）', async () => {
+  const db = { users: [], tasks: [] };
+  const r = await runTask({ type: 'startup' }, db, {});
+  assert.equal(r.ok, true);
+  assert.equal(r.ran, 0);
+  assert.match(r.message, /没有参与智能启动调度/);
+});
+
 // ===================== #183：同账号互斥锁 withAccountLock =====================
 
 test('withAccountLock：同一 userId 的并发执行串行化（不重叠）', async () => {

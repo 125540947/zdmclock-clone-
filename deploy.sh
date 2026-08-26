@@ -235,7 +235,8 @@ if [ "$SECRET_OK" -eq 1 ]; then
   echo "  .env 密钥有效，复用现有凭据（其余设置按本次部署参数重新物化）。"
 else
   if [ -f .env ]; then
-    cp .env ".env.broken.$(date +%s)" && echo "  ⚠ 检测到无效/弱密钥的 .env，已备份为 .env.broken.* 后重新生成"
+    _bk=".env.broken.$(date +%s)"
+    cp .env "$_bk" && chmod 600 "$_bk" && echo "  ⚠ 检测到无效/弱密钥的 .env，已备份(权限 600)为 $_bk 后重新生成"
   fi
   ADMIN_PASSWORD="$(openssl rand -base64 18 | tr -dc 'A-Za-z0-9' | head -c 24)"
   API_TOKEN="$(openssl rand -hex 24)"
@@ -263,7 +264,12 @@ if [ -n "$DOMAIN" ]; then
 else
   ZDM_TRUST_PROXY="TRUST_PROXY=false"
   ZDM_COOKIE_SECURE="COOKIE_SECURE=0"
-  # 直连模式：回传地址用「本机 IP:端口」固定（避免依赖不可靠的 Host 头），后端监听 0.0.0.0 供局域网直连。
+  # 直连模式（未配 --tls）：回传地址用「本机 IP:端口」固定（避免依赖不可靠的 Host 头），
+  # 后端监听 0.0.0.0 供局域网/公网直连。
+  # ⚠️ 安全提示：0.0.0.0 会暴露到所有网络接口（含公网 IP），攻击面最大。
+  #   务必保证 REQUIRE_AUTH=true（默认即 true，切勿改 false）作为唯一外部防线；
+  #   公网 VPS 强烈建议改用 --tls（nginx 反代 + 真实 TLS，后端回退 127.0.0.1）或在前置防火墙
+  #   仅放行受信赖网段。若仅需本机/回环访问，可手动将 BIND_ADDRESS 改为 127.0.0.1。
   SERVER_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
   ZDM_PUBLIC_BASE_URL="PUBLIC_BASE_URL=http://${SERVER_IP}:$PORT"
   ZDM_BIND_ADDRESS="BIND_ADDRESS=0.0.0.0"

@@ -39,5 +39,10 @@ ENV PORT=3000
 
 EXPOSE 3000
 
+# 存活探针：容器内固定回环探测根路径（SPA 兜底返回 200），确认进程与 HTTP 服务正常。
+# 命中非 /api 路径故不受鉴权影响；仅作 liveness，不校验业务逻辑。alpine 自带 busybox wget。
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -q -O /dev/null http://127.0.0.1:3000/ || exit 1
+
 # 直接运行 server，绕过根 start 脚本里的 cross-env（devDependency 已被跳过）
 CMD ["node", "server/src/index.js"]
