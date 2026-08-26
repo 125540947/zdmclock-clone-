@@ -8,7 +8,7 @@
 // 数据来源说明：增量优先取 smzdm 权威接口 getUserInfo 刷新后的"前后差额"；
 // 签到等明确返回增量的动作使用显式增量；其余任务靠刷新差额，保证不造假、可追溯。
 
-import { genId, todayStr, localDateStr, todayStrTZ } from './store.js';
+import { genId, todayStr, todayStrTZ } from './store.js';
 import { config } from './config.js';
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;

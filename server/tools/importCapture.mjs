@@ -32,7 +32,7 @@ function parseHar(text) {
   for (const e of entries) {
     const req = e.request || {};
     const url = req.url || '';
-    let host = '';
+    let host;
     try {
       host = new URL(url).host;
     } catch {
@@ -108,11 +108,11 @@ function parseCurl(text) {
     }
   }
   if (!url) return null;
-  let host = '';
+  let host;
   try {
     host = new URL(url).host;
   } catch {
-    host = '';
+    host = null;
   }
   if (!SMZDM_HOST_RE.test(host) && !/smzdm\.com/i.test(url)) return null;
   return { url, method, body, respText: null, headers };
@@ -198,9 +198,7 @@ function main() {
   for (const f of files) {
     const full = path.join(CAPTURES_DIR, f);
     const text = fs.readFileSync(full, 'utf-8');
-    let reqs = [];
-    if (/\.har$/i.test(f)) reqs = parseHar(text);
-    else reqs = [parseCurl(text)].filter(Boolean);
+    const reqs = /\.har$/i.test(f) ? parseHar(text) : [parseCurl(text)].filter(Boolean);
     for (const r of reqs) {
       const d = toDetected(r);
       if (!d) continue;

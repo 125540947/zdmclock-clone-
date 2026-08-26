@@ -119,6 +119,12 @@ export function getClientIp(req) {
 // M-07 修复：此前仅支持 IPv4，IPv6 访客录入的数据因无法命中同网段判定而对自己不可见。
 export function ipToBytes(ip) {
   const s = String(ip || '').trim();
+  // Node/Express 在双栈监听时通常把 IPv4 对端表示成 IPv4-mapped IPv6
+  //（例如 ::ffff:192.168.1.8）。把它规范化回 4 字节 IPv4，确保它能与
+  // 普通 IPv4 recordedIp / CIDR 正确比较；否则 OPEN_MODE 用户会看不到
+  // 自己刚录入的数据，代理来源白名单也可能误拒绝。
+  const mappedDotted = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(s);
+  if (mappedDotted) return ipToBytes(mappedDotted[1]);
   // IPv4
   const m4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
   if (m4) {
@@ -127,16 +133,29 @@ export function ipToBytes(ip) {
     return Uint8Array.from(parts);
   }
   // IPv6（支持 :: 压缩与全展开）
-  if (s.includes(':')) return expandIPv6(s);
+  if (s.includes(':')) {
+    const bytes = expandIPv6(s);
+    // 同时兼容十六进制写法 ::ffff:c0a8:0108。
+    if (
+      bytes &&
+      bytes.slice(0, 10).every((v) => v === 0) &&
+      bytes[10] === 0xff &&
+      bytes[11] === 0xff
+    ) return bytes.slice(12);
+    return bytes;
+  }
   return null;
 }
 
 // 展开 IPv6 地址为 16 字节；非法返回 null。
 function expandIPv6(str) {
-  const s = str.toLowerCase().replace(/^:/, '').replace(/:$/, '');
-  let headParts = [];
+  const s = str.toLowerCase();
+  let headParts;
   let tailParts = [];
   if (s.includes('::')) {
+    // IPv6 最多只能出现一次压缩标记；保留首尾空段，不能预先删冒号，
+    // 否则 ::1 / ::ffff:c0a8:1 会被误解析为普通未压缩地址。
+    if (s.indexOf('::') !== s.lastIndexOf('::')) return null;
     const [left, right] = s.split('::');
     headParts = left ? left.split(':').filter(Boolean) : [];
     tailParts = right ? right.split(':').filter(Boolean) : [];

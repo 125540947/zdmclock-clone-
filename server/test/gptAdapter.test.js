@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 
 // 必须在 import gptAdapter 之前设置，config 在加载时读取 GPT_API_KEY 决定 gptEnabled
 process.env.GPT_API_KEY = 'test-key';
-const { generateReply } = await import('../src/gptAdapter.js');
+const { generateReply, generateProductComment, buildProductCommentPrompt, cleanReply, productCommentIssues } = await import('../src/gptAdapter.js');
 const { config } = await import('../src/config.js');
 
 const realFetch = globalThis.fetch;
@@ -49,18 +49,61 @@ test('buildSystemPrompt friendly 默认口吻', async () => {
   mockFetchOnce({ choices: [{ message: { content: '  你好呀  ' } }] });
   const reply = await generateReply({ text: '原评论', tone: 'friendly' });
   assert.equal(reply, '你好呀'); // 去首尾空格
-  assert.match(lastReq.init.body, /亲切友善/);
+  assert.match(lastReq.init.body, /普通网友/);
+  assert.match(lastReq.init.body, /不要复述原文/);
+  assert.match(lastReq.init.body, /感谢分享/);
   assert.match(lastReq.init.body, /原评论/);
 });
 
 test('buildSystemPrompt pro / humor 口吻切换', async () => {
   mockFetchOnce({ choices: [{ message: { content: '专业回复' } }] });
   await generateReply({ text: 'x', tone: 'pro' });
-  assert.match(lastReq.init.body, /专业客观/);
+  assert.match(lastReq.init.body, /懂行但不端着/);
 
   mockFetchOnce({ choices: [{ message: { content: '幽默回复' } }] });
   await generateReply({ text: 'x', tone: 'humor' });
-  assert.match(lastReq.init.body, /幽默轻松/);
+  assert.match(lastReq.init.body, /自然的小幽默/);
+});
+
+test('cleanReply 移除模型包装但保留正文', () => {
+  assert.equal(cleanReply(' 回复：这价格确实可以，再等等券更香。 '), '这价格确实可以，再等等券更香。');
+  assert.equal(cleanReply('“用了一周，续航比我预想的稳。”'), '用了一周，续航比我预想的稳。');
+  assert.equal(cleanReply('```text\n尺码偏小的话，建议大一码。\n```'), '尺码偏小的话，建议大一码。');
+});
+
+test('商品评论提示词压制模板腔和虚构体验', () => {
+  const prompt = buildProductCommentPrompt({ tone: 'friendly' });
+  assert.match(prompt, /标题、正文和价格/);
+  assert.match(prompt, /禁止“好价，感谢分享”/);
+  assert.match(prompt, /不要假装买过或用过/);
+});
+
+test('generateProductComment 将标题、内容、价格作为独立事实传给模型', async () => {
+  mockFetchOnce({ choices: [{ message: { content: '这个容量放桌面上刚好。' } }] });
+  const reply = await generateProductComment({ title: '迷你电饭煲', content: '适合一人食', price: '79 元' });
+  assert.equal(reply, '这个容量放桌面上刚好。');
+  const body = JSON.parse(lastReq.init.body);
+  assert.match(body.messages[1].content, /商品标题：迷你电饭煲/);
+  assert.match(body.messages[1].content, /商品正文：适合一人食/);
+  assert.match(body.messages[1].content, /商品价格：79 元/);
+});
+
+test('productCommentIssues 识别常见 AI 套话，放行具体口语短评', () => {
+  assert.ok(productCommentIssues('总体来说，这款产品性价比很高，值得入手。').length > 0);
+  assert.deepEqual(productCommentIssues('1.2L 两个人吃估计都够了。'), []);
+});
+
+test('generateProductComment 首稿有 AI 味时携带问题自动重写', async () => {
+  const replies = ['总体来说，这款产品性价比很高，值得入手。', '1.2L 两个人吃估计都够了。'];
+  let calls = 0;
+  globalThis.fetch = async (url, init) => {
+    lastReq = { url, init };
+    return { ok: true, json: async () => ({ choices: [{ message: { content: replies[calls++] } }] }) };
+  };
+  const reply = await generateProductComment({ title: '1.2L 电饭煲', content: '双碗容量', price: '79 元' });
+  assert.equal(reply, '1.2L 两个人吃估计都够了。');
+  assert.equal(calls, 2);
+  assert.match(lastReq.init.body, /明显机器味/);
 });
 
 test('buildSystemPrompt 拼接自定义 prompt', async () => {

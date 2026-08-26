@@ -74,7 +74,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue';
-import api, { getUpdateStatus, checkUpdateRepo, applyUpdateRepo } from '../api/client.js';
+import { getUpdateStatus, checkUpdateRepo, applyUpdateRepo } from '../api/client.js';
 import { useToast } from '../composables/useToast.js';
 
 const state = ref({

@@ -39,6 +39,7 @@
             />
             <span class="hint-sm" v-if="t.articleSource === 'baoliao'">将对你好价列表中的文章自动取 ID 执行（无需手填）</span>
             <span class="hint-sm" v-else>评论/收藏/点赞需指定目标文章，否则运行会报错</span>
+            <span class="hint-sm" v-if="t.type === 'comment'">评论由 AI 阅读商品标题、内容和价格后现场生成；需先在 GPT 回复页启用模型。</span>
           </div>
           <div v-else-if="t.type === 'fetch'" class="art">
             <div class="row-limit">
@@ -179,7 +180,6 @@ import { useToast } from '../composables/useToast.js';
 import api, {
   getTaskEndpoints,
   saveTaskEndpoint,
-  getTaskTemplates,
   getCaptures,
   applyCaptures
 } from '../api/client.js';

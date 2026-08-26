@@ -31,16 +31,17 @@
       <div class="field">
         <label>回复语气</label>
         <select v-model="cfg.tone" @change="save" class="input">
-          <option value="friendly">亲切友善</option>
-          <option value="pro">专业客观</option>
-          <option value="humor">幽默轻松</option>
+          <option value="friendly">自然随和</option>
+          <option value="pro">懂行克制</option>
+          <option value="humor">轻松有趣</option>
         </select>
       </div>
 
       <div class="field">
         <label>提示词模板（可选）</label>
         <textarea v-model="cfg.prompt" class="textarea" @change="save"
-          placeholder="例如：适当提及性价比，避免夸张用词。留空则使用默认模板。"></textarea>
+          placeholder="例如：像数码老用户聊天，少用感叹号；信息不足就简短追问。留空使用自然口语模板。"></textarea>
+        <span class="hint-sm">默认会避开“感谢分享、值得入手”等套话，并围绕原文中的具体细节回复。</span>
       </div>
 
       <div class="row" style="border:none;padding-bottom:0">

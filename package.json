@@ -13,14 +13,18 @@
     "dev": "concurrently -n server,web -c green,cyan \"npm run dev -w server\" \"npm run dev -w web\"",
     "install:all": "npm install",
     "test": "npm run test -w server && npm run test -w web",
-    "lint": "npm run lint -w server -w web --if-present",
+    "lint": "eslint server web tools",
     "audit:deps": "npm audit --workspaces --audit-level=moderate"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "concurrently": "^9.1.0",
-    "cross-env": "^7.0.3"
+    "cross-env": "^7.0.3",
+    "eslint": "^10.9.1",
+    "globals": "^17.11.0",
+    "vite": "^8.2.2"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20.19"
   }
 }

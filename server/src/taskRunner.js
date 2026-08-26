@@ -2,9 +2,9 @@ import { smzdm } from './smzdm/adapter.js';
 import { applyClock, localYesterdayStr } from './clockCore.js';
 import { withWriteLock, persist, genId, mergeBaoliao, todayStr, todayStrTZ, yesterdayStrTZ } from './store.js';
 import { normalizeArticleId } from './smzdm/articleId.js';
-import { generateReply } from './gptAdapter.js';
+import { generateProductComment } from './gptAdapter.js';
 import { config } from './config.js';
-import { resolvedCheckInTime, fmtHM, parseHM, zonedWallClock, ACCOUNT_PIPELINE_TYPES } from './clockSchedule.js';
+import { resolvedCheckInTime, fmtHM, parseHM, zonedWallClock } from './clockSchedule.js';
 import { runStartupForAccounts } from './startup.js';
 import {
   resolveRisk,
@@ -58,7 +58,13 @@ export function collectArticleIds(task, db, articleSource, overrideId) {
       if (aid && !ids.some((x) => x.id === aid)) {
         // 携带条目自身的 channelId（若浏览器导入时已解析），供点赞/收藏 APP 接口使用，
         // 避免服务端在反爬下取不到好价/Deal 贴真实频道而退化成 '1'。
-        ids.push({ id: aid, channelId: item.channelId ? String(item.channelId) : '' });
+        ids.push({
+          id: aid,
+          channelId: item.channelId ? String(item.channelId) : '',
+          title: String(item.title || '').trim(),
+          content: String(item.content || '').trim(),
+          price: String(item.price || '').trim()
+        });
       }
     }
     return ids;
@@ -66,7 +72,16 @@ export function collectArticleIds(task, db, articleSource, overrideId) {
   const id = (overrideId && String(overrideId).trim()) || (task.articleId && String(task.articleId).trim()) || '';
   // manual 来源：仅当使用任务自身 articleId 时才透传 task.channelId（overrideId 为一次性指定，不应套用任务频道）
   const usingTaskArticle = !(overrideId && String(overrideId).trim());
-  return id ? [{ id, channelId: usingTaskArticle && task.channelId ? String(task.channelId) : '' }] : [];
+  const known = id
+    ? (db.baoliao || []).find((item) => normalizeArticleId(item.smzdmUrl || item.url || '') === normalizeArticleId(id))
+    : null;
+  return id ? [{
+    id,
+    channelId: usingTaskArticle && task.channelId ? String(task.channelId) : '',
+    title: String(known?.title || '').trim(),
+    content: String(known?.content || '').trim(),
+    price: String(known?.price || '').trim()
+  }] : [];
 }
 
 // 从数组中随机取 n 个不重复元素（Fisher-Yates 洗牌后取前 n），rng 可注入便于单测。
@@ -143,9 +158,27 @@ async function runEngagement(task, db, user, opts) {
     let attempt = 0;
     while (attempt <= maxCommentRetry) {
       try {
+        let commentContent = '';
+        if (action === 'comment') {
+          if (!db.settings?.gpt?.enabled) throw new Error('自动评论需要先启用 AI 回复');
+          if (!entry.title && !entry.content && !entry.price) {
+            throw new Error('缺少商品标题、内容和价格；请改用“从好价列表取”');
+          }
+          commentContent = await generateProductComment({
+            title: entry.title,
+            content: entry.content,
+            price: entry.price,
+            tone: db.settings.gpt.tone,
+            prompt: db.settings.gpt.prompt
+          });
+        }
         const r =
           action === 'comment'
-            ? await smzdm.doComment(user.cookie, { count: perArticleCount, articleId: aid })
+            ? await smzdm.doComment(user.cookie, {
+                count: perArticleCount,
+                articleId: aid,
+                content: commentContent
+              })
             : action === 'favorite'
             ? await smzdm.doFavorite(user.cookie, { count: perArticleCount, articleId: aid, channelId: chId })
             : await smzdm.doPoint(user.cookie, { count: perArticleCount, articleId: aid, channelId: chId });
@@ -286,12 +319,11 @@ async function runGptBatch(task, db) {
   // P1-3：LLM 生成与自动发布（网络 IO，最多 10 条 LLM 往返）在写锁外完成，
   // 避免独占全局写链、阻塞并发签到（runClockForUser → withWriteLock）。最后一次性持锁落账。
   for (const item of items) {
-    const text =
-      `文章：${item.smzdmUrl || item.url || ''}\n` +
-      `标题：${item.title || ''}\n内容：${item.content || ''}`;
     try {
-      const reply = await generateReply({
-        text,
+      const reply = await generateProductComment({
+        title: item.title,
+        content: item.content,
+        price: item.price,
         tone: db.settings.gpt.tone,
         prompt: db.settings.gpt.prompt
       });
@@ -346,7 +378,7 @@ async function runGptBatch(task, db) {
 }
 
 // 好价真实抓取：调用适配器抓取 smzdm 公开好价列表，去重合并进 db.baoliao
-async function runFetch(task, db) {
+async function runFetch(task) {
   const limit = Math.min(config.fetchMax, Math.max(1, Number(task.limit) || 20));
   let fetched;
   try {
@@ -405,7 +437,7 @@ export async function runTask(task, db, opts = {}) {
   if (task.type === 'startup') return runStartupForAccounts(db);
   // gpt / fetch 不依赖账号 Cookie，无需账号即可运行（gpt 仅自动发布时用首个账号）
   if (task.type === 'gpt') return runGptBatch(task, db);
-  if (task.type === 'fetch') return runFetch(task, db);
+  if (task.type === 'fetch') return runFetch(task);
 
   let users = resolveUsers(db, opts);
   if (!users.length) {

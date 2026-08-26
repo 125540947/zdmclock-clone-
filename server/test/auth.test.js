@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { safeEqual, maskCookie } = await import('../src/auth.js');
+const { safeEqual, maskCookie, ipToBytes, sameSegment, parseCidrList, ipInCidrList } = await import('../src/auth.js');
 const { parseBool } = await import('../src/config.js');
 
 test('safeEqual 相等字符串返回 true', () => {
@@ -31,6 +31,20 @@ test('maskCookie 空值返回空串、非空返回已隐藏标记', () => {
   assert.equal(maskCookie(undefined), '');
   assert.equal(maskCookie('  '), '已保存(已隐藏)'); // 空白串视为已保存
   assert.equal(maskCookie('sessid=abc'), '已保存(已隐藏)');
+});
+
+test('IPv4-mapped IPv6 规范化为 IPv4 并可参与网段隔离', () => {
+  assert.deepEqual([...ipToBytes('::ffff:192.168.1.8')], [192, 168, 1, 8]);
+  assert.deepEqual([...ipToBytes('::ffff:c0a8:0108')], [192, 168, 1, 8]);
+  assert.equal(ipToBytes('::1').length, 16, '普通前导压缩 IPv6 仍应正确解析');
+  assert.equal(sameSegment('::ffff:192.168.1.8', '192.168.1.99', 24), true);
+  assert.equal(sameSegment('::ffff:192.168.2.8', '192.168.1.99', 24), false);
+});
+
+test('IPv4-mapped IPv6 可命中普通 IPv4 代理白名单', () => {
+  const list = parseCidrList('192.168.1.0/24');
+  assert.equal(ipInCidrList('::ffff:192.168.1.8', list), true);
+  assert.equal(ipInCidrList('::ffff:192.168.2.8', list), false);
 });
 
 test('parseBool 真值集合', () => {

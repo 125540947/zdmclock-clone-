@@ -11,7 +11,9 @@ import {
   doTurntable,
   doCrowdtest,
   doFollow,
-  doShare
+  doShare,
+  doDailyTasks,
+  parseDailyTaskList
 } from '../src/smzdm/tasks_real.js';
 
 test('signFormData：按键字母排序 + 追加 key + md5 大写', () => {
@@ -159,4 +161,60 @@ test('doShare：三步流程均成功则拼接奖励文案', async () => {
 
 test('doShare 缺 articleId 抛错', async () => {
   await assert.rejects(() => doShare('cookie', {}, async () => ({})), /分享需要 articleId/);
+});
+
+test('parseDailyTaskList 汇总所有活动分组及待领阶段奖励', () => {
+  const parsed = parseDailyTaskList({ data: { data: { rows: [
+    { cell_data: {
+      activity_id: 'a1', activity_name: '累计奖励', activity_reward_status: 1,
+      activity_task: { default_list_v2: [
+        { task_list: [{ task_id: 't1' }] },
+        { task_list: [{ task_id: 't2' }] }
+      ] }
+    } }
+  ] } } });
+  assert.deepEqual(parsed.tasks.map((t) => t.task_id), ['t1', 't2']);
+  assert.deepEqual(parsed.activities, [{ id: 'a1', name: '累计奖励' }]);
+});
+
+test('doDailyTasks 每日读取、完成浏览任务、刷新后领取任务及阶段奖励', async () => {
+  let listCalls = 0;
+  let tokenCalls = 0;
+  const calls = [];
+  const task = (status) => ({
+    task_id: 't_view', task_name: '浏览好文', task_status: status,
+    task_event_type: 'interactive.view.article', task_even_num: 1,
+    article_id: '12345', channel_id: '76'
+  });
+  const listResponse = (tasks, phase = false) => ({ data: { data: { rows: [{ cell_data: {
+    activity_id: phase ? 'phase1' : '',
+    activity_name: '累计阶段奖',
+    activity_reward_status: phase ? 1 : 0,
+    activity_task: { default_list_v2: [{ task_list: tasks }] }
+  } }] } } });
+  const request = async (path, opts) => {
+    calls.push({ path, data: opts?.data });
+    if (path === '/task/list_v2') {
+      listCalls++;
+      return listCalls === 1
+        ? listResponse([task(2), { task_id: 't_ready', task_name: '现成奖励', task_status: 3 }])
+        : listResponse([task(3), { task_id: 't_ready', task_status: 4 }], true);
+    }
+    if (path === '/task/event_view_article_sync') return { error_code: 0 };
+    if (path === '/task/activity_task_receive') return { error_code: 0, data: { reward_msg: `奖励-${opts.data.task_id}` } };
+    if (path === '/task/activity_receive') return { error_code: 0, data: { reward_msg: '阶段奖励到账' } };
+    throw new Error('unexpected path: ' + path);
+  };
+  const result = await doDailyTasks('cookie', {
+    request,
+    getToken: async () => { tokenCalls++; return 'robot-token'; }
+  });
+  assert.equal(result.success, true);
+  assert.equal(result.discovered, 2);
+  assert.equal(result.completed.length, 1);
+  assert.equal(result.rewards.length, 3);
+  assert.equal(tokenCalls, 1);
+  assert.equal(listCalls, 2);
+  assert.ok(calls.some((x) => x.path === '/task/event_view_article_sync' && x.data.article_id === '12345'));
+  assert.match(result.message, /读取 2 项，完成 1 项，领取 3 项/);
 });

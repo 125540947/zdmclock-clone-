@@ -133,7 +133,7 @@ async function doLogin() {
   err.value = '';
   const u = adminMode.value ? 'admin' : username.value.trim();
   try {
-    const data = await login(u, password.value);
+    await login(u, password.value);
     // #190 / H-01：后端不再在响应体回显明文 token，登录是否成功以 /auth/config 下发的会话态为准
     // （login() 内部已刷新 session.loggedIn / session.isAdmin）。
     if (session.loggedIn) {

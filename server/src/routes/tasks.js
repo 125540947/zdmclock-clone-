@@ -2,7 +2,7 @@ import { Router } from 'express';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { load, persist, persistAwait, todayStr, todayStrTZ, withWriteLock } from '../store.js';
+import { load, persistAwait, todayStrTZ, withWriteLock } from '../store.js';
 import { config } from '../config.js';
 import { dbgLog } from '../log.js';
 import { runTask } from '../taskRunner.js';

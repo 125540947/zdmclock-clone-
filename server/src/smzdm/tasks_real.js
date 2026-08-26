@@ -10,6 +10,8 @@
 
 import { call, appRequest, realAdapter } from './realAdapter.js';
 import { parseJsonp, removeTags, extractReward } from './parse.js';
+import { normalizeArticleId } from './articleId.js';
+import { generateProductComment } from '../gptAdapter.js';
 
 const ANDROID_XRW = { 'x-requested-with': 'com.smzdm.client.android' };
 const M_REFERER = 'https://m.smzdm.com/';
@@ -130,48 +132,208 @@ export async function doTurntable(cookie, { activeId, topicUrl, call: fetcher = 
   return { success: true, message: results.join('；'), result: { draws: results } };
 }
 
-// 每日任务：list_v2 取任务列表 → 逐个 activity_task_receive 领奖（带 robot_token）
-export async function doDailyTasks(cookie) {
-  const list = await appRequest('/task/list_v2', { cookie, method: 'POST', data: {} });
+export function parseDailyTaskList(list) {
   const rows = list?.data?.data?.rows || list?.data?.rows || [];
   const tasks = [];
+  const activities = [];
   for (const row of rows) {
-    const at = row?.cell_data?.activity_task;
+    const cell = row?.cell_data || {};
+    const at = cell.activity_task;
     if (at?.default_list_v2 && Array.isArray(at.default_list_v2)) {
       for (const grp of at.default_list_v2) {
         if (Array.isArray(grp.task_list)) tasks.push(...grp.task_list);
       }
     }
-  }
-  const rewards = [];
-  let token = null;
-  for (const t of tasks) {
-    const taskId = t?.task_id || t?.id;
-    if (!taskId) continue;
-    try {
-      if (!token) token = await realAdapter.getRobotToken(cookie);
-      const r = await appRequest('/task/activity_task_receive', {
-        cookie,
-        method: 'POST',
-        data: {
-          robot_token: token,
-          geetest_seccode: '',
-          geetest_validate: '',
-          geetest_challenge: '',
-          captcha: '',
-          task_id: taskId
-        }
-      });
-      if (Number(r?.error_code) === 0) rewards.push(removeTags(r?.data?.reward_msg || '领取成功'));
-    } catch {
-      /* 单个任务失败跳过，继续领下一个 */
+    if (String(cell.activity_reward_status || '') === '1' && cell.activity_id) {
+      activities.push({ id: String(cell.activity_id), name: String(cell.activity_name || '阶段奖励') });
     }
   }
+  return { tasks, activities };
+}
+
+function activityArticle(item = {}) {
+  const id = normalizeArticleId(item.article_id || item.smzdmUrl || item.url || '');
+  if (!id) return null;
   return {
-    success: true,
-    message: rewards.length ? rewards.join('；') : '暂无可领的日常任务奖励（可能已全部领取）',
+    id,
+    channelId: String(item.article_channel_id || item.channel_id || item.channelId || ''),
+    title: String(item.article_title || item.title || '').trim(),
+    content: String(item.article_content || item.content || '').trim(),
+    price: String(item.article_price || item.price || '').trim()
+  };
+}
+
+async function getDailyTaskArticles(task, cookie, request, supplied = []) {
+  const direct = activityArticle(task);
+  if (direct && direct.id !== '0') return [direct];
+  const known = supplied.map(activityArticle).filter(Boolean);
+  if (known.length) return known;
+  const result = await request('https://article-api.smzdm.com/ranking_list/articles', {
+    cookie,
+    method: 'GET',
+    data: { offset: 0, channel_id: 76, tab: 2, order: 0, limit: 20, stream: 'a', ab_code: 'b' }
+  });
+  const rows = result?.data?.data?.rows || result?.data?.rows || [];
+  return rows.map(activityArticle).filter(Boolean);
+}
+
+async function receiveDailyTaskReward(taskId, cookie, request, getToken) {
+  const token = await getToken(cookie);
+  const r = await request('/task/activity_task_receive', {
+    cookie,
+    method: 'POST',
+    data: {
+      robot_token: token,
+      geetest_seccode: '',
+      geetest_validate: '',
+      geetest_challenge: '',
+      captcha: '',
+      task_id: taskId
+    }
+  });
+  if (Number(r?.error_code) !== 0) throw new Error(removeTags(r?.error_msg || '领取失败'));
+  return removeTags(r?.data?.reward_msg || r?.error_msg || '领取成功');
+}
+
+function remainingCount(task) {
+  const total = Number(task?.task_even_num ?? task?.task_event_num ?? 1);
+  const finished = Number(task?.task_finished_num ?? 0);
+  if (!Number.isFinite(total) || total <= 0) return 1;
+  return Math.min(5, Math.max(1, total - (Number.isFinite(finished) ? finished : 0)));
+}
+
+async function performDailyTask(task, cookie, options) {
+  const { request, adapter, articles, gpt, generateComment } = options;
+  const event = String(task?.task_event_type || '');
+  const count = remainingCount(task);
+  if (event === 'guide.crowd') {
+    await doCrowdtest(cookie, { call: request });
+    return '完成众测任务';
+  }
+  if (['interactive.follow.user', 'interactive.follow.tag', 'interactive.follow.brand'].includes(event)) {
+    const redirect = task.task_redirect_url || {};
+    const target = redirect.link_title || redirect.keyword || redirect.link_val;
+    if (!target || String(target) === '0') throw new Error('任务未提供可关注对象');
+    const type = event.endsWith('.tag') ? 'tag' : event.endsWith('.brand') ? 'brand' : 'user';
+    await doFollow(cookie, { target: String(target), type, keywordId: String(redirect.link_val || '') }, request);
+    return `完成关注${type === 'user' ? '用户' : type === 'tag' ? '栏目' : '品牌'}`;
+  }
+  const candidates = await getDailyTaskArticles(task, cookie, request, articles);
+  const picked = Array.from({ length: count }, (_, i) => candidates[i % candidates.length]).filter(Boolean);
+  if (!picked.length) throw new Error('没有可用的任务文章');
+
+  if (event === 'interactive.view.article') {
+    for (const article of picked) {
+      const r = await request('/task/event_view_article_sync', {
+        cookie,
+        method: 'POST',
+        data: { article_id: article.id, channel_id: article.channelId, task_id: String(task.task_id || task.id) }
+      });
+      if (Number(r?.error_code) !== 0) throw new Error(removeTags(r?.error_msg || '浏览任务失败'));
+    }
+    return `浏览 ${picked.length} 篇`;
+  }
+  if (event === 'interactive.share') {
+    for (const article of picked) await doShare(cookie, { articleId: article.id, channelId: article.channelId }, request);
+    return `分享 ${picked.length} 篇`;
+  }
+  if (event === 'interactive.favorite') {
+    for (const article of picked) await adapter.doFavorite(cookie, { articleId: article.id, channelId: article.channelId });
+    return `收藏 ${picked.length} 篇`;
+  }
+  if (event === 'interactive.rating') {
+    for (const article of picked) await adapter.doPoint(cookie, { articleId: article.id, channelId: article.channelId });
+    return `点赞 ${picked.length} 篇`;
+  }
+  if (event === 'interactive.comment') {
+    if (!gpt?.enabled) throw new Error('评论任务需要先启用 AI 回复');
+    for (const article of picked) {
+      const content = await generateComment({
+        title: article.title,
+        content: article.content,
+        price: article.price,
+        tone: gpt.tone,
+        prompt: gpt.prompt
+      });
+      await adapter.doComment(cookie, { articleId: article.id, content });
+    }
+    return `AI 评论 ${picked.length} 篇`;
+  }
+  throw new Error(`暂不支持的活动类型：${event || '未知'}`);
+}
+
+// 每日任务：每天动态读取活动任务 → 完成可自动化任务 → 刷新状态 → 领取任务/阶段奖励。
+export async function doDailyTasks(cookie, opts = {}) {
+  const request = opts.request || appRequest;
+  const adapter = opts.adapter || realAdapter;
+  const getToken = opts.getToken || ((c) => realAdapter.getRobotToken(c));
+  let tokenPromise;
+  const getTokenCached = (c) => (tokenPromise ||= Promise.resolve(getToken(c)));
+  const generateComment = opts.generateComment || generateProductComment;
+  const context = { request, adapter, articles: opts.articles || [], gpt: opts.gpt || {}, generateComment };
+  const first = await request('/task/list_v2', { cookie, method: 'POST', data: {} });
+  const initial = parseDailyTaskList(first);
+  const rewards = [];
+  const completed = [];
+  const skipped = [];
+  const failed = [];
+  const rewardedIds = new Set();
+
+  for (const t of initial.tasks) {
+    const taskId = t?.task_id || t?.id;
+    if (!taskId) continue;
+    const name = removeTags(t?.task_name || `任务 ${taskId}`);
+    const status = String(t?.task_status ?? '');
+    try {
+      if (status === '3') {
+        rewards.push(await receiveDailyTaskReward(taskId, cookie, request, getTokenCached));
+        rewardedIds.add(String(taskId));
+      } else if (status === '2') {
+        completed.push(`${name}（${await performDailyTask(t, cookie, context)}）`);
+      }
+    } catch (e) {
+      if (/暂不支持|未提供可关注对象|需要先启用 AI/.test(e.message)) skipped.push(`${name}：${e.message}`);
+      else failed.push(`${name}：${e.message}`);
+    }
+  }
+
+  const refreshed = parseDailyTaskList(await request('/task/list_v2', { cookie, method: 'POST', data: {} }));
+  for (const t of refreshed.tasks) {
+    const taskId = String(t?.task_id || t?.id || '');
+    if (!taskId || rewardedIds.has(taskId) || String(t?.task_status ?? '') !== '3') continue;
+    try {
+      rewards.push(await receiveDailyTaskReward(taskId, cookie, request, getTokenCached));
+      rewardedIds.add(taskId);
+    } catch (e) {
+      failed.push(`${removeTags(t?.task_name || taskId)}领奖：${e.message}`);
+    }
+  }
+  for (const activity of refreshed.activities) {
+    try {
+      const r = await request('/task/activity_receive', {
+        cookie,
+        method: 'POST',
+        data: { activity_id: activity.id }
+      });
+      if (Number(r?.error_code) !== 0) throw new Error(removeTags(r?.error_msg || '领取失败'));
+      rewards.push(removeTags(r?.data?.reward_msg || `${activity.name}领取成功`));
+    } catch (e) {
+      failed.push(`${activity.name}：${e.message}`);
+    }
+  }
+
+  const summary = `读取 ${initial.tasks.length} 项，完成 ${completed.length} 项，领取 ${rewards.length} 项` +
+    (skipped.length ? `，跳过 ${skipped.length} 项` : '') +
+    (failed.length ? `，失败 ${failed.length} 项` : '');
+  return {
+    success: failed.length === 0,
+    message: `${summary}${rewards.length ? `：${rewards.join('；')}` : ''}`,
     rewards,
-    count: rewards.length
+    completed,
+    skipped,
+    failed,
+    count: completed.length + rewards.length,
+    discovered: initial.tasks.length
   };
 }
 
@@ -339,12 +501,7 @@ export async function doShare(cookie, { articleId, channelId = '' } = {}, reqFn 
   if (!articleId) {
     throw new Error('分享需要 articleId（文章数字ID，如 https://www.smzdm.com/p/<id> 中的 <id>）');
   }
-  let token = null;
-  try {
-    token = await realAdapter.getRobotToken(cookie);
-  } catch {
-    token = null;
-  }
+  const token = await realAdapter.getRobotToken(cookie).catch(() => null);
   const steps = [];
   const calls = [
     ['/share/complete_share_rule', { article_id: articleId, channel_id: channelId, tag_name: 'gerenzhongxin' }],

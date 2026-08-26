@@ -2,11 +2,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { cronMatch, validateCron } = await import('../src/scheduler.js');
+const { cronMatch, validateCron, healthCheckDue } = await import('../src/scheduler.js');
 const { zonedWallClock } = await import('../src/clockSchedule.js');
 
 // 固定锚点：2026-08-06 是星期四（getDay() === 4）
 const ANCHOR = new Date(2026, 7, 6, 9, 30, 0); // 本地时区 2026-08-06 09:30
+
+test('Cookie 健康检测间隔为 0 时关闭自动检测', () => {
+  assert.equal(healthCheckDue(1000, 0, 0), false);
+  assert.equal(healthCheckDue(1000, 900, 360), false);
+  assert.equal(healthCheckDue(1260, 900, 360), true);
+});
 
 test('validateCron 合法 5 段', () => {
   assert.equal(validateCron('0 9 * * *'), true);

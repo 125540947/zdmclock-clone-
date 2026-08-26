@@ -1,4 +1,4 @@
-import { load, persist, withWriteLock, todayStr, todayStrTZ } from './store.js';
+import { load, persist, withWriteLock, todayStrTZ } from './store.js';
 import { runTask } from './taskRunner.js';
 import { notify } from './notifier.js';
 import { config } from './config.js';
@@ -19,8 +19,14 @@ const lastFiredMinute = {}; // taskId -> 分钟时间戳，用于同一分钟内
 let lastHealthMinute = 0; // 上次 Cookie 健康检测的"分钟"时间戳，用于节流
 let lastUpdateCheckMinute = 0; // 上次仓库更新检查的"分钟"时间戳，用于节流
 
+// interval=0 的公开配置语义是“关闭自动检测”，不能用 `interval || 360`
+// 回退，否则用户显式关闭后仍会周期性携带 Cookie 访问外部服务。
+export function healthCheckDue(minute, lastMinute, interval) {
+  return Number.isFinite(interval) && interval > 0 && minute - lastMinute >= interval;
+}
+
 // 单字段匹配：支持 * 、*/n 、a-b 、a,b,c
-function fieldMatch(field, val, min, max) {
+function fieldMatch(field, val, min, _max) {
   if (field === '*') return true;
   if (field.startsWith('*/')) {
     const step = parseInt(field.slice(2), 10);
@@ -113,7 +119,7 @@ export async function runHealthCheck() {
     const db = load();
     if (!db.users.length) return;
     const minute = Math.floor(zonedWallClock(new Date(), config.tz).getTime() / 60000);
-    if (minute - lastHealthMinute < (config.cookieHealthIntervalMin || 360)) return;
+    if (!healthCheckDue(minute, lastHealthMinute, config.cookieHealthIntervalMin)) return;
     lastHealthMinute = minute;
     const results = await checkAccounts(db, smzdm, {
       concurrency: config.healthConcurrency,

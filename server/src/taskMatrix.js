@@ -25,7 +25,7 @@ export const CUSTOM_TASK_DEFS = [
   { type: 'crowdtest', name: '全民众测', icon: '🧪', builtin: true, desc: '已内置：自动发现全民众测活动并完成能量值任务（无需 crowd_id）；也可填 crowd_id 走"申请具体商品"' },
   { type: 'follow', name: '自动关注', icon: '➕', builtin: true, desc: '已内置青龙社区逆向端点（dingyue-api 关注用户/栏目/品牌，app 签名）；填 target（用户名/栏目名/品牌名）即可运行，无需抓包。target 支持填数组，每次运行自动关注列表里的下一个（轮询），实现「每次适配」' },
   { type: 'share', name: '自动分享', icon: '🔗', builtin: true, desc: '已内置青龙社区逆向端点（user-api 分享流程 complete_share_rule/daily_reward/callback）；填 articleId 即可运行，无需抓包' },
-  { type: 'dailyTasks', name: '每日任务', icon: '📋', builtin: true, desc: '已内置：自动领取每日任务奖励（list_v2 → activity_task_receive）' }
+  { type: 'dailyTasks', name: '每日任务', icon: '📋', builtin: true, desc: '已内置：每天读取活动任务，自动完成支持的任务并领取任务及阶段奖励' }
 ];
 
 export const CUSTOM_TYPES = CUSTOM_TASK_DEFS.map((d) => d.type);
@@ -169,18 +169,23 @@ export async function runCustomEndpointTask(task, db, user, adapter = smzdm) {
       };
     }
     try {
+      if (task.type === 'dailyTasks') {
+        params.articles = db.baoliao || [];
+        params.gpt = db.settings?.gpt || {};
+      }
       const r = await strategy.handler(user.cookie, params);
       const reward = extractReward(r.message || '');
+      const success = r.success !== false;
       return {
-        ok: true,
-        success: true,
+        ok: success,
+        success,
         message: r.message,
         goldDelta: reward.gold,
         silverDelta: reward.silver,
         expDelta: reward.exp,
         levelAfter: null,
         explicit: { gold: reward.gold, silver: reward.silver, exp: reward.exp },
-        result: { success: true, message: r.message }
+        result: { success, message: r.message }
       };
     } catch (e) {
       return { ok: false, error: 'exec', message: `${task.name}执行失败：${e.message}` };

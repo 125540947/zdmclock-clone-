@@ -502,7 +502,7 @@ export const realAdapter = {
       // 签约外奖励（best-effort，网页端点，失败静默跳过不阻断签到）
       let extraMsg = '';
       try {
-        const ex = await doCheckinExtras(cookie);
+        const ex = await this.doCheckinExtras(cookie);
         if (ex.rewards.length) extraMsg = '；额外：' + ex.rewards.join('；');
       } catch {
         /* 额外奖励非关键，忽略异常 */
@@ -544,7 +544,6 @@ export const realAdapter = {
     const articleId = normalizeArticleId(opts.articleId);
     if (!articleId) throw new Error('评论需要 articleId（请在自动任务里填写目标文章ID或链接）');
     const count = Math.min(Math.max(1, Number(opts.count) || 1), 5); // F3：真正循环 count（上限 5），消息如实
-    let last;
     const uas = new Set();
     for (let i = 0; i < count; i++) {
       if (i > 0) await wait(actionJitter()); // 多次动作之间拟人化随机等待，避免背靠背
@@ -552,16 +551,15 @@ export const realAdapter = {
       uas.add(ua);
       // zhiyou 域网页评论端点：GET + JSONP（type=3 评论，pid 文章ID，content 内容）
       const q = 'type=3&pid=' + encodeURIComponent(articleId) +
-        '&content=' + encodeURIComponent(opts.content || '好价，感谢分享！') +
+        '&content=' + encodeURIComponent(String(opts.content || '').trim() || '这个看着还不错，先收藏看看。') +
         '&callback=jsonp_' + Date.now();
       const text = await req(ENDPOINTS.comment + '?' + q, {
         method: 'GET', cookie, ua, base: WEB_BASE, raw: true
       });
       const json = typeof text === 'string' ? parseJsonp(text) : text;
       dbgLog('[smzdm-debug] comment raw:', JSON.stringify(json).slice(0, 800), 'articleId=', articleId, 'cookieLen=', (cookie || '').length);
-      if (isSoftSuccess(json)) { last = json; continue; } // 请勿重复提交/已评论 = 软成功
+      if (isSoftSuccess(json)) continue; // 请勿重复提交/已评论 = 软成功
       assertOk(json, '评论');
-      last = json;
     }
     return { success: true, message: `评论成功 ×${count}（文章 ${articleId}）`, count, articleId, uas: [...uas] };
   },
@@ -594,7 +592,7 @@ export const realAdapter = {
       const signed = signFormData({ id: articleId, channel_id: channelId, token: extractSess(cookie), touchstone_event: touchstone });
       last = await req(ENDPOINTS.favorite, { method: 'POST', cookie, ua, body: signed, base: API_BASE });
       dbgLog('[smzdm-debug] favorite raw:', JSON.stringify(last).slice(0, 800), 'articleId=', articleId, 'channelId=', channelId, 'cookieLen=', (cookie || '').length);
-      if (isSoftSuccess(last)) { last = last; continue; } // 已收藏/已经收藏 = 软成功
+      if (isSoftSuccess(last)) continue; // 已收藏/已经收藏 = 软成功
       try {
         assertOk(last, '收藏');
       } catch (e) {
@@ -633,7 +631,7 @@ export const realAdapter = {
       const signed = signFormData({ id: articleId, channel_id: channelId, token: extractSess(cookie), touchstone_event: touchstone });
       last = await req(ENDPOINTS.point, { method: 'POST', cookie, ua, body: signed, base: API_BASE });
       dbgLog('[smzdm-debug] point raw:', JSON.stringify(last).slice(0, 800), 'articleId=', articleId, 'channelId=', channelId, 'cookieLen=', (cookie || '').length);
-      if (isSoftSuccess(last)) { last = last; continue; } // 已赞/已经点赞 = 软成功
+      if (isSoftSuccess(last)) continue; // 已赞/已经点赞 = 软成功
       try {
         assertOk(last, '点赞');
       } catch (e) {

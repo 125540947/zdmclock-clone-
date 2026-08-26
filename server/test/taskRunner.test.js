@@ -30,16 +30,17 @@ test('collectArticleIds baoliao 来源提取并去重，携带条目 channelId',
     { smzdmUrl: 'https://x/p/111', channelId: '10' }
   ] };
   assert.deepEqual(collectArticleIds({ type: 'comment' }, db, 'baoliao', ''), [
-    { id: '111', channelId: '10' },
-    { id: '222', channelId: '' }
+    { id: '111', channelId: '10', title: '', content: '', price: '' },
+    { id: '222', channelId: '', title: '', content: '', price: '' }
   ]);
 });
 
 test('collectArticleIds manual 来源：overrideId 优先于 task.articleId，透传 task.channelId', () => {
-  assert.deepEqual(collectArticleIds({ articleId: '888', channelId: '7' }, {}, 'manual', '999'), [{ id: '999', channelId: '' }]);
-  assert.deepEqual(collectArticleIds({ articleId: '888', channelId: '7' }, {}, 'manual', ''), [{ id: '888', channelId: '7' }]);
+  assert.deepEqual(collectArticleIds({ articleId: '888', channelId: '7' }, {}, 'manual', '999'), [{ id: '999', channelId: '', title: '', content: '', price: '' }]);
+  assert.deepEqual(collectArticleIds({ articleId: '888', channelId: '7' }, {}, 'manual', ''), [{ id: '888', channelId: '7', title: '', content: '', price: '' }]);
   assert.deepEqual(collectArticleIds({ articleId: '' }, {}, 'manual', ''), []);
 });
+
 
 test('resolveUsers 指定 userId / 全部 / 未找到', () => {
   const db = { users: [{ id: 'u1' }, { id: 'u2' }] };
@@ -365,22 +366,33 @@ test('runEngagement baoliao 来源随机取样（不遍历全量）+ 拟人化�
   config.engagementDelayLongProbability = 0;
   const db = {
     users: [{ id: 'u1', cookie: 'c' }],
-    baoliao: Array.from({ length: 8 }, (_, i) => ({ smzdmUrl: 'https://x/p/' + (100 + i) }))
+    baoliao: Array.from({ length: 8 }, (_, i) => ({
+      smzdmUrl: 'https://x/p/' + (100 + i),
+      title: `商品 ${i}`,
+      content: '小巧便携',
+      price: `${99 + i} 元`
+    })),
+    settings: { gpt: { enabled: true, tone: 'friendly', prompt: '' } }
   };
   const pool = ['100', '101', '102', '103', '104', '105', '106', '107'];
   const called = [];
   const orig = smzdm.doComment;
   smzdm.doComment = async (cookie, opts) => {
-    called.push(opts.articleId);
+    called.push({ articleId: opts.articleId, content: opts.content });
     return { count: 1, message: '评论成功' };
   };
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => ({ choices: [{ message: { content: '这个尺寸放办公桌挺合适。' } }] })
+  });
   try {
     // 任务 limit=3 → 从 8 篇中随机取样 3 篇（而非全量 8 篇）
     const r = await runTask({ type: 'comment', articleSource: 'baoliao', limit: 3, name: '评论' }, db, {});
     assert.equal(r.ok, true);
     assert.equal(called.length, 3); // 仅 3 篇被操作
-    assert.equal(new Set(called).size, 3); // 不重复
-    assert.ok(called.every((x) => pool.includes(x))); // 取样全部来自池
+    assert.equal(new Set(called.map((x) => x.articleId)).size, 3); // 不重复
+    assert.ok(called.every((x) => pool.includes(x.articleId))); // 取样全部来自池
+    assert.ok(called.every((x) => x.content === '这个尺寸放办公桌挺合适。')); // 发布 AI 生成结果，而非固定模板
     assert.match(r.message, /从 8 篇中随机选取 3 篇/); // 结果标明抽样
   } finally {
     smzdm.doComment = orig;

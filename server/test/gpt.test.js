@@ -19,7 +19,8 @@ mock.module(p('gptAdapter.js'), {
     generateReply: async ({ text } = {}) => {
       if (!REPLY.ok) throw new Error(REPLY.error || 'boom');
       return REPLY.reply + ':' + (text || '');
-    }
+    },
+    generateProductComment: async () => 'mocked product comment'
   }
 });
 

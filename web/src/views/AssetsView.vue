@@ -140,7 +140,6 @@ function pct(v, max) {
 }
 
 const todayTotal = computed(() => {
-  const t = summary.value?.totals;
   // 取当日各用户 today 之和
   const users = summary.value?.users || [];
   // P2-6：无当日数据的用户 today 可能为 null，加可选链 + 默认值避免 NaN/报错

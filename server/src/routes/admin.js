@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { load, todayStrTZ, withWriteLock, persistAwait } from '../store.js';
 import { config } from '../config.js';
 import { adminOrAuthRequired } from '../auth.js';
-import { resolvedCheckInTime, parseHM, fmtHM, windowMinutes } from '../clockSchedule.js';
+import { resolvedCheckInTime, parseHM, fmtHM } from '../clockSchedule.js';
 import { resolveRisk } from '../riskControl.js';
 import { boundedInt } from '../validation.js';
 import { wrapAsync } from '../wrapAsync.js';

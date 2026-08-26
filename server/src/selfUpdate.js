@@ -174,7 +174,7 @@ export async function runUpdate({ restart = true, onLog, runner = run } = {}) {
   //     否则"源码=旧而依赖/产物=新"状态并不一致，与"全有或全无"注释矛盾。
   // 同时：git diff 退出码必须检查；命令失败不能当作"无变更"而静默跳过 install/build。
   let needInstall = false;
-  let needBuild = false;
+  let needBuild;
   const rollback = async (reason) => {
     push('✖ ' + reason + '，回滚到更新前提交…');
     const rb = await runner('git', ['reset', '--hard', before], { cwd: root });

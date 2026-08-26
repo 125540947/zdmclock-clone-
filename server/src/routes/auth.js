@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { config } from '../config.js';
-import { safeEqual, getClientIp, parseCidrList, ipInCidrList, parseCookies } from '../auth.js';
+import { safeEqual, parseCidrList, ipInCidrList, parseCookies } from '../auth.js';
 
 const router = Router();
 

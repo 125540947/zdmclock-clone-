@@ -57,7 +57,7 @@ zdmclock-clone/
 
 ## 快速开始（本地）
 
-要求：Node.js ≥ 18。
+要求：Node.js ≥ 20.19。
 
 ```bash
 # 1. 安装全部依赖（根目录，自动安装 server 与 web 两个 workspace）
@@ -276,7 +276,7 @@ docker compose up -d --build
 | 任务 | 内置端点 | 是否需参数 | 自动发现情况 |
 |---|---|---|---|
 | 签到 | `robot/token → checkin` | 否 | — |
-| 每日任务 | `task/list_v2 → activity_task_receive` | 否 | — |
+| 每日任务 | `task/list_v2 → 执行活动任务 → 刷新列表 → activity_task_receive/activity_receive` | 否 | 每天动态读取；支持浏览、分享、收藏、点赞、关注、众测及 AI 评论 |
 | 转盘抽奖 | `jsonp_draw`（web 接口） | 否（可填 `activeId`/`topicUrl` 覆盖） | 运行时从内置稳定专题页抽 `hashId` 作 `active_id` |
 | 每日抽奖 | 同上（复用 `doTurntable`） | 否 | 同上 |
 | 全民众测 | `ajax_get_activity_id → activity_info → task_receive` | 否（可填 `crowd_id` 申请具体商品） | 自动发现全民众测活动，无需 `crowd_id` |
@@ -359,7 +359,7 @@ SMZDM_COOKIE="你的Cookie" node tools/verifyRealMode.mjs
 | 任务 | 是否需要参数 | 参数示例 | 说明 |
 |---|---|---|---|
 | 签到 | 否 | — | 真实签到，响应含权威余额（金/碎银/经验） |
-| 每日任务 | 否 | — | 自动领每日任务奖励 |
+| 每日任务 | 否 | — | 每天读取活动任务，完成支持的项目后领取任务及阶段奖励 |
 | 转盘抽奖 | 否（可覆盖） | `{"activeId":"xxx"}` 或 `{"topicUrl":"https://m.smzdm.com/topic/..."}` | 内置双转盘专题页，运行时自动抽 `active_id` |
 | 每日抽奖 | 否 | 同上 | 复用转盘逻辑 |
 | 全民众测 | 否（可覆盖） | `{"crowdId":"xxx"}` | 默认自动发现活动并领能量值，填 `crowd_id` 则申请具体商品 |

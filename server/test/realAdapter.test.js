@@ -98,6 +98,25 @@ test('extractSess：从 Cookie 提取 sess；无 sess 返回空串', () => {
   assert.equal(extractSess(''), '');
 });
 
+test('webCheckIn 成功后通过实例方法领取额外奖励', async () => {
+  mockFetch(async () => fakeResp({
+    body: 'callback({"error_code":0,"data":{"cgold":12,"silver":3,"cexperience":4}})'
+  }));
+  const original = realAdapter.doCheckinExtras;
+  let called = false;
+  realAdapter.doCheckinExtras = async () => {
+    called = true;
+    return { rewards: ['额外金币 +1'] };
+  };
+  try {
+    const result = await realAdapter.webCheckIn('sess=test');
+    assert.equal(called, true);
+    assert.match(result.message, /额外金币 \+1/);
+  } finally {
+    realAdapter.doCheckinExtras = original;
+  }
+});
+
 // ===================== call() 统一出口 =====================
 
 test('call：SSRF 纵深防御 —— 拒绝云元数据地址且不发起请求', async () => {
@@ -237,11 +256,17 @@ test('doComment：缺 articleId 抛错', async () => {
 });
 
 test('doComment：成功（JSONP 文本经 parseJsonp 解析）', async () => {
-  const callImpl = async () => '{"error_code":0,"data":{"msg":"评论成功"}}';
+  let requested = '';
+  const callImpl = async (url) => {
+    requested = url;
+    return '{"error_code":0,"data":{"msg":"评论成功"}}';
+  };
   const r = await realAdapter.doComment('ck', { articleId: '123', callImpl, sleepImpl: async () => {} });
   assert.equal(r.success, true);
   assert.match(r.message, /评论成功 ×1/);
   assert.equal(r.articleId, '123');
+  assert.match(decodeURIComponent(requested), /这个看着还不错/);
+  assert.doesNotMatch(decodeURIComponent(requested), /感谢分享/);
 });
 
 test('doComment：count=3 循环 3 次且 message 体现次数', async () => {
