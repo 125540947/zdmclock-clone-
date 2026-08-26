@@ -51,6 +51,15 @@ test('纵深加固：响应不泄露 X-Powered-By: Express 技术栈标识', asy
   }
 });
 
+test('未知 /api 路由返回 JSON 404（而非被 SPA 兜底吞成 200 HTML）', async () => {
+  const res = await fetch(base + '/api/__nonexistent__');
+  assert.equal(res.status, 404);
+  const ct = res.headers.get('content-type') || '';
+  assert.ok(ct.includes('application/json'), '应返回 JSON 而非 HTML');
+  const body = await res.json();
+  assert.equal(body.error, 'not_found');
+});
+
 test('关闭测试服务器', () => {
   server.close();
   assert.ok(true);

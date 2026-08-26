@@ -10,24 +10,24 @@ const router = Router();
 const TONES = ['friendly', 'pro', 'humor'];
 const TARGETS = ['comment', 'message', 'all'];
 
-// 服务端是否配置了 GPT（供前端提示�?
+// 鏈嶅姟绔槸鍚﹂厤缃簡 GPT锛堜緵鍓嶇鎻愮ず锛?
 router.get('/status', authRequired, (req, res) => {
   res.json({ configured: config.gptEnabled });
 });
 
-// 读取 GPT 配置（开�? + 提示词），前端据此渲�?
+// 璇诲彇 GPT 閰嶇疆锛堝紑鍏? + 鎻愮ず璇嶏級锛屽墠绔嵁姝ゆ覆鏌?
 router.get('/config', authRequired, (req, res) => {
   const db = load();
   res.json({ config: db.settings.gpt });
 });
 
-// 保存 GPT 配置（前端开关与提示词持久化到后端，不再仅是 localStorage）�?
-// 配置类写操作：开放模式下强制管理员（mutationGuard）�?
+// 淇濆瓨 GPT 閰嶇疆锛堝墠绔紑鍏充笌鎻愮ず璇嶆寔涔呭寲鍒板悗绔紝涓嶅啀浠呮槸 localStorage锛夈€?
+// 閰嶇疆绫诲啓鎿嶄綔锛氬紑鏀炬ā寮忎笅寮哄埗绠＄悊鍛橈紙mutationGuard锛夈€?
 router.put('/config', mutationGuard, wrapAsync(async (req, res) => {
   const db = load();
   const { enabled, target, tone, prompt } = req.body || {};
   const gpt = db.settings.gpt;
-  // M-04 修复：先校验全部输入，校验失败直�? 400，不改动内存（此�? enabled/target 等会先被改�?400 后留 partial state�?
+  // M-04 淇锛氬厛鏍￠獙鍏ㄩ儴杈撳叆锛屾牎楠屽け璐ョ洿鎺? 400锛屼笉鏀瑰姩鍐呭瓨锛堟鍓? enabled/target 绛変細鍏堣鏀广€?400 鍚庣暀 partial state锛?
   if (target !== undefined && !TARGETS.includes(target)) {
     return res.status(400).json({ error: 'invalid_target' });
   }
@@ -35,9 +35,9 @@ router.put('/config', mutationGuard, wrapAsync(async (req, res) => {
     return res.status(400).json({ error: 'invalid_tone' });
   }
   if (prompt !== undefined && (typeof prompt !== 'string' || prompt.length > 2000)) {
-    return res.status(400).json({ error: 'invalid_prompt', message: '提示词需为不超过 2000 字符的字符串' });
+    return res.status(400).json({ error: 'invalid_prompt', message: '鎻愮ず璇嶉渶涓轰笉瓒呰繃 2000 瀛楃鐨勫瓧绗︿覆' });
   }
-  // M-04：在写锁内一次性应用全部修改并落盘（M-05：persistAwait 真实落盘后才返回�?
+  // M-04锛氬湪鍐欓攣鍐呬竴娆℃€у簲鐢ㄥ叏閮ㄤ慨鏀瑰苟钀界洏锛圡-05锛歱ersistAwait 鐪熷疄钀界洏鍚庢墠杩斿洖锛?
   await withWriteLock(() => {
     if (enabled !== undefined) gpt.enabled = !!enabled;
     if (target !== undefined) gpt.target = target;
@@ -48,7 +48,7 @@ router.put('/config', mutationGuard, wrapAsync(async (req, res) => {
   res.json({ config: gpt });
 }));
 
-// GPT 批量生成产生的草稿列表（前端「AI 评论草稿」展�? / 复制 / 删除�?
+// GPT 鎵归噺鐢熸垚浜х敓鐨勮崏绋垮垪琛紙鍓嶇銆孉I 璇勮鑽夌ǹ銆嶅睍绀? / 澶嶅埗 / 鍒犻櫎锛?
 router.get('/drafts', authRequired, (req, res) => {
   const db = load();
   const list = Array.isArray(db.gptDrafts) ? db.gptDrafts.slice(0, 100) : [];
@@ -64,16 +64,16 @@ router.delete('/drafts/:id', mutationGuard, wrapAsync(async (req, res) => {
   res.json({ ok: true });
 }));
 
-// 生成一条回复（真实调用大模型，消耗服务端配置的模型额度）�?
-// H-01 修复：改�? mutationGuard——生成回复属真实外部动作（消�? API 费用），开放模式下匿名不得调用�?
-// 否则任意访客可耗尽服务端模型额度。非开放模式（默认 REQUIRE_AUTH=true）下等价�? authRequired�?
+// 鐢熸垚涓€鏉″洖澶嶏紙鐪熷疄璋冪敤澶фā鍨嬶紝娑堣€楁湇鍔＄閰嶇疆鐨勬ā鍨嬮搴︼級銆?
+// H-01 淇锛氭敼涓? mutationGuard鈥斺€旂敓鎴愬洖澶嶅睘鐪熷疄澶栭儴鍔ㄤ綔锛堟秷鑰? API 璐圭敤锛夛紝寮€鏀炬ā寮忎笅鍖垮悕涓嶅緱璋冪敤锛?
+// 鍚﹀垯浠绘剰璁垮鍙€楀敖鏈嶅姟绔ā鍨嬮搴︺€傞潪寮€鏀炬ā寮忥紙榛樿 REQUIRE_AUTH=true锛変笅绛変环浜? authRequired銆?
 router.post('/reply', mutationGuard, wrapAsync(async (req, res) => {
   const db = load();
   if (!db.settings.gpt.enabled) {
-    return res.status(400).json({ error: 'gpt_disabled', message: '请先�? GPT 自动回复页启用自动回�?' });
+    return res.status(400).json({ error: 'gpt_disabled', message: '璇峰厛鍦? GPT 鑷姩鍥炲椤靛惎鐢ㄨ嚜鍔ㄥ洖澶?' });
   }
   if (!config.gptEnabled) {
-    return res.status(400).json({ error: 'gpt_not_configured', message: '服务端未配置 GPT_API_KEY，无法调用大模型' });
+    return res.status(400).json({ error: 'gpt_not_configured', message: '鏈嶅姟绔湭閰嶇疆 GPT_API_KEY锛屾棤娉曡皟鐢ㄥぇ妯″瀷' });
   }
   const { text } = req.body || {};
   try {

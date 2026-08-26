@@ -24,7 +24,7 @@ import { startScheduler, isSchedulerRunning } from './scheduler.js';
 // 全局未捕获异常兜底（P1-10）：best-effort 的异步推送/解析若遗漏 try/catch，
 // 可能触发 unhandledRejection / uncaughtException 导致进程退出。这里统一记录日志、
 // 避免静默崩进程；注意：仅记录不自动退出，保证主服务可用。
-process.on('unhandledRejection', (reason, promise) => {
+process.on('unhandledRejection', (reason, _promise) => {
   // eslint-disable-next-line no-console
   console.error('[zdmclock][未捕获 Promise 拒绝]', reason && reason.stack ? reason.stack : reason);
 });
@@ -275,6 +275,11 @@ export function createApp({ rateLimit: enableRateLimit = true } = {}) {
         }
       })
     );
+    // 未知 /api 路由返回 JSON 404（须位于所有 API 路由器之后、SPA 兜底之前），
+    // 避免被下方 SPA 兜底以 200 HTML 吞掉，干扰 API 客户端的错误判定与监控。
+    app.use('/api', (req, res) => {
+      res.status(404).json({ error: 'not_found', message: '未知接口' });
+    });
     // SPA 兜底：读取 index.html，给 /assets/* 注入 ?v=<构建戳>，保证每次部署都拉最新资源
     app.get('*', (req, res) => {
       const htmlPath = path.join(config.webDist, 'index.html');
@@ -300,7 +305,7 @@ export function createApp({ rateLimit: enableRateLimit = true } = {}) {
   }
 
   // 兜底错误处理
-  app.use((err, req, res, next) => {
+  app.use((err, req, res, _next) => {
     // eslint-disable-next-line no-console
     console.error('[error]', err);
     // S10：生产环境不向外暴露内部错误细节（可能含路径），返回泛化消息
