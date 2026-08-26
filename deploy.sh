@@ -29,6 +29,7 @@
 #   bash deploy.sh --tls example.com     # 顺带配 nginx + TLS
 #   bash deploy.sh --user zdm --port 3000
 #   bash deploy.sh --pull                # 代码已 clone 时，先 git pull --ff-only
+#   bash deploy.sh --expose              # 直连模式放开 0.0.0.0 供局域网/公网（默认仅 127.0.0.1 回环）
 # =============================================================================
 set -euo pipefail
 
@@ -38,6 +39,7 @@ PORT="${PORT:-3000}"
 SERVICE="zdmclock"
 DOMAIN=""
 DO_PULL=0
+EXPOSE_LAN=0
 REPO=""
 
 while [ $# -gt 0 ]; do
@@ -47,6 +49,7 @@ while [ $# -gt 0 ]; do
     --port)  PORT="$2"; shift 2 ;;
     --repo)  REPO="$2"; shift 2 ;;
     --pull)  DO_PULL=1; shift ;;
+    --expose) EXPOSE_LAN=1; shift ;;
     *) shift ;;
   esac
 done
@@ -264,15 +267,17 @@ if [ -n "$DOMAIN" ]; then
 else
   ZDM_TRUST_PROXY="TRUST_PROXY=false"
   ZDM_COOKIE_SECURE="COOKIE_SECURE=0"
-  # 直连模式（未配 --tls）：回传地址用「本机 IP:端口」固定（避免依赖不可靠的 Host 头），
-  # 后端监听 0.0.0.0 供局域网/公网直连。
-  # ⚠️ 安全提示：0.0.0.0 会暴露到所有网络接口（含公网 IP），攻击面最大。
-  #   务必保证 REQUIRE_AUTH=true（默认即 true，切勿改 false）作为唯一外部防线；
-  #   公网 VPS 强烈建议改用 --tls（nginx 反代 + 真实 TLS，后端回退 127.0.0.1）或在前置防火墙
-  #   仅放行受信赖网段。若仅需本机/回环访问，可手动将 BIND_ADDRESS 改为 127.0.0.1。
   SERVER_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
   ZDM_PUBLIC_BASE_URL="PUBLIC_BASE_URL=http://${SERVER_IP}:$PORT"
-  ZDM_BIND_ADDRESS="BIND_ADDRESS=0.0.0.0"
+  # 直连模式（未配 --tls）默认仅监听回环 127.0.0.1（secure-by-default，最小暴露面）；
+  # 如需局域网/公网直连，显式加 --expose 才放开到 0.0.0.0（此时务必保持 REQUIRE_AUTH=true + 防火墙）。
+  if [ "$EXPOSE_LAN" -eq 1 ]; then
+    ZDM_BIND_ADDRESS="BIND_ADDRESS=0.0.0.0"
+    echo "  ⚠ 直连模式 + --expose：后端监听 0.0.0.0（暴露到所有接口）。请确保 REQUIRE_AUTH=true 且前置防火墙仅放行受信赖网段。"
+  else
+    ZDM_BIND_ADDRESS="BIND_ADDRESS=127.0.0.1"
+    echo "  直连模式默认监听 127.0.0.1（仅本机可达）；如需局域网/公网直连请加 --expose 或改用 --tls。"
+  fi
   ZDM_PROXY_SUBNET="PROXY_TRUSTED_SUBNET="
 fi
 cat > .env <<ZDM_ENV_EOF

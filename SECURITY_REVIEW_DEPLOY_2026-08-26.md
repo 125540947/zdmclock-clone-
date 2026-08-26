@@ -49,15 +49,14 @@
 - 风险：公网 VPS 上 `0.0.0.0` 直接暴露到互联网，攻击面最大；一旦 `REQUIRE_AUTH` 被误配 `false`（或未来某次改动破坏默认），即裸奔。
 - 已补说明：`deploy.sh` 直连分支现注明「0.0.0.0 暴露面最大，务必保持 `REQUIRE_AUTH=true`，公网 VPS 建议改用 `--tls` 或前置防火墙仅放行受信赖网段；仅需本机访问可手动改 `127.0.0.1`」。
 
-**权衡与建议（待用户拍板）：**
-- 方案 A（secure-by-default，推荐审计口径）：直连模式默认 `BIND_ADDRESS=127.0.0.1`，新增 `--expose` 标志显式开启 `0.0.0.0`（供局域网/公网直连）。优点：默认最小暴露；缺点：改变部署契约，重跑 `deploy.sh` 直连场景需加 `--expose`，否则无法从外部访问。
-- 方案 B（保持现状，LAN 便利）：直连默认 `0.0.0.0` 不变，仅靠说明 + `REQUIRE_AUTH=true` 兜底。优点：不破坏现有「公网 IP 直连」用法；缺点：默认暴露面大。
-- Docker 容器内：建议保持 `0.0.0.0`（容器内监听），由 `docker run -p 127.0.0.1:3000:3000` 或前置反代控制对外暴露，不宜在容器内改 `127.0.0.1`（会切断同网络反代）。
+**决策（2026-08-26 已采纳方案 A · secure-by-default）：**
+- 直连模式（无 `--tls`）**默认 `BIND_ADDRESS=127.0.0.1`**（最小暴露面，仅本机可达）；需局域网/公网直连时显式加 **`--expose`** 才放开到 `0.0.0.0`，并打印安全提示要求 `REQUIRE_AUTH=true` + 防火墙。
+- Docker 容器内：保持 `0.0.0.0`（容器内监听），由 `docker run -p 127.0.0.1:3000:3000` 或前置反代控制对外暴露（不宜在容器内改 `127.0.0.1`，会切断同网络反代）。
 
-> 当前用户的 VPS（`124.222.218.174`）经 git bundle 直推部署，不经 `deploy.sh` 重跑，故无论采用方案 A/B 均**不影响现存运行服务**；`.env` 由 VPS 现状管理。
+> 该改动仅影响**未来**重跑 `deploy.sh` 时的默认行为；当前 VPS（`124.222.218.174`）经 git bundle 直推、不经 `deploy.sh`，其 `.env` 仍维持既有的 `BIND_ADDRESS=0.0.0.0`，**现存运行服务不受影响**。若日后想让 VPS 也收口到回环，需手动将 `.env` 的 `BIND_ADDRESS` 改为 `127.0.0.1` 并 `systemctl restart zdmclock`（或加 nginx 反代 + TLS）。
 
 ## 5. 附：本轮配套代码改动
 
 - `server/src/taskRunner.js`：`startup` 分支由静态 `import { runStartupForAccounts }` 改为运行时 `await import('./startup.js')`，打破 `taskRunner↔startup` 静态循环依赖（行为不变，模块图转为有向无环，单测隔离改善）。新增回归测试 `runTask(type=startup)` 委派行为（位于 `server/test/taskRunner.test.js`），全量 454/454 通过。
 - `Dockerfile`：运行阶段新增 `HEALTHCHECK`（回环探测根路径 liveness）。
-- `deploy.sh`：直连模式 `BIND_ADDRESS=0.0.0.0` 补安全暴露说明。
+- `deploy.sh`：直连模式默认改 `BIND_ADDRESS=127.0.0.1`（secure-by-default），新增 `--expose` 标志显式放开 `0.0.0.0` 并打印安全提示（含旧 `.env` 备份 `chmod 600`）。
