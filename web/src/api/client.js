@@ -159,6 +159,18 @@ export async function getTaskTemplates() {
   const { data } = await api.get('/tasks/templates');
   return data.templates || {};
 }
+// 任务执行明细（只读）：「每天哪些任务做了、哪些失败、失败原因是什么」。
+// params: { date, taskId, userId, fail(bool), limit }
+export async function getTaskRuns(params = {}) {
+  const qs = new URLSearchParams();
+  if (params.date) qs.set('date', params.date);
+  if (params.taskId) qs.set('taskId', params.taskId);
+  if (params.userId) qs.set('userId', params.userId);
+  if (params.fail) qs.set('fail', '1');
+  if (params.limit) qs.set('limit', String(params.limit));
+  const { data } = await api.get('/tasks/runs' + (qs.toString() ? `?${qs}` : ''));
+  return data;
+}
 // 扫描 captures 目录：读取 importCapture.mjs 生成的 detected.json
 export async function getCaptures() {
   const { data } = await api.get('/tasks/captures');

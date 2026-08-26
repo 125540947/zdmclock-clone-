@@ -12,6 +12,7 @@ import { limitStr, MAX_NAME_LEN } from '../validation.js';
 import { notify, isSafeSmzdmUrl } from '../notifier.js';
 import { wrapAsync } from '../wrapAsync.js';
 import { CUSTOM_TYPES, CUSTOM_TASK_DEFS, TASK_TEMPLATES, REAL_STRATEGY_TYPES } from '../taskMatrix.js';
+import { filterTaskRuns, summarizeTaskRuns } from '../taskRunLog.js';
 
 const router = Router();
 
@@ -45,6 +46,30 @@ router.get('/', adminOrAuthRequired, (req, res) => {
   });
   res.json({ list });
 });
+
+// 任务执行明细（只读）：「每天哪些任务做了、哪些失败、失败原因是什么」的 Web 数据源。
+// 复用 taskRunLog 的纯函数做过滤 + 汇总；按 date / taskId / userId / onlyFailed 过滤，
+// 返回 { total, summary, runs[] }。鉴权同任务列表：OPEN_MODE 下强制管理员（执行日志属运营数据）。
+router.get('/runs', adminOrAuthRequired, wrapAsync(async (req, res) => {
+  const db = load();
+  const runs = Array.isArray(db.taskRuns) ? db.taskRuns : [];
+  const { date, taskId, userId, fail, limit } = req.query;
+  const onlyFailed = fail === '1' || fail === 'true' || fail === 'yes';
+  const filtered = filterTaskRuns(runs, {
+    date: date || undefined,
+    taskId: taskId || undefined,
+    userId: userId || undefined,
+    onlyFailed
+  });
+  const summary = summarizeTaskRuns(filtered, date || undefined);
+  const lim = Math.min(Math.max(parseInt(limit, 10) || 200, 1), 1000);
+  res.json({
+    total: filtered.length,
+    summary,
+    // 时间线展示：最新在上
+    runs: filtered.slice(-lim).reverse()
+  });
+}));
 
 // 任务接口配置（抓包结果）读取：返回已配置端点 + 自定义任务元数据 + 推荐模板
 // OPEN_MODE 下强制管理员（暴露用户录入的自定义端点 URL，属运营配置）。
