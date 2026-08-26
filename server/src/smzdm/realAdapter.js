@@ -19,7 +19,7 @@ import { config, boundedNum } from '../config.js';
 import { pinnedFetch } from '../dnsGuard.js';
 
 const BASE = (process.env.SMZDM_BASE || 'https://www.smzdm.com').replace(/\/$/, '');
-const API_BASE = (process.env.SMZDM_API_BASE || 'https://user-api.smzdm.com').replace(/\/$/, '');
+export const API_BASE = (process.env.SMZDM_API_BASE || 'https://user-api.smzdm.com').replace(/\/$/, '');
 // 网页签到基址（与浏览器抓包 Cookie 匹配）：zhiyou.smzdm.com/user/checkin/jsonp_checkin
 const WEB_BASE = (process.env.SMZDM_WEB_BASE || 'https://zhiyou.smzdm.com').replace(/\/$/, '');
 // 文章详情基址（APP 接口家族，与 user-api 同族，服务端带登录 Cookie 可用，无 www 反爬墙）：
@@ -88,7 +88,7 @@ export function actionJitter(rng = Math.random) {
   return ACTION_JITTER_MIN + Math.floor(rng() * (span + 1));
 }
 
-const ENDPOINTS = {
+export const ENDPOINTS = {
   userInfo: process.env.SMZDM_API_USERINFO || '/user/',
   checkin: process.env.SMZDM_API_CHECKIN || '/user/checkin',
   // 评论：zhiyou 域网页互动端点（GET+JSONP），原 www/article/ajax_* 已失效返回 404（2026-08 实测）

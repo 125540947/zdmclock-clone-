@@ -20,9 +20,14 @@ test('runVerification：返回结构完整、探针条目齐全', async () => {
   assert.ok(offline, '含离线签名探针');
   assert.equal(offline.status, 'PASS');
 
-  // 4 个遗留端点可达性探针均在
-  for (const n of ['评论 ajax_post_comment', '收藏 ajax_favorite', '点赞 ajax_vote', '爆料 ajax_create']) {
-    assert.ok(results.find((r) => r.name === n), `含遗留端点探针: ${n}`);
+  // 4 个真实互动端点（user-api）可达性探针均在（探针名含真实端点路径）
+  for (const n of [
+    '评论 /user/comment/ajax_set_comment',
+    '收藏 /favorites/create',
+    '点赞 /rating/like_create',
+    '爆料 /publish/articles/ajax_create'
+  ]) {
+    assert.ok(results.find((r) => r.name === n), `含真实互动端点探针: ${n}`);
   }
 
   // 默认不签：签到探针为 SKIP

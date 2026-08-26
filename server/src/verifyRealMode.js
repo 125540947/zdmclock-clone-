@@ -11,13 +11,17 @@
 // runVerification({ cookie, withCheckin }) → results[]
 //   每项：{ name, kind, status: 'PASS'|'FAIL'|'SKIP', detail, ms }
 
-import { realAdapter, signFormData, appRequest, call } from './smzdm/realAdapter.js';
+import { realAdapter, signFormData, appRequest, call, API_BASE, ENDPOINTS } from './smzdm/realAdapter.js';
 import { discoverActiveIds, getTestingActivityId } from './smzdm/tasks_real.js';
 
-// 安全可达性探测：原站遗留端点（评论/收藏/点赞/爆料）走 www.smzdm.com + Cookie（无 app 签名）。
-// 以「空 article_id / 空标题」POST，仅验证：URL 正确、方法正确、返回 JSON 结构（而非 404/HTML）。
-// 不会真正发表评论/收藏/点赞/爆料（缺有效 article_id 时 smzdm 返回错误 JSON，不落库）。
-const WWW = 'https://www.smzdm.com';
+// 安全可达性探测：直接探测 realAdapter 实际使用的 user-api.smzdm.com APP 端点（与线上一致），
+// 而非 www.smzdm.com 旧网页端点（后者已于 2026-08 实测失效返回 404，realAdapter 早已迁移到
+// user-api 端点，继续探测 www 死路只会必然 404 误报）。以「空 article_id / 空标题」POST，仅验证：
+// URL 正确、方法正确、返回 JSON 结构（而非 404/HTML）；缺有效 article_id 时 smzdm 返回错误 JSON，
+// 不落库，不会真正发表评论/收藏/点赞/爆料。
+// 已知平台限制（非故障）：例如全民众测接口的 error_code:12「来源错误」——仅 App 内可调用，
+// 网页/服务端一律硬拒，无法修复，探针据此转 SKIP 而非 FAIL。
+class KnownLimitationError extends Error {}
 
 export async function runVerification({ cookie, withCheckin = false } = {}) {
   const results = [];
@@ -27,12 +31,16 @@ export async function runVerification({ cookie, withCheckin = false } = {}) {
       const detail = await fn();
       results.push({ name, kind, status: 'PASS', detail, ms: Date.now() - start });
     } catch (e) {
-      results.push({ name, kind, status: 'FAIL', detail: e?.message || String(e), ms: Date.now() - start });
+      if (e instanceof KnownLimitationError) {
+        results.push({ name, kind, status: 'SKIP', detail: '已知平台限制（非故障）：' + (e?.message || String(e)), ms: Date.now() - start });
+      } else {
+        results.push({ name, kind, status: 'FAIL', detail: e?.message || String(e), ms: Date.now() - start });
+      }
     }
   };
   const probeReachability = async (name, path, body = { article_id: '' }) => {
     await probe(name, 'endpoint', async () => {
-      const r = await call(path, { method: 'POST', cookie, body, base: WWW });
+      const r = await call(path, { method: 'POST', cookie, body, base: API_BASE });
       if (typeof r !== 'object' || r === null) throw new Error('返回非 JSON（端点可能已变更或需登录态）');
       const ec = r.error_code ?? r.errorCode ?? r.code ?? '';
       const msg = r.error_msg ?? r.error_reason ?? r.msg ?? '';
@@ -77,16 +85,28 @@ export async function runVerification({ cookie, withCheckin = false } = {}) {
 
   // 6) 众测 全民众测活动自动发现（只读，不领能量/不申请商品）
   await probe('众测 全民众测 activity_id', 'endpoint', async () => {
-    const aid = await getTestingActivityId(cookie);
+    let aid;
+    try {
+      aid = await getTestingActivityId(cookie);
+    } catch (e) {
+      // error_code:12「来源错误」是已知硬拒：全民众测接口仅允许 App 内调用，网页/服务端
+      // （含浏览器登录态）一律返回 12，服务端无论如何改签名/参数都无法修复，运行时已软跳过。
+      // 属平台限制而非故障，转 SKIP 避免虚惊。
+      if (/来源错误|错误代码[:\s]*12|error_code[:\s]*12/i.test(e?.message || '')) {
+        throw new KnownLimitationError(e.message);
+      }
+      throw e;
+    }
     if (!aid) throw new Error('未找到进行中的全民众测活动（可能暂未开启）');
     return `activity_id=${aid}`;
   });
 
-  // 6b) 原站遗留端点（评论/收藏/点赞/爆料）：安全可达性探测（空参数 POST，不真正发表）
-  await probeReachability('评论 ajax_post_comment', '/article/ajax_post_comment');
-  await probeReachability('收藏 ajax_favorite', '/article/ajax_favorite');
-  await probeReachability('点赞 ajax_vote', '/article/ajax_vote');
-  await probeReachability('爆料 ajax_create', '/publish/articles/ajax_create', {
+  // 6b) 真实互动端点（评论/收藏/点赞/爆料）：安全可达性探测（空参数 POST，不真正发表）。
+  // 直接复用 realAdapter 的 ENDPOINTS（user-api.smzdm.com APP 接口），与线上一致，不再探测 www 死路。
+  await probeReachability('评论 /user/comment/ajax_set_comment', ENDPOINTS.comment);
+  await probeReachability('收藏 /favorites/create', ENDPOINTS.favorite);
+  await probeReachability('点赞 /rating/like_create', ENDPOINTS.point);
+  await probeReachability('爆料 /publish/articles/ajax_create', ENDPOINTS.baoliao, {
     title: '', link: '', price: '', category: '', content: ''
   });
 
@@ -115,5 +135,5 @@ export const WRITE_NOTE =
   '  · 转盘抽奖 jsonp_draw       —— 由「转盘 active_id 自动发现」保障；真正抽奖在定时任务中执行\n' +
   '  · 每日任务领奖 activity_task_receive —— 由「每日任务 list_v2」保障\n' +
   '  · 众测能量领取 / 商品申请     —— 由「众测 activity_id 自动发现」保障\n' +
-  '  · 评论/收藏/点赞/爆料         —— 已做「安全可达性探测」（空参数 POST 验证端点存活，不真正发表）\n' +
+  '  · 评论/收藏/点赞/爆料         —— 已做「安全可达性探测」（直接打 realAdapter 的 user-api 端点，空参数 POST 验证存活，不真正发表）\n' +
   '  若这些前置探测 PASS，则实际运行通常不会因端点失效而失败。';
