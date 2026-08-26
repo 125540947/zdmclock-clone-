@@ -451,6 +451,29 @@
 
 ---
 
+## 批次 17 · 执行明细 Web 展示层（只读 API + 运行台面板）（2026-08-27）
+
+**改动要点**
+- `server/src/routes/tasks.js`：新增只读端点 `GET /api/tasks/runs`（鉴权同任务列表 `adminOrAuthRequired`，OPEN_MODE 下强制管理员）。
+- `web/src/api/client.js`：新增 `getTaskRuns(params)` helper（`date/taskId/userId/fail/limit`）。
+- `web/src/views/Manage.vue`：运行台新增「📋 执行明细」卡片，按日期查看每天哪些任务做了 / 失败 / 原因，支持「仅失败」筛选与刷新；展示各账号明细 + 结构化失败原因（动作 / 文章 ID / 账号 / 错误信息）。
+- `server/test/taskRunsRoute.test.js`：6 个路由单测（默认汇总 / `fail=1` / `date=` / `taskId=` / 时间线顺序 / 关闭服务器）全绿。
+- 清理 4 个未被 `index.html` 引用的陈旧 dist 产物（对应审计 L-04 同类）。
+
+**新增功能**
+- 用户可直接在 Web「运行台」查看每日任务执行明细与失败原因，无需 SSH 进 VPS 跑 CLI。
+
+**问题修复**
+- 端点复用 `taskRunLog.filterTaskRuns / summarizeTaskRuns` 纯函数，与 CLI 共享同一数据形态，避免两套实现漂移。
+
+**代表提交**：`ae54e5e`
+
+**VPS 线上验证**
+- 全量 git bundle 直推，基线 `4011453 → ae54e5e`，服务 active，OPEN_MODE=true 下端点走 `requireAdmin`（与既有 `/tasks` 列表一致）。
+- 经运行中的服务端真实触发 `t_fetch` → `/api/tasks/runs` 正确返回 `total:1`（该次因服务端 IP 被 smzdm 反爬拦截而失败，已结构化记入 `reasons`），印证「服务端自身进程落账」链路无重启竞态。
+
+---
+
 ## 维护约定（默认规范）
 
 1. **分批原则**：每次整理历史或新增工作阶段，按**逻辑阶段**（功能/安全波次）或**时间**划分为批次；同一波次跨多日可合并为一批次。
