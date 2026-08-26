@@ -35,6 +35,9 @@ function defaultData() {
       // 每日任务（动态读取 list_v2 → 完成支持的活动任务 → 刷新并领取奖励），无需抓包
       { id: 't_dailytasks', type: 'dailyTasks', name: '每日任务', icon: '📋', enabled: true, cron: '30 9 * * *', builtin: true, lastRun: null, lastResult: null, status: 'idle' }
     ],
+    // 任务执行明细（"每天哪些任务做了/失败/原因"）：每次 runTask 追加一条结构化记录，
+    // 由 taskRunLog.js 维护，tools/taskReport.mjs 与状态页读取。滚动保留（见 MAX_TASK_RUNS）。
+    taskRuns: [],
     // 资产账本：模块 A（任务执行）落账，模块 B（资产仪表盘）读取。
     // 每次资产相关动作记录一条 {goldDelta,silverDelta,expDelta,...} 事件，供日收益曲线/任务贡献统计。
     assetLedger: [],
@@ -108,6 +111,7 @@ export function load() {
   cache.gptDrafts = Array.isArray(cache.gptDrafts) ? cache.gptDrafts : [];
   cache.assetLedger = Array.isArray(cache.assetLedger) ? cache.assetLedger : [];
   cache.assetSnapshots = Array.isArray(cache.assetSnapshots) ? cache.assetSnapshots : [];
+  cache.taskRuns = Array.isArray(cache.taskRuns) ? cache.taskRuns : [];
   cache.tasks = cache.tasks && cache.tasks.length ? cache.tasks : d.tasks;
   // 兼容旧库：补齐非签到任务的字段（articleSource / articleId），并补上新增的默认任务（如 t_gpt）
   cache.tasks.forEach((t) => {

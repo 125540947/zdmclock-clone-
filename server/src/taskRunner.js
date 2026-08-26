@@ -1,6 +1,7 @@
 import { smzdm } from './smzdm/adapter.js';
 import { applyClock, localYesterdayStr } from './clockCore.js';
 import { withWriteLock, persist, genId, mergeBaoliao, todayStr, todayStrTZ, yesterdayStrTZ } from './store.js';
+import { recordTaskRun } from './taskRunLog.js';
 import { normalizeArticleId } from './smzdm/articleId.js';
 import { generateProductComment } from './gptAdapter.js';
 import { config } from './config.js';
@@ -136,6 +137,8 @@ async function runEngagement(task, db, user, opts) {
   let done = 0;
   let failed = 0;
   const errors = [];
+  // 结构化失败原因：{ articleId, error_msg }，供 taskRunLog 记录"失败原因是什么"
+  const reasons = [];
   const results = [];
   for (let idx = 0; idx < articleIds.length; idx++) {
     const entry = articleIds[idx];
@@ -195,6 +198,7 @@ async function runEngagement(task, db, user, opts) {
         }
         failed += 1;
         errors.push(`文章 ${aid}: ${e.message}`);
+        reasons.push({ articleId: aid || null, error_msg: e.message });
         break;
       }
     }
@@ -211,6 +215,8 @@ async function runEngagement(task, db, user, opts) {
     ok,
     // scheduler / run 接口取 r.result.message 作为 lastResult
     result: { success: ok, message, count: done, articleIds, poolSize, partial: failed > 0 },
+    // 结构化失败原因，taskRunLog 直接复用（避免对 message 做脆弱的字符串解析）
+    reasons,
     message
   };
 }
@@ -432,6 +438,7 @@ export function withAccountLock(userId, fn) {
 }
 
 export async function runTask(task, db, opts = {}) {
+  const startedAt = new Date().toISOString();
   // 智能启动调度：按账号错峰跑完整日常流水线（见 startup.js）。
   // 注意：此处用运行时动态 import 而非静态 import，以打破 taskRunner ↔ startup 的循环依赖——
   // taskRunner 被 startup 依赖（startup 调用 runTask 执行各流水线任务），startup 又需导出
@@ -439,12 +446,27 @@ export async function runTask(task, db, opts = {}) {
   // 阻碍单测隔离。改为按需动态加载后，静态模块图变为有向无环（startup → taskRunner，单向）。
   if (task.type === 'startup') {
     const { runStartupForAccounts } = await import('./startup.js');
+    // 子任务已各自通过 runTask 记录明细，这里不再重复记录聚合层，避免重复计数
     return runStartupForAccounts(db);
   }
   // gpt / fetch 不依赖账号 Cookie，无需账号即可运行（gpt 仅自动发布时用首个账号）
-  if (task.type === 'gpt') return runGptBatch(task, db);
-  if (task.type === 'fetch') return runFetch(task);
+  let r;
+  if (task.type === 'gpt') r = await runGptBatch(task, db);
+  else if (task.type === 'fetch') r = await runFetch(task);
+  else r = await runAccountTask(task, db, opts);
 
+  // —— 统一记录执行明细到 db.taskRuns ——
+  // 仅记录"确有动作 / 结果"的运行；纯 skipped（如定时签到无待签账号）每分钟都会触发，
+  // 若记录会刷屏（详见 runAccountTask 内的 skipped 分支），故跳过。
+  if (!(r && r.skipped)) {
+    await recordTaskRun(db, buildRecordFromResult(task, db, startedAt, r, opts)).catch(() => {});
+  }
+  return r;
+}
+
+// 由 runTask 调用：执行「账号级任务」（签到 / 评论 / 收藏 / 点赞 / 自定义端点任务），
+// 逐账号跑并聚合，返回 { ok, partial, skipped, reasons, result:{...perUser}, message }。
+async function runAccountTask(task, db, opts = {}) {
   let users = resolveUsers(db, opts);
   if (!users.length) {
     return { ok: false, error: 'no_user', message: '请先添加 smzdm 账号' };
@@ -492,6 +514,7 @@ export async function runTask(task, db, opts = {}) {
 
   // 逐账号执行并聚合（clock / comment / favorite / point / 自定义端点任务）
   const parts = [];
+  const userResults = []; // 收集每账号结果，用于聚合结构化失败原因
   let okCount = 0;
   const assetCache = new Map(); // P2-5：本轮内按账号缓存余额刷新结果，避免 N+1（同账号多任务只拉一次 smzdm）
   for (let i = 0; i < users.length; i++) {
@@ -543,20 +566,61 @@ export async function runTask(task, db, opts = {}) {
       }
       if (r && r.ok) okCount += 1;
       parts.push(`${who}：${r ? r.message : '未知结果'}`);
+      userResults.push({ who, r });
     } catch (e) {
       parts.push(`${who}：异常 ${e.message}`);
+      userResults.push({ who, error: e.message });
     }
     });
   }
   const total = users.length;
   const allOk = okCount === total;
+  // 聚合结构化失败原因：互动任务带 articleId；签到 / 自定义端点带动作 + 文本原因。
+  const reasons = [];
+  for (const ur of userResults) {
+    if (ur.r && Array.isArray(ur.r.reasons)) {
+      for (const x of ur.r.reasons) {
+        reasons.push({ action: task.type, articleId: x.articleId || null, error_msg: x.error_msg, user: ur.who });
+      }
+    } else if (ur.r && !ur.r.ok) {
+      reasons.push({ action: task.type, articleId: null, error_msg: ur.r.message || '未知失败', user: ur.who });
+    } else if (ur.error) {
+      reasons.push({ action: task.type, articleId: null, error_msg: ur.error, user: ur.who });
+    }
+  }
   const message =
     `共 ${total} 个账号：${okCount} 成功 / ${total - okCount} 失败\n` + parts.join('\n');
   // 全部成功才标 ok；部分失败标 partial（调度器据此仍记为完成，避免误报红色错误）
   return {
     ok: allOk,
     partial: !allOk && okCount > 0,
+    skipped: false,
+    reasons,
     result: { success: allOk, message, perUser: parts },
     message
+  };
+}
+
+// 由 runTask 调用：组装一条 taskRuns 记录所需的字段（从任务 / 结果中提炼）。
+function buildRecordFromResult(task, db, startedAt, r, opts) {
+  const users = resolveUsers(db, opts);
+  const multi = users.length > 1;
+  const userId =
+    task.type === 'gpt' || task.type === 'fetch'
+      ? opts.userId || null
+      : opts.userId || (multi ? 'all' : (users[0] && users[0].id) || null);
+  return {
+    taskId: task.id,
+    taskName: task.name,
+    type: task.type,
+    userId,
+    date: todayStrTZ(config.tz),
+    startedAt,
+    ok: !!(r && r.ok),
+    partial: !!(r && r.partial),
+    skipped: !!(r && r.skipped),
+    message: (r && r.message) || '',
+    perUser: r && r.result && Array.isArray(r.result.perUser) ? r.result.perUser : [],
+    reasons: r && Array.isArray(r.reasons) ? r.reasons : []
   };
 }
