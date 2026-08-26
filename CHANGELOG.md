@@ -424,6 +424,33 @@
 
 ---
 
+## 批次 16 · 每日任务执行明细持久化 + 报告 CLI（2026-08-27）
+
+**改动要点**
+- 用户诉求：长期找不到「每天哪些任务做了 / 哪些失败 / 失败原因是什么」的结构化记录（`tasks[]` 仅存每任务最后一次纯文本 `lastResult`，无按天历史、无结构化失败原因）。
+- 在 `runTask` 出口（覆盖定时调度、手动运行、smart-startup 子任务三类调用方）统一追加一条结构化执行记录到 `db.taskRuns`，落账置于 `withWriteLock` 内与既有持久化原子；`tools/taskReport.mjs` 提供按日期汇总的每日报告查看器。
+
+**新增功能**
+- `server/src/taskRunLog.js`：执行明细核心模块。`recordTaskRun(db, raw)` 在写锁内追加记录并落盘（滚动保留上限 3000 条，约 2~3 个月）；纯函数 `filterTaskRuns` / `summarizeTaskRuns` 供 CLI 与未来状态页共用，零 IO 依赖。
+- `db.json` 新增 `taskRuns: []`（store 默认 schema + 旧库兼容补齐）。
+- 记录形态：`{ id, taskId, taskName, type, userId('all'|具体|null), date(配置时区), startedAt, finishedAt, ok, partial, skipped, message, perUser[], reasons[] }`；`reasons` 为结构化失败原因 `{ action, articleId, error_msg, user }`（评论/收藏/点赞按文章级归因，签到/自定义端点带动作+文本）。
+- `tools/taskReport.mjs`：每日报告 CLI，按日期（默认今天）汇总「做了啥/失败/原因」，支持 `--date/--task/--user/--fail/--json/--db`。
+- `runEngagement` 新增结构化 `reasons` 产出（含 `articleId`）；`runTask` 内账号循环抽取为 `runAccountTask` 以便聚合各账号失败原因。
+- 设计取舍：纯 `skipped`（如定时签到无待签账号）每分钟都会触发，为免刷屏**不记录**；smart-startup 聚合层其子任务已各自记录，故聚合层**跳过**以免重复计数。
+
+**问题修复**
+- 无（本轮为纯新增能力）。
+
+**测试与部署**
+- 新增 `server/test/taskRunLog.test.js` 6/6 通过（buildTaskRunRecord 形态、filter/summarize 聚合、recordTaskRun 追加 + 3000 截断、runTask→recordTaskRun 接线）。
+- 回归：`scheduler/schedulerTick/startup/startup.tz/store` 套件全绿（39/39）。
+- 部署：commit `4011453` → `git push origin main` → git bundle 全量直推 VPS（`/root/.deploy.bundle` → `git fetch` + `reset --hard FETCH_HEAD` + `git clean -fd -e data -e .claude` + `systemctl restart zdmclock`），VPS 基线 `68b55f6` → `4011453`。
+- VPS 线上验证：X-Powered-By 隐藏（89231c1 纵深加固随主线保留）、`/api/auth/config` 200、服务 active；并以真实 `runTask(t_comment)` 触发一次执行，确认 `taskRuns` 落地且 CLI 正确输出失败原因（6 条「自动评论需要先启用 AI 回复」按文章归因）。
+
+**代表提交**：`4011453`
+
+---
+
 ## 维护约定（默认规范）
 
 1. **分批原则**：每次整理历史或新增工作阶段，按**逻辑阶段**（功能/安全波次）或**时间**划分为批次；同一波次跨多日可合并为一批次。
