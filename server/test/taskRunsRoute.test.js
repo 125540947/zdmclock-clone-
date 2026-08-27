@@ -102,6 +102,18 @@ test('GET /api/tasks/runs?taskId= 按任务过滤', async () => {
   assert.equal(data.runs[0].id, 'r2');
 });
 
+test('OPEN_MODE 下 /api/tasks/runs 匿名可读（与签到记录页一致）', async () => {
+  // 模拟开放模式：此时 adminOrAuthRequired 会强制管理员(401/403)，而 authRequired 应匿名放行。
+  config.openMode = true;
+  try {
+    const { status, data } = await j('GET', '/api/tasks/runs'); // 不带任何 Token
+    assert.equal(status, 200, 'OPEN_MODE 下匿名应可读执行明细');
+    assert.equal(data.total, SEED.length);
+  } finally {
+    config.openMode = false; // 复原，避免影响其他用例
+  }
+});
+
 test('关闭测试服务器', () => {
   server.close();
   assert.ok(true);

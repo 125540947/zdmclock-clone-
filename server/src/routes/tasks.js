@@ -50,7 +50,10 @@ router.get('/', adminOrAuthRequired, (req, res) => {
 // 任务执行明细（只读）：「每天哪些任务做了、哪些失败、失败原因是什么」的 Web 数据源。
 // 复用 taskRunLog 的纯函数做过滤 + 汇总；按 date / taskId / userId / onlyFailed 过滤，
 // 返回 { total, summary, runs[] }。鉴权同任务列表：OPEN_MODE 下强制管理员（执行日志属运营数据）。
-router.get('/runs', adminOrAuthRequired, wrapAsync(async (req, res) => {
+// 执行明细只读端点：鉴权模型与签到记录页（/clock/history）一致——OPEN_MODE 下匿名可读，
+// 非开放模式仍需 API_TOKEN。属运营观测数据（哪些任务跑了/失败/原因），不含写操作，
+// 故不采用 adminOrAuthRequired（后者在 OPEN_MODE 下强制管理员，会挡住开放模式匿名访客）。
+router.get('/runs', authRequired, wrapAsync(async (req, res) => {
   const db = load();
   const runs = Array.isArray(db.taskRuns) ? db.taskRuns : [];
   const { date, taskId, userId, fail, limit } = req.query;
