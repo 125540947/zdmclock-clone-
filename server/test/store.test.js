@@ -54,6 +54,36 @@ test('mergeBaoliao 重导相同链接幂等更新 channelId（不新增、不覆
   assert.equal(db.baoliao[0].title, 'A', '未携带 title 时不覆盖原标题');
 });
 
+test('mergeBaoliao：RSS 为链接占位条目补齐标题价格，但保留浏览器长正文', () => {
+  const db = load();
+  db.baoliao.length = 0;
+  mergeBaoliao([{ smzdmUrl: 'https://www.smzdm.com/p/112', title: '文章 112', content: '文章 112' }]);
+  const added = mergeBaoliao([{
+    smzdmUrl: 'https://www.smzdm.com/p/112',
+    title: '真实商品标题',
+    price: '19.9',
+    content: '好价信息：19.9元（需用券）',
+    source: 'smzdm-rss',
+    publishedAt: '2026-08-27T08:00:00.000Z'
+  }]);
+  assert.equal(added, 0);
+  assert.equal(db.baoliao[0].title, '真实商品标题');
+  assert.equal(db.baoliao[0].price, '19.9');
+  assert.equal(db.baoliao[0].content, '好价信息：19.9元（需用券）');
+
+  db.baoliao[0].source = 'browser';
+  db.baoliao[0].content = '浏览器读取到的完整商品正文和优惠说明';
+  mergeBaoliao([{
+    smzdmUrl: 'https://www.smzdm.com/p/112',
+    price: '18.8',
+    content: '好价信息：18.8元',
+    source: 'smzdm-rss'
+  }]);
+  assert.equal(db.baoliao[0].price, '18.8', '价格允许按最新 RSS 更新');
+  assert.equal(db.baoliao[0].content, '浏览器读取到的完整商品正文和优惠说明', 'RSS 不应覆盖更完整的浏览器正文');
+  assert.equal(db.baoliao[0].source, 'browser', '保留完整正文时也应保留其浏览器来源标记');
+});
+
 test('mergeBaoliao 缺 smzdmUrl 时回退 url 字段', () => {
   const db = load();
   db.baoliao.length = 0;

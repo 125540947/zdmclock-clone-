@@ -22,8 +22,8 @@ function defaultData() {
       { id: 't_point', type: 'point', name: '自动点赞', icon: '👍', enabled: false, cron: '0 12 * * *', articleId: '', articleSource: 'manual', lastRun: null, lastResult: null, status: 'idle' },
       // GPT 定时批量生成：从好价列表取内容 → 大模型生成评论草稿（可选自动发布）
       { id: 't_gpt', type: 'gpt', name: 'GPT 批量生成', icon: '🤖', enabled: false, cron: '30 21 * * *', source: 'baoliao', autoPost: false, limit: 3, lastRun: null, lastResult: null, status: 'idle' },
-      // 好价真实抓取：定时从 smzdm 公开好价列表抓取并写入 db.baoliao（best-effort，自动去重）
-      { id: 't_fetch', type: 'fetch', name: '刷新好价', icon: '📥', enabled: false, cron: '0 8 * * *', limit: 20, lastRun: null, lastResult: null, status: 'idle' },
+      // 官方 RSS 好价抓取：每天定时写入 db.baoliao（无需 Cookie，自动去重）
+      { id: 't_fetch', type: 'fetch', name: '刷新好价', icon: '📥', enabled: true, cron: '0 8 * * *', limit: 20, lastRun: null, lastResult: null, status: 'idle' },
       // 任务矩阵补全（需抓包/其他接口来源）：抽奖/转盘/众测/关注/分享。
       // 这些端点 smzdm 未公开，需你从 App 抓包取得真实 URL/参数后，在「自动任务」页配置，
       // 系统对未配置的接口明确标记"待抓包"，绝不伪造成功（详见 taskMatrix.js）。
@@ -332,9 +332,26 @@ export function mergeBaoliao(items = [], recordedIp) {
     if (!/^https?:\/\//i.test(url)) continue; // 只接受合法 http(s) 链接
     const existing = cache.baoliao.find((x) => (x.smzdmUrl || x.url || '') === url);
     if (existing) {
-      // 幂等：重导相同链接时刷新可覆盖的元数据（channelId 等），避免每次都要先清空旧好价才能更新频道。
-      // 仅当本次明确携带 channelId 时才覆盖，避免误清空已有值。
+      // 幂等：重导相同链接时补齐元数据。RSS 可为浏览器仅导入链接的旧条目补上标题/价格，
+      // 但不覆盖浏览器已经取得的长正文。
+      const previousTitle = String(existing.title || '');
+      const canUpdateTitle = !previousTitle || /^文章 \d+$/.test(previousTitle) || existing.source === 'smzdm-rss';
+      const canUpdateContent =
+        !existing.content || existing.content === previousTitle || existing.source === 'smzdm-rss';
       if (it.channelId) existing.channelId = String(it.channelId).slice(0, 20);
+      if (it.title && canUpdateTitle) {
+        existing.title = String(it.title).slice(0, 200);
+      }
+      if (it.price) existing.price = String(it.price).slice(0, 50);
+      let contentUpdated = false;
+      if (it.content && canUpdateContent) {
+        existing.content = String(it.content).slice(0, 2000);
+        contentUpdated = true;
+      }
+      if (it.source && (!existing.source || existing.source === 'smzdm-rss' || contentUpdated)) {
+        existing.source = String(it.source).slice(0, 50);
+      }
+      if (it.publishedAt) existing.publishedAt = String(it.publishedAt).slice(0, 50);
       existing.updatedAt = now;
       continue;
     }
@@ -349,6 +366,8 @@ export function mergeBaoliao(items = [], recordedIp) {
       status: 'fetched',
       smzdmUrl: url,
       channelId: String(it.channelId || '').slice(0, 20),
+      source: String(it.source || '').slice(0, 50),
+      publishedAt: String(it.publishedAt || '').slice(0, 50),
       recordedIp: recordedIp || null, // M-02：记录批量导入来源 IP，使开放模式录入者随后可见自己导入的好价
       lastResult: '',
       createdAt: now,

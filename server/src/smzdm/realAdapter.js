@@ -15,6 +15,7 @@ import crypto from 'node:crypto';
 import { normalizeArticleId } from './articleId.js';
 import { isSafePushUrl, isSafeSmzdmUrl, readBodyCapped, BodyTooLargeError } from '../notifier.js';
 import { parseJsonp, removeTags } from './parse.js';
+import { parseBaoliaoRss } from './rssFeed.js';
 import { config, boundedNum } from '../config.js';
 import { pinnedFetch } from '../dnsGuard.js';
 
@@ -661,55 +662,29 @@ export const realAdapter = {
     };
   },
 
-  // ⚠️ 好价真实抓取（best-effort，未验证）：
-  // 抓取 smzdm 公开好价列表页，抽取文章卡片（href="/p/<id>" 及其标题文本）。
-  // - 公开页无需登录 Cookie 即可读取；
-  // - 页面结构可能随 smzdm 改版而失效，解析为空会明确报错，绝不静默成功；
-  // - 任何网络异常 / 超时 / 超大响应都被捕获，调用方据此友好提示。
-  async fetchBaoliao({ cookie, limit = 20, page = 1 } = {}) {
-    const url = (process.env.SMZDM_BAOLIAO_URL || BASE + '/').replace(/\/$/, '') + `/?page=${page}`;
-    // P2-7：复用 call() 统一 fetch + 超时（SMZDM_REQUEST_TIMEOUT，默认 10s），消除与 call 重复的样板。
-    // call 在非 2xx 时抛 `HTTP <status> @ <url>`，挑战页多为 202，统一转反爬引导提示。
-    let html;
+  // 官方 RSS 好价抓取：无需账号 Cookie，可在服务器上定时无人值守运行。
+  // RSS 标题包含商品名、价格与优惠方式；正文只提供来源说明，因此 content 使用标题中的真实优惠信息，
+  // 不虚构商品详情。条目解析统一收敛到 rssFeed.js，并强制规范化为 smzdm /p/<id> 链接。
+  async fetchBaoliao({ limit = 20 } = {}) {
+    let xml;
     try {
-      html = await call(url, { method: 'GET', cookie, ua: pickUA(), base: '', raw: true, referer: BASE + '/' });
-    } catch (e) {
-      if (/HTTP (202|40[13]|429|5\d\d)/.test(e.message)) {
-        dbgLog('[smzdm-debug] fetchBaoliao 非 2xx（疑似反爬挑战页）：', e.message);
-        throw new Error('抓取好价失败：smzdm 已对服务端启用反爬拦截（返回挑战页），服务端无法自动抓取好价。请改用浏览器导入：打开 /baoliao-import 页面，用页面里的书签一键复制 smzdm 文章链接，粘贴导入即可。');
-      }
-      throw new Error('抓取好价网络错误：' + e.message);
-    }
-    if (html.length > 5_000_000) throw new Error('好价列表响应过大，已拒绝（疑似异常响应）');
-    // smzdm 对服务端 IP 启用反爬挑战页（典型 HTTP 202 + ~209 字节风控页，或 200 但内容为空/验证页），
-    // 此时页面里没有任何 /p/ 链接，继续往下只会得到空列表。明确报错并引导用浏览器导入，避免误导用户以为"刷新成功却没数据"。
-    if (html.length < 600 || /验证|challenge|anti.?bot|访问验证|<title>验证/i.test(html)) {
-      throw new Error('抓取好价失败：smzdm 已对服务端启用反爬拦截（返回挑战页），服务端无法自动抓取好价。请改用浏览器导入：打开 /baoliao-import 页面，用页面里的书签一键复制 smzdm 文章链接，粘贴导入即可。');
-    }
-    // 抽取文章卡片：捕获 /p/<id> 链接与相邻标题文本（容忍标签嵌套）
-    const cardRe = /href="\/p\/(\d+)"[^>]*>([\s\S]*?)<\/a>/gi;
-    const seen = new Set();
-    const items = [];
-    let m;
-    while ((m = cardRe.exec(html)) !== null && items.length < limit) {
-      const id = m[1];
-      if (seen.has(id)) continue;
-      seen.add(id);
-      const rawTitle = String(m[2] || '')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .slice(0, 120);
-      items.push({
-        title: rawTitle,
-        url: '',
-        smzdmUrl: `${BASE}/p/${id}`,
-        price: '',
-        content: rawTitle
+      xml = await call(config.smzdmBaoliaoRssUrl, {
+        method: 'GET',
+        ua: pickUA(),
+        base: '',
+        raw: true,
+        referer: BASE + '/dingyue',
+        extraHeaders: { Accept: 'application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.7' }
       });
+    } catch (e) {
+      const status = String(e.message || '').match(/HTTP (\d+)/)?.[1];
+      if (status) throw new Error(`官方RSS请求失败（HTTP ${status}）`);
+      if (/超时|Timeout|Abort/i.test(e.message)) throw new Error('官方RSS请求超时，请稍后重试');
+      const safeMessage = String(e.message || '未知网络错误').replace(/https?:\/\/\S+/gi, '上游地址');
+      throw new Error('抓取好价网络错误：' + safeMessage);
     }
-    if (!items.length) { dbgLog('[smzdm-debug] fetchBaoliao 解析到 0 条（页面结构可能已变更），htmlLen=', html.length); throw new Error('未能从页面解析到好价文章（页面结构可能已变更）'); }
-    dbgLog('[smzdm-debug] fetchBaoliao 解析到', items.length, '条');
-    return { ok: true, items, page };
+    const items = parseBaoliaoRss(xml, { limit });
+    dbgLog('[smzdm-debug] fetchBaoliao 从官方RSS解析到', items.length, '条');
+    return { ok: true, items, source: 'smzdm-rss' };
   }
 };

@@ -4,7 +4,6 @@ import { smzdm } from '../smzdm/adapter.js';
 import { config } from '../config.js';
 import {
   authRequired,
-  authRequiredOrQuery,
   authRequiredOrInstall,
   mutationGuard,
   getClientIp,
@@ -36,7 +35,7 @@ router.get('/', authRequired, (req, res) => {
   res.json({ items: list, total: list.length });
 });
 
-// 从 smzdm 抓取好价并合并进爆料箱（real 适配器抓真实列表；mock 返回样例数据）
+// 从 smzdm 官方 RSS 抓取好价并合并进爆料箱（real 适配器读 RSS；mock 返回样例数据）
 // 注意：必须定义在任何 /:id 路由之前，否则 "refresh" 会被当成 id 匹配。开放模式下强制管理员（mutationGuard）。
 router.post('/refresh', mutationGuard, wrapAsync(async (req, res) => {
   const db = load();
@@ -48,17 +47,17 @@ router.post('/refresh', mutationGuard, wrapAsync(async (req, res) => {
     const items = (fetched && fetched.items) || [];
     dbgLog('[baoliao] refresh 完成：fetched=', items.length);
     if (!items.length) {
-      return res.status(502).json({ error: 'no_items', message: '未抓取到好价（页面结构可能已变更或被风控）' });
+      return res.status(502).json({ error: 'no_items', message: '官方RSS暂时没有返回好价，请稍后重试' });
     }
     let added = 0;
     await withWriteLock(() => {
       added = mergeBaoliao(items);
       return persistAwait();
     });
-    res.json({ ok: true, fetched: items.length, added, total: db.baoliao.length });
+    res.json({ ok: true, source: fetched.source || 'smzdm-rss', fetched: items.length, added, total: db.baoliao.length });
   } catch (e) {
     dbgLog('[baoliao] refresh 失败：', e.message);
-    res.status(502).json({ error: 'fetch_failed', message: '好价抓取失败，请稍后重试或查看服务端日志' });
+    res.status(502).json({ error: 'fetch_failed', message: `RSS刷新失败：${e.message}` });
   }
 }));
 

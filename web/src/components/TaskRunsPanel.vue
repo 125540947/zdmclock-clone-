@@ -36,6 +36,7 @@
           <span class="run-time">{{ runTimeLabel(r) }}</span>
         </div>
         <div v-for="(p, i) in r.perUser" :key="i" class="run-peruser">{{ p }}</div>
+        <div v-if="r.message && (!r.perUser || !r.perUser.length)" class="run-message">{{ r.message }}</div>
         <div v-if="r.reasons && r.reasons.length" class="run-reasons">
           <div v-for="(rs, i) in r.reasons" :key="i" class="run-reason">
             <span class="reason-tag">{{ rs.action || '失败' }}</span>
@@ -353,6 +354,13 @@ onMounted(loadRuns);
   font-size: 12.5px;
   color: var(--text-dim);
   margin-top: 6px;
+}
+.run-message {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  line-height: 1.55;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
 }
 .run-reasons {
   margin-top: 8px;

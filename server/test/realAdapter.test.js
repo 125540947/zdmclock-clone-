@@ -4,7 +4,7 @@
 //  1. 纯函数（确定性、可注入 rng）—— pickUA / actionJitter / signFormData / extractSess
 //  2. call() 统一出口 —— SSRF 纵深防御、JSON / )]}' 前缀解析、超大响应拒绝、HTTP 非 2xx、超时、raw 模式
 //  3. 互动方法（评论/收藏/点赞/爆料）—— 通过注入 callImpl / sleepImpl / resolveChannelIdImpl 完全脱离网络
-//  4. fetchBaoliao —— 通过 mock globalThis.fetch 覆盖挑战页/验证页/正常解析三分支
+//  4. fetchBaoliao —— 通过 mock pinnedFetch 覆盖 RSS 非 2xx / 非 RSS / 正常解析分支
 import { test, before, after, mock } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -362,38 +362,38 @@ test('submitBaoliao：成功返回链接', async () => {
   assert.equal(r.url, 'https://www.smzdm.com/p/888');
 });
 
-// ===================== fetchBaoliao（mock 真实 fetch） =====================
+// ===================== fetchBaoliao（mock 官方 RSS） =====================
 
-test('fetchBaoliao：反爬挑战页（HTTP 202）转友好错误', async () => {
-  mockFetch(async () => fakeResp({ ok: false, status: 202, body: 'challenge' }));
+test('fetchBaoliao：官方 RSS 非 2xx 转为明确错误', async () => {
+  mockFetch(async () => fakeResp({ ok: false, status: 503, body: 'unavailable' }));
   await assert.rejects(
-    () => realAdapter.fetchBaoliao({ cookie: 'ck', limit: 20 }),
-    /改用浏览器导入/
+    () => realAdapter.fetchBaoliao({ limit: 20 }),
+    /官方RSS请求失败.*HTTP 503/
   );
 });
 
-test('fetchBaoliao：验证页（短/含"验证"）转友好错误', async () => {
+test('fetchBaoliao：挑战页等非 RSS 内容转为解析错误', async () => {
   mockFetch(async () => fakeResp({ ok: true, body: '<html><title>验证</title></html>' }));
-  await assert.rejects(() => realAdapter.fetchBaoliao({ cookie: 'ck' }), /改用浏览器导入/);
+  await assert.rejects(() => realAdapter.fetchBaoliao(), /非RSS内容/);
 });
 
-test('fetchBaoliao：正常页面解析出文章卡片', async () => {
-  const padding = 'x'.repeat(700); // 满足 >600 字节反爬门槛（真实页面远大于此）
-  const html =
-    padding +
-    '<a href="/p/111">标题A</a>' +
-    '<a href="/p/222">标题B</a>' +
-    '<a href="/p/111">重复</a>';
-  mockFetch(async () => fakeResp({ ok: true, body: html }));
-  const r = await realAdapter.fetchBaoliao({ cookie: 'ck', limit: 20 });
+test('fetchBaoliao：正常 RSS 解析标题、价格、链接并去重', async () => {
+  const xml = `<?xml version="1.0"?><rss><channel>
+    <item><title><![CDATA[商品A 12.9元（需用券）]]></title><link><![CDATA[https://www.smzdm.com/p/111/]]></link><pubDate>Thu, 27 Aug 2026 15:08:39</pubDate></item>
+    <item><title><![CDATA[商品B 券后价￥59]]></title><link><![CDATA[https://www.smzdm.com/p/222/]]></link></item>
+    <item><title>重复 13元</title><link>https://www.smzdm.com/p/111/</link></item>
+  </channel></rss>`;
+  mockFetch(async () => fakeResp({ ok: true, body: xml }));
+  const r = await realAdapter.fetchBaoliao({ limit: 20 });
   assert.equal(r.ok, true);
   assert.equal(r.items.length, 2, '去重后应为 2 条');
   assert.equal(r.items[0].smzdmUrl, 'https://www.smzdm.com/p/111');
-  assert.equal(r.items[0].title, '标题A');
+  assert.equal(r.items[0].title, '商品A');
+  assert.equal(r.items[0].price, '12.9');
+  assert.equal(r.source, 'smzdm-rss');
 });
 
-test('fetchBaoliao：解析到 0 条抛错（页面结构变更）', async () => {
-  const padding = 'x'.repeat(700); // >600 字节且不含验证词，确保走"解析 0 条"分支而非反爬判定
-  mockFetch(async () => fakeResp({ ok: true, body: padding + '<div>no links here</div>' }));
-  await assert.rejects(() => realAdapter.fetchBaoliao({ cookie: 'ck' }), /未能从页面解析到好价文章/);
+test('fetchBaoliao：RSS 解析到 0 条抛错', async () => {
+  mockFetch(async () => fakeResp({ ok: true, body: '<?xml version="1.0"?><rss><channel></channel></rss>' }));
+  await assert.rejects(() => realAdapter.fetchBaoliao(), /未返回可识别的好价条目/);
 });

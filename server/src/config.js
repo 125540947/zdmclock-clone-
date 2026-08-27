@@ -129,6 +129,8 @@ export const config = {
   smzdmAdapter: process.env.SMZDM_ADAPTER || 'mock',
   // real 适配器对外请求超时（毫秒），避免 smzdm 挂起时 Promise 永久 pending
   smzdmRequestTimeout: boundedNum(process.env.SMZDM_REQUEST_TIMEOUT, 1000, 60000, 10000),
+  // 官方好价 RSS。官网当前仅 HTTP 源可稳定读取；不携带账号 Cookie，且条目链接会再次限定为 smzdm 文章。
+  smzdmBaoliaoRssUrl: process.env.SMZDM_BAOLIAO_RSS_URL || 'http://feed.smzdm.com/',
   // GPT 自动回复（OpenAI 兼容接口）。未设置 GPT_API_KEY 时视为未配置，/api/gpt/reply 拒绝调用
   gptApiKey: process.env.GPT_API_KEY || '',
   gptApiBase: (process.env.GPT_API_BASE || 'https://api.openai.com/v1').replace(/\/$/, ''),

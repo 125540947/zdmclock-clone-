@@ -382,26 +382,26 @@ async function runGptBatch(task, db) {
   return { ok: true, result: { success: true, message, count: gen, drafts }, message };
 }
 
-// 好价真实抓取：调用适配器抓取 smzdm 公开好价列表，去重合并进 db.baoliao
+// 好价真实抓取：调用适配器读取 smzdm 官方 RSS，去重合并进 db.baoliao
 async function runFetch(task) {
   const limit = Math.min(config.fetchMax, Math.max(1, Number(task.limit) || 20));
   let fetched;
   try {
     fetched = await smzdm.fetchBaoliao({ limit });
   } catch (e) {
-    return { ok: false, error: 'fetch_failed', message: '抓取好价失败：' + e.message };
+    return { ok: false, error: 'fetch_failed', message: 'RSS刷新好价失败：' + e.message };
   }
   const items = (fetched && fetched.items) || [];
   if (!items.length) {
-    return { ok: false, error: 'no_items', message: '未抓取到好价（页面结构可能已变更或被风控拦截）' };
+    return { ok: false, error: 'no_items', message: '官方RSS暂时没有返回好价，请稍后重试' };
   }
   let added = 0;
   await withWriteLock(() => {
     added = mergeBaoliao(items);
     persist();
   });
-  const message = `抓取好价完成：解析 ${items.length} 条，新增 ${added} 条（已去重）`;
-  return { ok: true, result: { success: true, message, count: added }, message };
+  const message = `RSS刷新完成：读取 ${items.length} 条，新增 ${added} 条（其余已去重）`;
+  return { ok: true, result: { success: true, message, count: added, fetched: items.length, source: 'smzdm-rss' }, message };
 }
 
 // 选定目标账号：

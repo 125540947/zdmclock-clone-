@@ -202,7 +202,7 @@ test('runTask 定时(scheduled)模式：已过个人时间(宽限窗内)补签�
     };
     const r = await runTask({ type: 'clock', name: '签到' }, db, { scheduled: true });
     assert.equal(r.ok, true);
-    assert.equal(r.skipped, undefined);
+    assert.equal(r.skipped, false, '存在到点账号并实际执行时应明确标记为非跳过');
     assert.equal(db.clockRecords.length, 3); // hit/past/def 签，future 不签
     const signed = new Set(db.clockRecords.map((x) => x.userId));
     assert.ok(signed.has('hit') && signed.has('past') && signed.has('def'));

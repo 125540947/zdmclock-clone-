@@ -91,6 +91,7 @@ npm start
 | `CORS_ORIGIN` | 留空=仅同源 | 跨域白名单，逗号分隔。默认不返回 CORS 头，杜绝任意域调用 |
 | `SMZDM_ADAPTER` | `mock` | `mock`（仿真）｜ `real`（需自行实现） |
 | `SMZDM_REQUEST_TIMEOUT` | `10000` | real 适配器对外请求超时（毫秒），防止 smzdm 无响应时永久挂起 |
+| `SMZDM_BAOLIAO_RSS_URL` | `http://feed.smzdm.com/` | 官方好价 RSS；无需 Cookie，由“刷新好价”任务定时读取 |
 | `DATA_DIR` | `./data` | JSON 数据库相对路径 |
 | `WEB_DIST` | `../web/dist` | 前端产物目录 |
 | `UPDATE_CHECK_INTERVAL_MIN` | `1440` | 自动更新检查节流间隔（分钟），仅 production 生效；设 0 关闭 |
@@ -360,6 +361,7 @@ SMZDM_COOKIE="你的Cookie" node tools/verifyRealMode.mjs
 |---|---|---|---|
 | 签到 | 否 | — | 真实签到，响应含权威余额（金/碎银/经验） |
 | 每日任务 | 否 | — | 每天读取活动任务，完成支持的项目后领取任务及阶段奖励 |
+| 刷新好价 | 否 | — | 每天从官方 RSS 读取标题、价格、优惠信息和文章链接，自动去重 |
 | 转盘抽奖 | 否（可覆盖） | `{"activeId":"xxx"}` 或 `{"topicUrl":"https://m.smzdm.com/topic/..."}` | 内置双转盘专题页，运行时自动抽 `active_id` |
 | 每日抽奖 | 否 | 同上 | 复用转盘逻辑 |
 | 全民众测 | 否（可覆盖） | `{"crowdId":"xxx"}` | 默认自动发现活动并领能量值，填 `crowd_id` 则申请具体商品 |
@@ -381,7 +383,7 @@ SMZDM_COOKIE="你的Cookie" node tools/verifyRealMode.mjs
 - **遗留 web 端点（评论/收藏/点赞/爆料）拟人化**：这些 `www.smzdm.com` 端点无 app 签名（签名对它无意义），
   已做两层加固以降低被按固定指纹识别为机器的概率——① **UA 轮换**（8 个真实浏览器 UA 池随机取用）；
   ② **动作拟人化间隔**（`count` 多次动作之间随机等待 `SMZDM_ACTION_JITTER_MIN`~`SMZDM_ACTION_JITTER_MAX`，默认 800~2500ms）。
-  好价抓取 `fetchBaoliao` 同样轮换 UA。
+  好价抓取 `fetchBaoliao` 已改读官方 RSS，不携带账号 Cookie，也不再请求被反爬拦截的首页。
 
 ### 第 6 步：Cookie 失效守护
 
