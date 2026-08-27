@@ -474,6 +474,20 @@
 
 ---
 
+## 批次 18 · 执行明细面板 OPEN_MODE 匿名可读 + t_comment 止噪（2026-08-27）
+
+**改动要点**
+- `server/src/routes/tasks.js`：`GET /api/tasks/runs` 鉴权由 `adminOrAuthRequired` 改为 `authRequired`，鉴权模型与签到记录页 `/clock/history` 对齐——**OPEN_MODE 下匿名可读、非开放模式仍需 API_TOKEN**；仅改变 OPEN_MODE 语义，不影响非开放模式。
+- `server/test/taskRunsRoute.test.js`：新增「OPEN_MODE 匿名可读」断言（7/7 通过）。
+- 上线后配置修复（运行时，非代码）：经 `PUT /api/tasks/t_comment` 将 `t_comment` 置 `enabled:false`，止住「自动评论需要先启用 AI 回复」每日全失败刷屏（根因：VPS 未配置 GPT API Key，`settings.gpt` 无 `apiKey` 字段，AI 回复链路不可用）。
+
+**问题修复**
+- 解决开放模式匿名访客无法查看「执行明细」面板（原被 `requireAdmin` 挡住）的问题，与签到记录页访问模型一致。
+
+**代表提交**：`24ed28a`
+
+---
+
 ## 维护约定（默认规范）
 
 1. **分批原则**：每次整理历史或新增工作阶段，按**逻辑阶段**（功能/安全波次）或**时间**划分为批次；同一波次跨多日可合并为一批次。
