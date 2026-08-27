@@ -488,6 +488,26 @@
 
 ---
 
+## 批次 19 · 执行明细独立导航页（共享组件 + 导航「明细」入口）（2026-08-27）
+
+**改动要点**
+- 新增 `web/src/components/TaskRunsPanel.vue`：从 `Manage.vue` 抽出执行明细卡片，运行台与独立页共用，消除重复逻辑。
+- 新增 `web/src/views/TaskRuns.vue`：独立「执行明细」页（路由 `/taskruns`）。
+- `web/src/router/index.js`：注册 `/taskruns` 路由（meta 标题「执行明细」、图标 `history`）。
+- `web/src/App.vue`：主导航新增「明细」入口（图标 `history`，开放模式匿名可读，与 `/api/tasks/runs` 鉴权一致）。
+- `web/src/views/Manage.vue`：改用 `<TaskRunsPanel />`，移除冗余脚本与样式。
+- `server/src/routes/tasks.js` / `server/test/taskRunsRoute.test.js` 无改动（沿用批次 18 端点）。
+
+**新增功能**
+- 「执行明细」成为一等公民视图：顶部/底部主导航「明细」直达，按日期看每天任务做了啥/失败/原因，支持「仅失败」筛选与刷新；运行台内仍保留同款卡片。
+
+**问题修复**
+- 消除执行明细逻辑在运行台与新页之间的代码重复（抽共享组件）。
+
+**代表提交**：`310c6a8`（源码）+ `6e57557`（重建 dist）+ `0e74e3a`（清理陈旧 dist 产物）
+
+---
+
 ## 维护约定（默认规范）
 
 1. **分批原则**：每次整理历史或新增工作阶段，按**逻辑阶段**（功能/安全波次）或**时间**划分为批次；同一波次跨多日可合并为一批次。
