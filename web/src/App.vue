@@ -94,6 +94,7 @@ import AppIcon from './components/AppIcon.vue';
 const nav = [
   { name: 'userclock', label: '签到', icon: 'calendar-check' },
   { name: 'tasks', label: '任务', icon: 'tasks' },
+  { name: 'taskruns', label: '明细', icon: 'history' },
   { name: 'users', label: '账号', icon: 'user' },
   { name: 'admin', label: '后台', icon: 'admin', requiresAdmin: true },
   { name: 'more', label: '更多', icon: 'more' }
