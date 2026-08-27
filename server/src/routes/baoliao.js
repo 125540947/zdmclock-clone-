@@ -5,6 +5,7 @@ import { config } from '../config.js';
 import {
   authRequired,
   authRequiredOrQuery,
+  authRequiredOrInstall,
   mutationGuard,
   getClientIp,
   sameSegment,
@@ -65,8 +66,11 @@ router.post('/refresh', mutationGuard, wrapAsync(async (req, res) => {
 // 背景：服务端直抓 smzdm 好价被反爬挡死（首页 202 挑战页 / 内部 JSON 接口要签名 / RSSHub 403），
 // 故改为「数据从用户浏览器来」——用户在 smzdm 页用书签抓取链接，粘贴到 /baoliao-import 同源页面，
 // 由本接口解析 /p/<id> 并合并进 db.baoliao，「从好价列表取」即可正常工作。
+// 自动路径：油猴脚本（cookie-grabber.user.js）访问 smzdm 列表页时自动抓取并 POST 本接口，实现「全自动导入」，
+// 因此本路由鉴权放宽为 authRequiredOrInstall——除通用 apiToken / 会话 Cookie 外，额外接受窄权限 INSTALL_TOKEN，
+// 使可分发脚本无需固化全权限凭据即可跨域自动导入（与 /users/import 同源收窄思路）。
 // 输入：{ text: "url1\nurl2" } 或 { items: [{url,title}] } 或裸字符串（空格/逗号/分号分隔）。
-router.post('/bulk', authRequiredOrQuery, wrapAsync(async (req, res) => {
+router.post('/bulk', authRequiredOrInstall, wrapAsync(async (req, res) => {
   const db = load();
   const body = req.body || {};
   let raw = [];

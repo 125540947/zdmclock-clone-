@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         zdmclock 一键推送 Cookie
+// @name         zdmclock 一键推送 Cookie + 自动导入好价
 // @namespace    https://github.com/125540947/zdmclock-clone-
-// @version      1.1.3
-// @description  在 smzdm 页面一键把登录 Cookie 推送到你的 zdmclock 服务（自动签到助手）。服务地址与 Token 已由本服务自动写入，无需在油猴菜单里手动配置。
+// @version      1.2.0
+// @description  在 smzdm 页面：①一键把登录 Cookie 推送到你的 zdmclock 服务；②访问好价列表页时自动把文章抓取导入爆料箱（全自动，零点击）。服务地址与 Token 已由本服务自动写入，无需手动配置。
 // @match        https://www.smzdm.com/*
 // @match        https://m.smzdm.com/*
 // @match        https://zhiyou.smzdm.com/*
@@ -160,21 +160,114 @@
     });
   }
 
-  function addButton() {
-    if (document.getElementById('zdm_push_btn')) return;
+  // ---------- 好价自动导入（v1.2.0） ----------
+  // 从当前页提取所有 smzdm 文章链接（/p/<id>），去重后返回 {url,title} 列表。
+  function extractBaoliaoLinks() {
+    const anchors = Array.from(document.querySelectorAll('a[href*="/p/"]'));
+    const seen = new Set();
+    const items = [];
+    for (const a of anchors) {
+      const href = a.href || '';
+      const m = href.match(/\/p\/(\d+)/);
+      if (!m) continue;
+      const id = m[1];
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const title = (a.getAttribute('title') || a.textContent || '').trim().slice(0, 200);
+      items.push({ url: 'https://www.smzdm.com/p/' + id, title: title || ('文章 ' + id) });
+    }
+    return items;
+  }
+
+  // 仅对「好价列表/频道/首页」生效，跳过文章详情页（/p/ 在路径里）与无内容的页。
+  function isListPage() {
+    if (/\/p\/\d+/.test(location.pathname)) return false;
+    return extractBaoliaoLinks().length >= 3;
+  }
+
+  function pushBaoliao(items, silent) {
+    if (!items || !items.length) {
+      if (!silent) toast('本页未找到好价文章链接', false);
+      return;
+    }
+    if (!ZDMC_SERVER) {
+      if (!silent) toast('脚本未写入服务地址，请重新从 zdmclock 页面「一键安装」', false);
+      return;
+    }
+    const url = String(ZDMC_SERVER).replace(/\/+$/, '') + '/api/baoliao/bulk';
+    const headers = { 'Content-Type': 'application/json' };
+    // 跨域脚本无法携带 HttpOnly 会话 Cookie，凭窄权限 INSTALL_TOKEN（即本脚本注入的 ZDMC_TOKEN）鉴权，
+    // 后端 /baoliao/bulk 已放宽为 authRequiredOrInstall 接受该令牌。
+    if (ZDMC_TOKEN) headers['Authorization'] = 'Bearer ' + ZDMC_TOKEN;
+    GM_xmlhttpRequest({
+      method: 'POST',
+      url,
+      headers,
+      data: JSON.stringify({ items }),
+      onload: (r) => {
+        let added = 0, received = 0, ok = false;
+        try {
+          const j = JSON.parse(r.responseText);
+          ok = j.ok; added = j.added || 0; received = j.received || 0;
+        } catch { /* ignore */ }
+        if (ok) {
+          if (added > 0) toast('好价自动导入：新增 ' + added + ' / 本页 ' + received, true);
+          else if (!silent) toast('好价已是最新（本页 ' + received + ' 条均已导入）', true);
+        } else if (!silent) {
+          toast('好价导入失败：' + (r.responseText || r.status) , false);
+        }
+      },
+      onerror: (e) => {
+        if (!silent) toast('好价导入失败：' + (e.error || '网络错误'), false);
+      }
+    });
+  }
+
+  // 自动路径：列表页加载即导入一次；常开标签页每 15 分钟轮询刷新（mergeBaoliao 按 url 去重，重复导入 added=0，不会爆库）。
+  function autoBaoliao() {
+    if (!isListPage()) return;
+    pushBaoliao(extractBaoliaoLinks(), true); // 静默：自动轮询不打扰
+    if (!window.__zdm_baoliao_timer) {
+      window.__zdm_baoliao_timer = setInterval(() => {
+        if (isListPage()) pushBaoliao(extractBaoliaoLinks(), true);
+      }, 15 * 60 * 1000);
+    }
+  }
+
+  function manualBaoliao() {
+    if (!isListPage()) {
+      toast('请在好价列表/频道页使用（详情页无批量链接）', false);
+      return;
+    }
+    pushBaoliao(extractBaoliaoLinks(), false);
+  }
+
+  function addButton(id, text, bg, handler) {
+    if (document.getElementById(id)) return;
     const btn = document.createElement('div');
-    btn.id = 'zdm_push_btn';
-    btn.textContent = '🍪 推送到 zdmclock';
+    btn.id = id;
+    btn.textContent = text;
     btn.style.cssText =
-      'position:fixed;right:16px;top:64px;z-index:2147483647;cursor:pointer;' +
-      'padding:8px 12px;border-radius:8px;background:#e63946;color:#fff;' +
-      'font-size:13px;box-shadow:0 4px 16px rgba(0,0,0,.25);';
-    btn.addEventListener('click', pushCookie);
+      'position:fixed;right:16px;z-index:2147483647;cursor:pointer;' +
+      'padding:8px 12px;border-radius:8px;color:#fff;' +
+      'font-size:13px;box-shadow:0 4px 16px rgba(0,0,0,.25);background:' + bg + ';';
+    btn.addEventListener('click', handler);
     document.body.appendChild(btn);
+    return btn;
+  }
+
+  function addButtons() {
+    // 顶部：推送 Cookie
+    addButton('zdm_push_btn', '🍪 推送到 zdmclock', '#e63946', pushCookie);
+    // 顶部下方：手动抓好价（自动路径已零点击，此按钮作兜底/详情页手动触发）
+    const bl = addButton('zdm_baoliao_btn', '📥 抓好价', '#2a9d8f', manualBaoliao);
+    if (bl) bl.style.top = '108px';
+    // 自动路径：列表页加载即后台导入（无提示打扰）
+    autoBaoliao();
   }
 
   const init = () => {
-    if (document.body) addButton();
+    if (document.body) addButtons();
     else setTimeout(init, 500);
   };
   init();

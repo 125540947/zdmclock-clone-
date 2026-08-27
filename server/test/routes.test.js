@@ -186,6 +186,38 @@ test('POST /api/baoliao/refresh mock 适配器返回 200', async () => {
   assert.ok(data.added >= 0);
 });
 
+// 批量导入放宽鉴权（authRequiredOrInstall）：requireAuth=true 时，窄权限 INSTALL_TOKEN 与通用 apiToken 均可导入，无 token 则 401。
+// 油猴脚本（cookie-grabber.user.js）凭 INSTALL_TOKEN 跨域自动导入好价，必须被接受且不暴露全权限凭据。
+test('POST /api/baoliao/bulk 收窄鉴权：INSTALL_TOKEN 可导入、apiToken 可导入、无 token 拒', async () => {
+  const prevAuth = config.requireAuth;
+  const prevInstall = config.installToken;
+  config.requireAuth = true;
+  config.installToken = 'test-install-token';
+  try {
+    // 无 token → 401
+    const noTok = await j('POST', '/api/baoliao/bulk', { items: [{ url: 'https://www.smzdm.com/p/111222333' }] });
+    assert.equal(noTok.status, 401, '无 token 应拒绝');
+
+    // INSTALL_TOKEN（油猴自动导入路径）→ 200
+    const byInstall = await j('POST', '/api/baoliao/bulk', { items: [{ url: 'https://www.smzdm.com/p/111222333', title: '自动导入用例' }] }, { Authorization: 'Bearer test-install-token' });
+    assert.equal(byInstall.status, 200, 'INSTALL_TOKEN 应可导入');
+    assert.equal(byInstall.data.ok, true);
+    assert.equal(byInstall.data.received, 1);
+
+    // 通用 apiToken 仍可用 → 200
+    const byApi = await j('POST', '/api/baoliao/bulk', { items: [{ url: 'https://www.smzdm.com/p/444555666' }] }, { Authorization: 'Bearer ' + config.apiToken });
+    assert.equal(byApi.status, 200, 'apiToken 应仍可导入');
+
+    // 幂等：重复导入相同 url 不新增（mergeBaoliao 按 url 去重，added=0）
+    const dup = await j('POST', '/api/baoliao/bulk', { items: [{ url: 'https://www.smzdm.com/p/111222333' }] }, { Authorization: 'Bearer test-install-token' });
+    assert.equal(dup.status, 200);
+    assert.equal(dup.data.added, 0, '重复导入应幂等（added=0）');
+  } finally {
+    config.requireAuth = prevAuth;
+    config.installToken = prevInstall;
+  }
+});
+
 test('POST /api/gpt/reply GPT 未启用返回 400 gpt_disabled', async () => {
   const { status, data } = await j('POST', '/api/gpt/reply', { text: 'hi' });
   assert.equal(status, 400);
