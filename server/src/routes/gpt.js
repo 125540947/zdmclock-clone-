@@ -22,27 +22,53 @@ function resolveModelsSource(provider) {
   let host = '';
   try { host = new URL(base).hostname.toLowerCase(); } catch { /* 非法地址由调用方判空 */ }
   if (host.endsWith('.aliyuncs.com')) {
+    // 阿里云百炼 / DashScope：OpenAI 兼容端点不暴露模型清单，改走原生 /api/v1/models。
+    // 兼容多地域端点（dashscope.aliyuncs.com / dashscope-intl / cn-hongkong.dashscope 等），
+    // 取 origin 拼原生路径即可；返回结构统一为 output.models[].model_name（见 extractModelsAny）。
     const origin = base.match(/^https?:\/\/[^/]+/i)?.[0] || base;
     return {
       endpoint: `${origin}/api/v1/models?page_size=100`,
       headers: provider.apiKey
         ? { Accept: 'application/json', Authorization: `Bearer ${provider.apiKey}` }
         : { Accept: 'application/json' },
-      extract: (json) => Array.isArray(json?.output?.models)
-        ? json.output.models.map((m) => m?.model_name).filter(Boolean)
-        : []
+      extract: extractModelsAny
     };
   }
   const endpoint = /\/models$/i.test(base) ? base : `${base}/models`;
   const headers = { Accept: 'application/json' };
   if (provider.apiKey) headers.Authorization = `Bearer ${provider.apiKey}`;
-  return {
-    endpoint,
-    headers,
-    extract: (json) => Array.isArray(json?.data)
-      ? json.data.map((m) => (typeof m === 'string' ? m : m?.id)).filter(Boolean)
-      : []
-  };
+  return { endpoint, headers, extract: extractModelsAny };
+}
+
+// 兼容多种模型列表返回结构（仅负责规整，不发起网络请求）：
+//   OpenAI 兼容      → json.data[].id（也支持字符串项）
+//   DashScope 原生   → json.output.models[].model_name（也兼容 .id）
+//   部分厂商裸数组   → json.models[]
+// 去重保序后返回模型名数组。
+function extractModelsAny(json) {
+  const out = [];
+  const push = (v) => { if (typeof v === 'string' && v) out.push(v); };
+  if (Array.isArray(json?.data)) {
+    for (const m of json.data) {
+      if (typeof m === 'string') push(m);
+      else if (m && typeof m.id === 'string') push(m.id);
+    }
+  }
+  if (Array.isArray(json?.output?.models)) {
+    for (const m of json.output.models) {
+      if (typeof m === 'string') push(m);
+      else if (m && typeof m.model_name === 'string') push(m.model_name);
+      else if (m && typeof m.id === 'string') push(m.id);
+    }
+  }
+  if (Array.isArray(json?.models)) {
+    for (const m of json.models) {
+      if (typeof m === 'string') push(m);
+      else if (m && typeof m.id === 'string') push(m.id);
+      else if (m && typeof m.model_name === 'string') push(m.model_name);
+    }
+  }
+  return [...new Set(out)];
 }
 
 // 拉取服务商可用模型列表。只读接口，但会用到已配置密钥，故走鉴权。
@@ -78,6 +104,16 @@ router.get('/models', authRequired, wrapAsync(async (req, res) => {
     }
     const json = await resp.json();
     const models = source.extract(json);
+    if (!models.length) {
+      // 诊断：列表为空时回显服务商原始响应体（含顶层键名），便于定位返回结构/地域/工作空间差异。
+      const keys = json && typeof json === 'object' ? Object.keys(json).join(',') : '(非对象)';
+      const raw = JSON.stringify(json).slice(0, 500);
+      return sendError(res, {
+        status: 502,
+        error: 'gpt_models_empty',
+        message: `服务商返回了空模型列表（HTTP ${resp.status}），顶层键：${keys}；原始响应：${raw}`
+      });
+    }
     res.json({ models });
   } catch (e) {
     if (e?.name === 'TimeoutError' || e?.name === 'AbortError') {
