@@ -632,6 +632,30 @@
 
 ---
 
+## 批次 26 · 全面审计整改（代码质量与加固，A-01/A-02~A-08，2026-09-01）
+
+**改动要点**
+- 落实 2026-09-01 全面审计报告（AUDIT_REPORT_2026-09-01.md）的批次 A 整改，聚焦代码质量、技术债务与低风险加固（不含安全高危项）。
+- A-01：抽离 OPEN_MODE /24 网段隔离判定为统一函数 `isRecordedIpVisibleToViewer(req, recordedIp)`，消除 baoliao/clock/users 路由中 4 处重复内联（同一语义三套写法），单一来源便于后续演进与测试。
+- A-02：realAdapter 退化告警 `degradedWarned` 此前仅 add 无界，补 `DEGRADED_WARN_MAX=1000` 上限（与 channelIdCache 同款 LRU 思路），防长期运行内存无限增长。
+- A-03：删除账号后清理其进程内风控状态（熔断/失败计数），避免僵尸状态残留误导后续调度。
+- A-04：SPA 兜底 `app.get('*')` 此前每请求 `fs.readFile` index.html，改为进程内缓存、仅 mtime 变化才重读，降低高频兜底路径的 IO 开销。
+- A-05：GPT 草稿上限 `200` 裸字面量提为命名常量 `MAX_GPT_DRAFTS`，避免魔法数。
+- A-06：`.env.example` 默认 `NODE_ENV=development` 会导致后端不托管 web/dist、前端 404，改为 `production`（部署模板语义正确）。
+- A-08：`.env.example` CORS 段补充「跨站部署须启用 HTTPS（登录 Cookie 强制 Secure）」提示，避免纯 HTTP 跨站登录态失效。
+
+**新增功能**
+- 新增 OPEN_MODE 网段隔离集成测试 `test/openModeVisibility.test.js`（A-01 T1）：验证匿名访客仅可见同 /24 网段好价，跨段与无归属（遗留）好价被过滤。
+
+**问题修复**
+- 修复 OPEN_MODE 网段隔离逻辑分散在 4 处内联、极易被改漏导致水平越权回归的问题（A-01）。
+- 修复退化告警 Set 无界增长（A-02）、删号遗留风控状态（A-03）、SPA 兜底每请求读盘（A-04）、草稿上限魔法数（A-05）、部署模板 NODE_ENV 误为 development 致前端 404（A-06）。
+- 后端测试全量通过（485 项含新增 T1）；本次仅后端代码 + 测试 + `.env.example`，无需前端构建、不改 web、不部署 VPS。
+
+**代表提交**：`be86741`
+
+---
+
 ## 维护约定（默认规范）
 
 1. **分批原则**：每次整理历史或新增工作阶段，按**逻辑阶段**（功能/安全波次）或**时间**划分为批次；同一波次跨多日可合并为一批次。
