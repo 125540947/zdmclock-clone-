@@ -50,6 +50,17 @@
         <datalist id="gpt-model-list">
           <option v-for="m in availableModels" :key="m" :value="m">{{ m }}</option>
         </datalist>
+        <div v-if="availableModels.length" class="model-chips">
+          <span class="chip-label">点击选择模型：</span>
+          <button
+            v-for="m in availableModels"
+            :key="m"
+            type="button"
+            class="model-chip"
+            :class="{ active: model === m }"
+            @click="model = m"
+          >{{ m }}</button>
+        </div>
         <span class="hint">可点击「获取模型」从服务商拉取可用模型，或从预设自动带入；也支持手动填写自定义模型名。</span>
       </div>
     </div>
@@ -206,6 +217,14 @@ async function clearProviderKey() {
 .provider-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(180px, .8fr); gap: 12px; }
 .model-row { display: flex; align-items: stretch; gap: 8px; }
 .model-row .input { flex: 1; }
+.model-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; align-items: center; }
+.chip-label { font-size: 12px; color: var(--text-dim); }
+.model-chip {
+  padding: 4px 10px; font-size: 12px; border-radius: 999px; cursor: pointer;
+  background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
+}
+.model-chip:hover { border-color: var(--primary); color: var(--primary); }
+.model-chip.active { background: var(--primary-soft); color: var(--primary); border-color: var(--primary); }
 .fetch-models-button {
   flex: none; padding: 0 14px; font-size: 12px; white-space: nowrap; border-radius: 10px; cursor: pointer;
   background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
