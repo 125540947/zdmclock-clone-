@@ -700,6 +700,22 @@
 
 ---
 
+## 批次 28·补 · 通义/DashScope 原生模型列表（2026-09-01）
+
+**改动要点**
+- 用户实测通义预设点「获取模型」返回 401「无效的令牌」/ 空列表：经核实，阿里云百炼/DashScope 的 OpenAI 兼容端点 `compatible-mode/v1/models` **不暴露模型清单**（兼容端点未实现列出接口，401 实为 Key 被拒或端点不支持），其模型列表走原生 `GET /api/v1/models`（`Authorization: Bearer`，返回 `output.models[].model_name`）。
+- `server/src/routes/gpt.js` 的 `/models` 新增 `resolveModelsSource`：当 `apiBase` 主机以 `.aliyuncs.com` 结尾时改走原生 `/api/v1/models?page_size=100` 并取 `output.models[].model_name`；其余 OpenAI 兼容服务商仍走标准 `/models`（取 `data[].id`）。两者均仅访问已配置可信地址、`pinnedFetch` 钉死 DNS。错误明细提取兼容顶层 `message`（如 DashScope `InvalidApiKey`）。
+
+**新增功能**
+- 「获取模型」对通义预设真正可用：拉出 qwen 系列等模型回填下拉；OpenAI/DeepSeek/OpenRouter 等不受影响。
+
+**问题修复**
+- 无（provider 限制适配）。
+
+**代表提交**：`cc32122`
+
+---
+
 ## 维护约定（默认规范）
 
 1. **分批原则**：每次整理历史或新增工作阶段，按**逻辑阶段**（功能/安全波次）或**时间**划分为批次；同一波次跨多日可合并为一批次。
