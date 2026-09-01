@@ -290,9 +290,11 @@ function setChannelCache(articleId, cid) {
 
 // 退化 channel_id=1 是好价/Deal 互动失败的高危点（该贴真实频道≠1，smzdm 会拒为"无效的评论类型"）。
 // 去重告警一次，便于在普通日志（无需 SMZDM_DEBUG）中直接发现"取数失败→退化"这一根因。
+const DEGRADED_WARN_MAX = 1000; // A-02：与 channelIdCache 同款上限，防止长期运行内存无限增长（此前仅 add 无界）
 const degradedWarned = new Set();
 function warnDegradedChannel(articleId) {
   if (degradedWarned.has(articleId)) return;
+  if (degradedWarned.size >= DEGRADED_WARN_MAX) degradedWarned.clear();
   degradedWarned.add(articleId);
   console.warn(
     `[smzdm] 文章 ${articleId} 的 channel_id 取数失败，已退化使用 '1'（好价/Deal 贴真实频道≠1，可能被 smzdm 拒绝；建议从浏览器导入时携带真实 channel_id）`

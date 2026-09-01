@@ -369,9 +369,9 @@ async function runGptBatch(task, db) {
   // 一次性持锁落账：仅此处的 db 写入与 persist 进入串行写链，
   // 保持与原行为一致（按生成顺序 unshift，最新草稿在头部）。
   await withWriteLock(() => {
+    const MAX_GPT_DRAFTS = 200; // A-05：草稿上限常量（避免裸字面量），避免长期运行后 db.json 无限膨胀
     for (const d of drafts) db.gptDrafts.unshift(d);
-    // R5：限制草稿上限，避免长期运行后 db.json 无限膨胀
-    if (db.gptDrafts.length > 200) db.gptDrafts.length = 200;
+    if (db.gptDrafts.length > MAX_GPT_DRAFTS) db.gptDrafts.length = MAX_GPT_DRAFTS;
     persist();
   });
   if (gen === 0) {

@@ -7,8 +7,8 @@ import {
   authRequiredOrInstall,
   mutationGuard,
   getClientIp,
-  sameSegment,
-  isAdminRequest
+  isAdminRequest,
+  isRecordedIpVisibleToViewer
 } from '../auth.js';
 import { dbgLog } from '../log.js';
 import { normalizeArticleId } from '../smzdm/articleId.js';
@@ -27,10 +27,9 @@ router.get('/', authRequired, (req, res) => {
   let list = db.baoliao.slice().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
   if (userId) list = list.filter((x) => x.userId === userId);
   if (config.openMode && !isAdminRequest(req)) {
-    const viewerIp = getClientIp(req);
     // M-10 修复：移除 `!x.recordedIp` 特例——无 recordedIp 的遗留好价对匿名不可见，
     // 仅同网段录入的好价或管理员可见，杜绝匿名跨网段读取遗留好价文本（水平越权）。
-    list = list.filter((x) => sameSegment(viewerIp, x.recordedIp, 24));
+    list = list.filter((x) => isRecordedIpVisibleToViewer(req, x.recordedIp));
   }
   res.json({ items: list, total: list.length });
 });

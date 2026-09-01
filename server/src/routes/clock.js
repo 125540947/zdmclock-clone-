@@ -6,9 +6,8 @@ import {
   authRequired,
   mutationGuard,
   canAccessUser,
-  getClientIp,
-  sameSegment,
-  isAdminRequest
+  isAdminRequest,
+  isRecordedIpVisibleToViewer
 } from '../auth.js';
 import { notify } from '../notifier.js';
 import { wrapAsync } from '../wrapAsync.js';
@@ -25,11 +24,10 @@ const router = Router();
 function scopeUserIds(db, req) {
   if (isAdminRequest(req)) return null;
   if (config.openMode) {
-    const viewerIp = getClientIp(req);
     // M-10 修复：移除 `!u.recordedIp` 特例——无 recordedIp 的遗留账号归属不明，对匿名不可见，
     // 仅同网段录入的账号或管理员可见，杜绝匿名跨网段读取遗留数据（水平越权）。
     return new Set(
-      db.users.filter((u) => sameSegment(viewerIp, u.recordedIp, 24)).map((u) => u.id)
+      db.users.filter((u) => isRecordedIpVisibleToViewer(req, u.recordedIp)).map((u) => u.id)
     );
   }
   return null;

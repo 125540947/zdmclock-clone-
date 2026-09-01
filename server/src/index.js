@@ -281,26 +281,34 @@ export function createApp({ rateLimit: enableRateLimit = true } = {}) {
       res.status(404).json({ error: 'not_found', message: '未知接口' });
     });
     // SPA 兜底：读取 index.html，给 /assets/* 注入 ?v=<构建戳>，保证每次部署都拉最新资源
-    app.get('*', (req, res) => {
+    // A-04：缓存 index.html 文本，仅当文件 mtime 变化才重新读取，避免每个 SPA 兜底请求都 fs.readFile（高频路径）。
+    let spaCache = { mtime: 0, html: null };
+    function loadSpaHtml() {
       const htmlPath = path.join(config.webDist, 'index.html');
-      fs.readFile(htmlPath, 'utf8', (err, html) => {
-        if (err) {
-          res.status(404).send('前端未构建：请先 npm run build');
-          return;
-        }
-        let stamp = '0';
+      let mtime = 0;
+      try { mtime = fs.statSync(htmlPath).mtimeMs; } catch { /* 文件不存在 */ }
+      if (spaCache.html === null || spaCache.mtime !== mtime) {
         try {
-          stamp = String(Math.floor(fs.statSync(htmlPath).mtimeMs));
+          spaCache = { mtime, html: fs.readFileSync(htmlPath, 'utf8') };
         } catch {
-          /* ignore */
+          spaCache = { mtime, html: null };
         }
-        const busted = html.replace(
-          /(href|src)="(\/assets\/[^"?]+)"/g,
-          (_m, a, u) => `${a}="${u}?v=${stamp}"`
-        );
-        res.setHeader('Cache-Control', 'no-store, must-revalidate');
-        res.type('html').send(busted);
-      });
+      }
+      return spaCache.html;
+    }
+    app.get('*', (req, res) => {
+      const html = loadSpaHtml();
+      if (html === null) {
+        res.status(404).send('前端未构建：请先 npm run build');
+        return;
+      }
+      const stamp = String(Math.floor(spaCache.mtime));
+      const busted = html.replace(
+        /(href|src)="(\/assets\/[^"?]+)"/g,
+        (_m, a, u) => `${a}="${u}?v=${stamp}"`
+      );
+      res.setHeader('Cache-Control', 'no-store, must-revalidate');
+      res.type('html').send(busted);
     });
   }
 

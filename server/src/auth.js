@@ -315,3 +315,14 @@ export function canAccessUser(req, userRecord) {
   }
   return true;
 }
+
+// 判断某条「按网段归属」的记录（好价 / 账号）是否对当前请求者可见。
+// 统一 OPEN_MODE /24 网段隔离判定，消除 routes/baoliao.js、clock.js、users.js 中多处重复内联（A-01）。
+// 规则：管理员恒可见；非开放模式恒可见（无网段隔离）；无归属 recordedIp 不可见（M-10 水平越权修复）；
+// 其余按同 /24 网段判定（IPv6 默认放宽 /64，见 sameSegment）。
+export function isRecordedIpVisibleToViewer(req, recordedIp) {
+  if (isAdminRequest(req)) return true;
+  if (!config.openMode) return true;
+  if (!recordedIp) return false;
+  return sameSegment(getClientIp(req), recordedIp, 24);
+}

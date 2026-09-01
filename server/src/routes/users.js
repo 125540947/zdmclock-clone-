@@ -6,7 +6,7 @@ import { load, persistAwait, genId, withWriteLock } from '../store.js';
 import { wrapAsync } from '../wrapAsync.js';
 import { smzdm } from '../smzdm/adapter.js';
 import { config } from '../config.js';
-import { authRequired, authRequiredOrInstall, maskCookie, getClientIp, sameSegment, isAdminRequest, mutationGuard } from '../auth.js';
+import { authRequired, authRequiredOrInstall, maskCookie, getClientIp, isAdminRequest, mutationGuard, isRecordedIpVisibleToViewer } from '../auth.js';
 import { dbgLog } from '../log.js';
 import { resolvedCheckInTime } from '../clockSchedule.js';
 import { resetRisk } from '../riskControl.js';
@@ -46,11 +46,7 @@ function normalizeSchedule(body) {
 // 短路导致无 recordedIp 的账号永不隐藏，匿名访客可跨网段读取其元数据/统计（水平越权）。遗留数据归属不明，
 // 不应对任意匿名访客可见；仅管理员可查看全部。
 function rejectHiddenAccount(res, req, u) {
-  if (
-    config.openMode &&
-    !isAdminRequest(req) &&
-    !sameSegment(getClientIp(req), u.recordedIp, 24)
-  ) {
+  if (config.openMode && !isAdminRequest(req) && !isRecordedIpVisibleToViewer(req, u.recordedIp)) {
     res.status(404).json({ error: 'not_found', message: '无权查看该账号' });
     return true;
   }
@@ -64,8 +60,7 @@ router.get('/', authRequired, (req, res) => {
   const db = load();
   let users = db.users;
   if (config.openMode && !isAdminRequest(req)) {
-    const viewerIp = getClientIp(req);
-    users = users.filter((u) => sameSegment(viewerIp, u.recordedIp, 24));
+    users = users.filter((u) => isRecordedIpVisibleToViewer(req, u.recordedIp));
   }
   const list = users.map((u) => ({ ...u, cookie: maskCookie(u.cookie) }));
   res.json({ total: list.length, list });
@@ -351,14 +346,18 @@ router.put('/:id', mutationGuard, wrapAsync(async (req, res) => {
 router.delete('/:id', mutationGuard, wrapAsync(async (req, res) => {
   // M-10：索引计算移入写锁内，避免前序删除使索引失效而误删 / 漏删
   let notFound = false;
+  let deletedId = null;
   await withWriteLock(() => {
     const db = load();
     const i = db.users.findIndex((x) => x.id === req.params.id);
     if (i < 0) { notFound = true; return; }
+    deletedId = db.users[i].id;
     db.users.splice(i, 1);
     return persistAwait();
   });
   if (notFound) return res.status(404).json({ error: 'not_found' });
+  // A-03：删除账号后清理其进程内风控状态（熔断 / 失败计数），避免僵尸状态残留误导后续调度
+  if (deletedId) resetRisk(deletedId);
   res.json({ ok: true });
 }));
 
