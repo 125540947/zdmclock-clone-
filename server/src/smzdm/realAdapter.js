@@ -37,6 +37,25 @@ const ARTICLE_API_BASE = (process.env.SMZDM_ARTICLE_API_BASE || 'https://article
 const hostOf = (u) => { try { return new URL(u).hostname.toLowerCase(); } catch { return ''; } };
 const SMZDM_ALLOWED_HOSTS = [hostOf(BASE), hostOf(API_BASE), hostOf(WEB_BASE), hostOf(ARTICLE_API_BASE)].filter(Boolean);
 
+// A-07：RSS 源为管理员 env 配置（非用户可控），但服务端对其校验须与「对外请求一律白名单」策略一致——
+// 仅允许 smzdm.com 及其子域（http/https 均可，因官方源 feed.smzdm.com 当前仅 HTTP 稳定可用）。
+// 拒绝 IP 字面量 / localhost（pinnedFetch 的 assertPublicDns 已兜底保留地址段，这里再做域名级收敛）。
+// 注：不复用 notifier.isSafeSmzdmUrl（其强制 https，而官方 RSS 源当前仅 HTTP 可用），故单独实现允许 http 的 smzdm 域校验。
+function isSafeSmzdmRssUrl(url) {
+  if (typeof url !== 'string' || !url.trim()) return false;
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  const host = u.hostname.toLowerCase();
+  if (host === 'localhost') return false;
+  if (host.includes(':')) return false; // IPv6 字面量
+  if (/^(\d{1,3}\.){3}\d{1,3}$/.test(host)) return false; // IPv4 字面量
+  return host === 'smzdm.com' || host.endsWith('.smzdm.com');
+}
+
 // 调试日志开关：默认关闭（生产静默）。设 SMZDM_DEBUG=1 打开，排查真实签到链路时用。
 // P2-7 修复：原 [smzdm-debug] console.log 在生产环境噪音大且会打印 cookie 长度等内部信息，
 // 改为受环境变量控制的调试级日志，避免污染生产日志与泄露敏感字段。
@@ -300,6 +319,11 @@ function warnDegradedChannel(articleId) {
     `[smzdm] 文章 ${articleId} 的 channel_id 取数失败，已退化使用 '1'（好价/Deal 贴真实频道≠1，可能被 smzdm 拒绝；建议从浏览器导入时携带真实 channel_id）`
   );
 }
+
+// A-02 回归测试钩子（仅单测使用，不影响运行时）：直接驱动告警并读取内部集合大小，
+// 用于断言「无界结构恒定有上限」不回归。
+export function __warnDegradedChannel(id) { warnDegradedChannel(id); }
+export function __degradedWarnedSize() { return degradedWarned.size; }
 
 export async function resolveChannelId(articleId, cookie, preferredChannelId = null) {
   if (!articleId) return null;
@@ -668,6 +692,11 @@ export const realAdapter = {
   // RSS 标题包含商品名、价格与优惠方式；正文只提供来源说明，因此 content 使用标题中的真实优惠信息，
   // 不虚构商品详情。条目解析统一收敛到 rssFeed.js，并强制规范化为 smzdm /p/<id> 链接。
   async fetchBaoliao({ limit = 20 } = {}) {
+    // A-07：先校验 RSS 源域名须为 smzdm.com 子域，拒绝管理员误配/恶意覆盖为第三方公网域名
+    // （call 在无 cookie 时仅走 isSafePushUrl 放行一切公网地址，缺少与 smzdm 专属白名单同等的护栏）。
+    if (!isSafeSmzdmRssUrl(config.smzdmBaoliaoRssUrl)) {
+      throw new Error(`RSS 源地址不被允许（须为 smzdm.com 子域）@ ${config.smzdmBaoliaoRssUrl}`);
+    }
     let xml;
     try {
       xml = await call(config.smzdmBaoliaoRssUrl, {
