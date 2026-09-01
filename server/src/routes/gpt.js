@@ -14,7 +14,38 @@ const TONES = ['friendly', 'pro', 'humor'];
 const TARGETS = ['comment', 'message', 'all'];
 const MAX_KEY_LENGTH = 4096;
 
-// 拉取服务商可用模型列表（OpenAI 兼容 /models）。只读接口，但会用到已配置密钥，故走鉴权。
+// 解析「模型列表」拉取源。绝大多数 OpenAI 兼容服务用 /models（data[].id）；
+// 但阿里云百炼 / DashScope 的 OpenAI 兼容端点不暴露模型清单，需改走原生 /api/v1/models
+// （返回 output.models[].model_name，同样 Bearer 鉴权）。两者均只访问已配置可信地址。
+function resolveModelsSource(provider) {
+  const base = String(provider.apiBase || '').replace(/\/+$/, '');
+  let host = '';
+  try { host = new URL(base).hostname.toLowerCase(); } catch { /* 非法地址由调用方判空 */ }
+  if (host.endsWith('.aliyuncs.com')) {
+    const origin = base.match(/^https?:\/\/[^/]+/i)?.[0] || base;
+    return {
+      endpoint: `${origin}/api/v1/models?page_size=100`,
+      headers: provider.apiKey
+        ? { Accept: 'application/json', Authorization: `Bearer ${provider.apiKey}` }
+        : { Accept: 'application/json' },
+      extract: (json) => Array.isArray(json?.output?.models)
+        ? json.output.models.map((m) => m?.model_name).filter(Boolean)
+        : []
+    };
+  }
+  const endpoint = /\/models$/i.test(base) ? base : `${base}/models`;
+  const headers = { Accept: 'application/json' };
+  if (provider.apiKey) headers.Authorization = `Bearer ${provider.apiKey}`;
+  return {
+    endpoint,
+    headers,
+    extract: (json) => Array.isArray(json?.data)
+      ? json.data.map((m) => (typeof m === 'string' ? m : m?.id)).filter(Boolean)
+      : []
+  };
+}
+
+// 拉取服务商可用模型列表。只读接口，但会用到已配置密钥，故走鉴权。
 // 仅访问 resolveGptProvider 解析出的可信地址（页面保存值已在校验时限制为 HTTPS），
 // 远端地址通过 pinnedFetch 钉死 DNS，避免密钥被 SSRF / DNS 重绑定带走。
 router.get('/models', authRequired, wrapAsync(async (req, res) => {
@@ -23,21 +54,19 @@ router.get('/models', authRequired, wrapAsync(async (req, res) => {
   if (!base) {
     return sendError(res, { status: 400, error: 'gpt_not_configured', message: '请先填写接口地址并保存 AI 配置' });
   }
-  const endpoint = /\/models$/i.test(base) ? base : `${base}/models`;
+  const source = resolveModelsSource(provider);
   const fetcher = provider.usePinnedFetch ? pinnedFetch : fetch;
-  const headers = { Accept: 'application/json' };
-  if (provider.apiKey) headers.Authorization = `Bearer ${provider.apiKey}`;
   try {
-    const resp = await fetcher(endpoint, {
+    const resp = await fetcher(source.endpoint, {
       method: 'GET',
-      headers,
+      headers: source.headers,
       signal: AbortSignal.timeout(MODELS_TIMEOUT_MS)
     });
     if (!resp.ok) {
       let detail = '';
       try {
         const j = await resp.json();
-        detail = j?.error?.message || JSON.stringify(j).slice(0, 120);
+        detail = j?.error?.message || j?.message || JSON.stringify(j).slice(0, 120);
       } catch {
         /* 忽略解析失败 */
       }
@@ -48,9 +77,7 @@ router.get('/models', authRequired, wrapAsync(async (req, res) => {
       });
     }
     const json = await resp.json();
-    const models = Array.isArray(json?.data)
-      ? json.data.map((m) => (typeof m === 'string' ? m : m?.id)).filter(Boolean)
-      : [];
+    const models = source.extract(json);
     res.json({ models });
   } catch (e) {
     if (e?.name === 'TimeoutError' || e?.name === 'AbortError') {

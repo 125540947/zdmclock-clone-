@@ -256,4 +256,45 @@ test('GET /api/gpt/models 未配置接口地址 → 400', async () => {
   assert.equal(r.data.error, 'gpt_not_configured');
 });
 
+test('GET /api/gpt/models 通义/DashScope 走原生 /api/v1/models 并取 output.models[].model_name', async () => {
+  const db = load();
+  db.settings.gpt = { apiBase: 'https://dashscope.aliyuncs.com/compatible-mode/v1', apiKey: 'k-secret', model: 'qwen-plus' };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes('/api/v1/models')) {
+      assert.equal(url, 'https://dashscope.aliyuncs.com/api/v1/models?page_size=100');
+      assert.equal(init.headers.Authorization, 'Bearer k-secret');
+      return { ok: true, json: async () => ({ request_id: 'r1', output: { models: [{ model_name: 'qwen-plus' }, { model_name: 'qwen-turbo' }, { model_name: 'deepseek-r1' }] } }) };
+    }
+    return realFetch(url, init);
+  };
+  try {
+    const r = await j('GET', '/api/gpt/models');
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.data.models, ['qwen-plus', 'qwen-turbo', 'deepseek-r1']);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('GET /api/gpt/models 通义/DashScope 401（顶层 message）→ 502 错误信封', async () => {
+  const db = load();
+  db.settings.gpt = { apiBase: 'https://dashscope.aliyuncs.com/compatible-mode/v1', apiKey: 'bad-key', model: 'qwen-plus' };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes('/api/v1/models')) {
+      return { ok: false, status: 401, json: async () => ({ code: 'InvalidApiKey', message: '无效的令牌' }) };
+    }
+    return realFetch(url, init);
+  };
+  try {
+    const r = await j('GET', '/api/gpt/models');
+    assert.equal(r.status, 502);
+    assert.equal(r.data.error, 'gpt_models_error');
+    assert.match(r.data.message, /无效的令牌/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test('关闭测试服务器', () => { server.close(); });
