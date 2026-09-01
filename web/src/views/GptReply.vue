@@ -123,7 +123,6 @@ import { ref, onMounted, onUnmounted } from 'vue';
 import api from '../api/client.js';
 import GptProviderConfig from '../components/GptProviderConfig.vue';
 
-const KEY = 'zdm_gpt_reply';
 const cfg = ref({
   enabled: false,
   target: 'comment',
@@ -141,20 +140,10 @@ const genBusy = ref(false);
 const replyResult = ref('');
 const replyErr = ref('');
 
-function readLocal() {
-  try {
-    const s = JSON.parse(localStorage.getItem(KEY) || '{}');
-    cfg.value = { ...cfg.value, ...s };
-  } catch {
-    /* ignore */
-  }
-}
-function saveLocal() {
-  localStorage.setItem(KEY, JSON.stringify(cfg.value));
-}
-
+// A-11：完整 GPT 配置以服务端为唯一真相源（GptProviderConfig 已服务端化），
+// 前端不再把 apiBase / model / keySource / hasApiKey 等配置写入 localStorage，
+// 避免同源 XSS / 恶意扩展读取这些配置；仅持服务端下发的 serverConfigured 标记用于 UI 提示。
 async function load() {
-  readLocal();
   try {
     const { data } = await api.get('/gpt/config');
     if (data?.config) {
@@ -173,7 +162,6 @@ async function load() {
 }
 
 async function save() {
-  saveLocal();
   try {
     await api.put('/gpt/config', {
       enabled: cfg.value.enabled,
