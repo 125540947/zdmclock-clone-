@@ -313,6 +313,20 @@ export function persistAwait() {
   return scheduleWrite();
 }
 
+// A-10：统一「改内存 + 落盘」语义，消除各写路由重复 withWriteLock(() => { ...; return persistAwait(); }) 样板，
+// 并降低新增路由时漏写 persistAwait 的概率（历史曾因 health.js 漏写导致 POST /api/health/cookies 有账号时 500）。
+// fn(db) 在写锁内执行其返回值（如 notFound 标记）经 mutateDb 透传给调用方；落盘在锁内 await 完成后才 resolve。
+// 用法：const notFound = await mutateDb((db) => { const i = db.x.findIndex(...); if (i<0) return true; db.x.splice(i,1); return false; });
+//       if (notFound) return res.status(404).json({ error: 'not_found' });
+// 仅含纯内存变更的写路由可用；含网络 I/O 的写路由须把网络调用放在锁外、仅把内存改写+落盘移入 mutateDb。
+export function mutateDb(fn) {
+  return withWriteLock(() => {
+    const db = load();
+    const result = fn(db);
+    return persistAwait().then(() => result);
+  });
+}
+
 export function genId(prefix = 'id') {
   return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 }

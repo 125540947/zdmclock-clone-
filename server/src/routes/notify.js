@@ -3,6 +3,7 @@ import { load, persistAwait, withWriteLock } from '../store.js';
 import { sendPush, resolvePushSettings, isSafePushUrl } from '../notifier.js';
 import { authRequired, mutationGuard } from '../auth.js';
 import { wrapAsync } from '../wrapAsync.js';
+import { sendError } from '../httpError.js';
 
 const router = Router();
 const CHANNELS = ['none', 'serverchan', 'bark', 'telegram', 'webhook'];
@@ -71,9 +72,9 @@ router.post('/test', mutationGuard, wrapAsync(async (req, res) => {
       message: '如果你收到这条消息，说明推送配置正确 ✓'
     });
     if (r.ok) return res.json({ ok: true, message: '测试推送已发送，请查收' });
-    return res.status(502).json({ error: 'push_failed', message: r.error });
+    return sendError(res, { status: 502, error: 'push_failed', message: r.error });
   } catch (e) {
-    return res.status(502).json({ error: 'push_error', message: e.message });
+    return sendError(res, { status: 502, error: 'push_error', message: e.message });
   }
 }));
 

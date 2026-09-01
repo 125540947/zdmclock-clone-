@@ -13,6 +13,7 @@ import { notify, isSafeSmzdmUrl } from '../notifier.js';
 import { wrapAsync } from '../wrapAsync.js';
 import { CUSTOM_TYPES, CUSTOM_TASK_DEFS, TASK_TEMPLATES, REAL_STRATEGY_TYPES } from '../taskMatrix.js';
 import { filterTaskRuns, summarizeTaskRuns } from '../taskRunLog.js';
+import { sendError } from '../httpError.js';
 
 const router = Router();
 
@@ -99,7 +100,7 @@ router.put('/endpoints', mutationGuard, wrapAsync(async (req, res) => {
   const db = load();
   const { type, endpoint, method, body, assetFields, note, jsonp, robotToken, referer, headers, tokenField, params } = req.body || {};
   if (!CUSTOM_TYPES.includes(type)) {
-    return res.status(400).json({ error: 'invalid_type', message: '仅自定义端点任务可配置接口' });
+    return sendError(res, { status: 400, error: 'invalid_type', message: '仅自定义端点任务可配置接口' });
   }
   if (!db.settings.taskEndpoints) db.settings.taskEndpoints = {};
 
@@ -112,17 +113,17 @@ router.put('/endpoints', mutationGuard, wrapAsync(async (req, res) => {
         try {
           parsedParams = JSON.parse(trimmed);
         } catch {
-          return res.status(400).json({ error: 'invalid_params', message: 'params 不是合法 JSON' });
+          return sendError(res, { status: 400, error: 'invalid_params', message: 'params 不是合法 JSON' });
         }
       }
     } else if (typeof params === 'object' && !Array.isArray(params)) {
       parsedParams = params;
     } else {
-      return res.status(400).json({ error: 'invalid_params', message: 'params 需为 JSON 对象' });
+      return sendError(res, { status: 400, error: 'invalid_params', message: 'params 需为 JSON 对象' });
     }
   }
   if (parsedParams && Object.keys(parsedParams).length > 12) {
-    return res.status(400).json({ error: 'invalid_params', message: 'params 字段过多' });
+    return sendError(res, { status: 400, error: 'invalid_params', message: 'params 字段过多' });
   }
 
   const isReal = REAL_STRATEGY_TYPES.has(type);
@@ -133,10 +134,10 @@ router.put('/endpoints', mutationGuard, wrapAsync(async (req, res) => {
   // 配成自己的服务器从而窃取他人 smzdm 登录 Cookie。运行时 call() 还有第二道白名单兜底。
   if (!epEmpty) {
     if (!isSafeSmzdmUrl(String(endpoint))) {
-      return res.status(400).json({ error: 'unsafe_endpoint', message: 'endpoint 必须为 smzdm.com 及其子域（仅允许发往 smzdm 自家域名，禁止任意第三方域名以防 Cookie 泄露）' });
+      return sendError(res, { status: 400, error: 'unsafe_endpoint', message: 'endpoint 必须为 smzdm.com 及其子域（仅允许发往 smzdm 自家域名，禁止任意第三方域名以防 Cookie 泄露）' });
     }
     if (referer && !isSafeSmzdmUrl(referer)) {
-      return res.status(400).json({ error: 'unsafe_referer', message: 'referer 必须为 smzdm.com 及其子域' });
+      return sendError(res, { status: 400, error: 'unsafe_referer', message: 'referer 必须为 smzdm.com 及其子域' });
     }
   }
 
@@ -188,7 +189,7 @@ router.get('/captures', authRequired, (req, res) => {
     const items = JSON.parse(fs.readFileSync(file, 'utf-8'));
     res.json({ items: Array.isArray(items) ? items : [] });
   } catch {
-    res.status(500).json({ error: 'parse_failed', message: 'detected.json 解析失败' });
+    sendError(res, { status: 500, error: 'parse_failed', message: 'detected.json 解析失败' });
   }
 });
 
@@ -201,7 +202,7 @@ router.post('/captures/apply', mutationGuard, async (req, res) => {
     db = load();
   } catch (e) {
     dbgLog('[tasks] 读取数据库失败：', e.message);
-    return res.status(500).json({ error: 'load_failed', message: '读取数据失败，请稍后重试' });
+    return sendError(res, { status: 500, error: 'load_failed', message: '读取数据失败，请稍后重试' });
   }
   const { items } = req.body || {};
   if (!Array.isArray(items) || !items.length) {
@@ -270,7 +271,7 @@ router.post('/captures/apply', mutationGuard, async (req, res) => {
     await withWriteLock(() => persistAwait());
   } catch (e) {
     dbgLog('[tasks] 保存失败：', e.message);
-    return res.status(500).json({ error: 'persist_failed', message: '保存失败，请稍后重试' });
+    return sendError(res, { status: 500, error: 'persist_failed', message: '保存失败，请稍后重试' });
   }
   res.json({ ok: true, applied, skipped, endpoints: db.settings.taskEndpoints });
 });
@@ -370,7 +371,7 @@ router.post('/:id/run', mutationGuard, async (req, res) => {
     t.status = 'error';
     await withWriteLock(() => persistAwait());
     dbgLog('[tasks] 任务执行异常：', e.message);
-    res.status(502).json({ error: 'adapter_error', message: '任务执行异常，请稍后重试' });
+    sendError(res, { status: 502, error: 'adapter_error', message: '任务执行异常，请稍后重试' });
   }
 });
 

@@ -12,6 +12,7 @@ import {
 import { notify } from '../notifier.js';
 import { wrapAsync } from '../wrapAsync.js';
 import { withAccountLock } from '../taskRunner.js';
+import { sendError } from '../httpError.js';
 
 // H-09：签到状态/记录的"今天"按配置时区（ZDM_TZ）折算，与调度 cron 一致，避免跨日边界把
 // "已执行"误显示为"未执行"或重复执行判断不一致。
@@ -141,7 +142,7 @@ router.post('/do', mutationGuard, wrapAsync(async (req, res) => {
   }
   if (!result.ok) {
     notify(db, { title: '❌ 签到失败', message: `${who}：${result.message}` }).catch(() => {});
-    return res.status(502).json({ error: 'clock_failed', message: result.message });
+    return sendError(res, { status: 502, error: 'clock_failed', message: result.message });
   }
   notify(db, { title: '✅ 签到成功', message: `${who} ${result.message}` }).catch(() => {});
   // M-04：手动签到属用户触发的关键写操作，落盘后才向调用方确认成功（避免 debounce 窗口内进程

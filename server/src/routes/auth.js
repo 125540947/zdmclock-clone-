@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { config } from '../config.js';
 import { safeEqual, parseCidrList, ipInCidrList, parseCookies } from '../auth.js';
+import { sendError } from '../httpError.js';
 
 const router = Router();
 
@@ -110,7 +111,8 @@ router.post('/login', (req, res) => {
     // 防御纵深：TRUST_PROXY_AUTH=true 但未配 PROXY_AUTH_HEADER 属致命误配，启动阶段已拒绝；
     // 此处再加一道运行期校验（防止配置热更/遗漏），直接拒签 Token。
     if (!config.proxyAuthHeader) {
-      return res.status(503).json({
+      return sendError(res, {
+        status: 503,
         error: 'proxy_auth_misconfigured',
         message: 'TRUST_PROXY_AUTH=true 但未配置 PROXY_AUTH_HEADER，拒绝签发 Token（请修正配置或关闭该模式）'
       });

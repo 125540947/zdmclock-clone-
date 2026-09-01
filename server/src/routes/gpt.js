@@ -3,6 +3,7 @@ import { load, persistAwait, withWriteLock } from '../store.js';
 import { authRequired, mutationGuard } from '../auth.js';
 import { generateReply, resolveGptProvider } from '../gptAdapter.js';
 import { wrapAsync } from '../wrapAsync.js';
+import { sendError } from '../httpError.js';
 
 const router = Router();
 
@@ -129,7 +130,7 @@ router.post('/reply', mutationGuard, wrapAsync(async (req, res) => {
     });
     res.json({ ok: true, reply });
   } catch (e) {
-    res.status(502).json({ error: 'gpt_error', message: e.message });
+    sendError(res, { status: 502, error: 'gpt_error', message: e.message });
   }
 }));
 

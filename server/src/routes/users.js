@@ -2,7 +2,7 @@ import { Router } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { load, persistAwait, genId, withWriteLock } from '../store.js';
+import { load, genId, mutateDb } from '../store.js';
 import { wrapAsync } from '../wrapAsync.js';
 import { smzdm } from '../smzdm/adapter.js';
 import { config } from '../config.js';
@@ -11,6 +11,7 @@ import { dbgLog } from '../log.js';
 import { resolvedCheckInTime } from '../clockSchedule.js';
 import { resetRisk } from '../riskControl.js';
 import { requireStr, limitStr, MAX_COOKIE_LEN } from '../validation.js';
+import { sendError } from '../httpError.js';
 
 // 油猴抓取脚本在仓库 tools/ 下，供前端「复制/下载」用。
 const SCRIPT_PATH = path.resolve(
@@ -115,7 +116,7 @@ router.post('/', authRequired, wrapAsync(async (req, res) => {
     });
   }
   db.users.push(user);
-  await withWriteLock(() => persistAwait());
+  await mutateDb(() => {});
   res.json({ ...user, cookie: maskCookie(user.cookie) });
 }));
 
@@ -179,7 +180,7 @@ router.post('/import', authRequiredOrInstall, wrapAsync(async (req, res) => {
     user.vip = !!info.vip;
     user.smzdmId = user.smzdmId || smzdmId;
   }
-  await withWriteLock(() => persistAwait());
+  await mutateDb(() => {});
   res.json({ ...user, cookie: maskCookie(user.cookie), imported: true });
 }));
 
@@ -312,11 +313,9 @@ router.put('/:id', mutationGuard, wrapAsync(async (req, res) => {
     }
   }
   // M-10：写锁内重新定位目标并原子改写+落盘；若锁内已不存在则 404（杜绝修改孤儿对象 / 错误成功响应）
-  let notFound = false;
-  await withWriteLock(() => {
-    const db = load();
+  const notFound = await mutateDb((db) => {
     const u = db.users.find((x) => x.id === req.params.id);
-    if (!u) { notFound = true; return; }
+    if (!u) return true;
     if (nickname !== undefined) u.nickname = nickname;
     if (smzdmId !== undefined) u.smzdmId = smzdmId;
     if (sched) {
@@ -334,7 +333,7 @@ router.put('/:id', mutationGuard, wrapAsync(async (req, res) => {
       u.vip = !!info.vip;
       u.smzdmId = u.smzdmId || info.smzdmId || '';
     }
-    return persistAwait();
+    return false;
   });
   if (notFound) return res.status(404).json({ error: 'not_found' });
   const db = load();
@@ -344,20 +343,16 @@ router.put('/:id', mutationGuard, wrapAsync(async (req, res) => {
 
 // 删除账号。开放模式下匿名不可删，须管理员 Token。
 router.delete('/:id', mutationGuard, wrapAsync(async (req, res) => {
-  // M-10：索引计算移入写锁内，避免前序删除使索引失效而误删 / 漏删
-  let notFound = false;
-  let deletedId = null;
-  await withWriteLock(() => {
-    const db = load();
+  // M-10：索引计算移入写锁内，避免前序删除使索引失效而误删 / 漏删；A-10 统一写锁+落盘。
+  const notFound = await mutateDb((db) => {
     const i = db.users.findIndex((x) => x.id === req.params.id);
-    if (i < 0) { notFound = true; return; }
-    deletedId = db.users[i].id;
+    if (i < 0) return true;
     db.users.splice(i, 1);
-    return persistAwait();
+    return false;
   });
   if (notFound) return res.status(404).json({ error: 'not_found' });
   // A-03：删除账号后清理其进程内风控状态（熔断 / 失败计数），避免僵尸状态残留误导后续调度
-  if (deletedId) resetRisk(deletedId);
+  resetRisk(req.params.id);
   res.json({ ok: true });
 }));
 
@@ -372,7 +367,7 @@ router.get('/:id/smzdm', authRequired, wrapAsync(async (req, res) => {
     res.json(info);
   } catch (e) {
     dbgLog('[users] 获取账号资料失败：', e.message);
-    res.status(502).json({ error: 'adapter_error', message: '账号操作失败，请稍后重试' });
+    sendError(res, { status: 502, error: 'adapter_error', message: '账号操作失败，请稍后重试' });
   }
 }));
 
@@ -385,22 +380,20 @@ router.post('/:id/refresh', authRequired, wrapAsync(async (req, res) => {
   try {
     const info = await smzdm.getUserInfo(ref.cookie);
     // M-10：资料写入移入写锁内，锁内重新定位目标并原子落盘；已删除则 404
-    let notFound = false;
-    await withWriteLock(() => {
-      const db = load();
+    const notFound = await mutateDb((db) => {
       const u = db.users.find((x) => x.id === req.params.id);
-      if (!u) { notFound = true; return; }
+      if (!u) return true;
       u.points = info.points || u.points;
       u.level = info.level || u.level;
       u.vip = !!info.vip;
       u.smzdmId = u.smzdmId || info.smzdmId || '';
-      return persistAwait();
+      return false;
     });
     if (notFound) return res.status(404).json({ error: 'not_found' });
     res.json({ ok: true, info });
   } catch (e) {
     dbgLog('[users] 刷新账号资料失败：', e.message);
-    res.status(502).json({ error: 'adapter_error', message: '账号操作失败，请稍后重试' });
+    sendError(res, { status: 502, error: 'adapter_error', message: '账号操作失败，请稍后重试' });
   }
 }));
 

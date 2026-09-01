@@ -20,6 +20,7 @@ import healthRoutes from './routes/health.js';
 import updateRoutes from './routes/update.js';
 import { probeHealth } from './health.js';
 import { startScheduler, isSchedulerRunning } from './scheduler.js';
+import { sendError } from './httpError.js';
 
 // 全局未捕获异常兜底（P1-10）：best-effort 的异步推送/解析若遗漏 try/catch，
 // 可能触发 unhandledRejection / uncaughtException 导致进程退出。这里统一记录日志、
@@ -319,7 +320,8 @@ export function createApp({ rateLimit: enableRateLimit = true } = {}) {
     // S10：生产环境不向外暴露内部错误细节（可能含路径），返回泛化消息
     // S10 纵深加固：默认泛化错误响应，仅显式 ZDM_DEBUG=1 才回显内部 err.message（避免 VPS 未设 NODE_ENV=production 时泄露内部细节）
     const message = config.debug ? err.message : '服务器内部错误';
-    res.status(500).json({ error: 'server_error', message });
+    // A-09：统一错误信封——全局兜底也返回 { ok:false, error, message }，与业务成功 { ok:true, ... } 对称。
+    sendError(res, { status: 500, error: 'server_error', message });
   });
 
   return app;

@@ -7,6 +7,7 @@ import { config } from '../config.js';
 import { notify } from '../notifier.js';
 import { runVerification } from '../verifyRealMode.js';
 import { wrapAsync } from '../wrapAsync.js';
+import { sendError } from '../httpError.js';
 
 const router = Router();
 
@@ -78,7 +79,7 @@ router.post('/verify', mutationGuard, wrapAsync(async (req, res) => {
   } catch (e) {
     // 生产环境不回显内部异常细节（P1-8），仅记录到服务端日志
     console.error('[health] verify 异常:', e);
-    res.status(500).json({ error: 'verify_failed', message: '自检执行异常，请稍后重试或查看服务端日志' });
+    sendError(res, { status: 500, error: 'verify_failed', message: '自检执行异常，请稍后重试或查看服务端日志' });
   }
 }));
 

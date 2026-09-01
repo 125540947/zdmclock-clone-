@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { load, persistAwait, genId, mergeBaoliao, withWriteLock } from '../store.js';
+import { load, genId, mergeBaoliao, mutateDb } from '../store.js';
 import { smzdm } from '../smzdm/adapter.js';
 import { config } from '../config.js';
 import {
@@ -14,6 +14,7 @@ import { dbgLog } from '../log.js';
 import { normalizeArticleId } from '../smzdm/articleId.js';
 import { limitArr, MAX_IMPORT_ITEMS, limitStr, requireStr, MAX_NAME_LEN } from '../validation.js';
 import { wrapAsync } from '../wrapAsync.js';
+import { sendError } from '../httpError.js';
 
 const router = Router();
 
@@ -46,17 +47,13 @@ router.post('/refresh', mutationGuard, wrapAsync(async (req, res) => {
     const items = (fetched && fetched.items) || [];
     dbgLog('[baoliao] refresh 完成：fetched=', items.length);
     if (!items.length) {
-      return res.status(502).json({ error: 'no_items', message: '官方RSS暂时没有返回好价，请稍后重试' });
+      return sendError(res, { status: 502, error: 'no_items', message: '官方RSS暂时没有返回好价，请稍后重试' });
     }
-    let added = 0;
-    await withWriteLock(() => {
-      added = mergeBaoliao(items);
-      return persistAwait();
-    });
+    const added = await mutateDb((db) => mergeBaoliao(items));
     res.json({ ok: true, source: fetched.source || 'smzdm-rss', fetched: items.length, added, total: db.baoliao.length });
   } catch (e) {
     dbgLog('[baoliao] refresh 失败：', e.message);
-    res.status(502).json({ error: 'fetch_failed', message: `RSS刷新失败：${e.message}` });
+    sendError(res, { status: 502, error: 'fetch_failed', message: `RSS刷新失败：${e.message}` });
   }
 }));
 
@@ -99,12 +96,7 @@ router.post('/bulk', authRequiredOrInstall, wrapAsync(async (req, res) => {
   if (!items.length) {
     return res.status(400).json({ error: 'no_valid', message: '没有解析到有效的 smzdm 文章链接（需包含 /p/<数字>）' });
   }
-  let added = 0;
-  await withWriteLock(() => {
-    // M-02 修复：批量导入记录录入者来源 IP，使开放模式下录入者随后在 /24 网段隔离中仍可见自己的好价
-    added = mergeBaoliao(items, getClientIp(req));
-    return persistAwait();
-  });
+  const added = await mutateDb((db) => mergeBaoliao(items, getClientIp(req)));
   res.json({ ok: true, received: items.length, added, total: db.baoliao.length });
 }));
 
@@ -146,10 +138,7 @@ router.post('/', authRequired, wrapAsync(async (req, res) => {
     createdAt: now,
     updatedAt: now
   };
-  await withWriteLock(() => {
-    db.baoliao.unshift(item);
-    return persistAwait();
-  });
+  await mutateDb((db) => { db.baoliao.unshift(item); });
   res.json({ ok: true, item });
 }));
 
@@ -160,11 +149,9 @@ router.put('/:id', mutationGuard, wrapAsync(async (req, res) => {
   if (!ref) return res.status(404).json({ error: 'not_found' });
   const { title, url, price, cat, content, status } = req.body || {};
   // M-10：锁内重新定位目标并原子改写+落盘；已删除则 404
-  let notFound = false;
-  await withWriteLock(() => {
-    const db = load();
+  const notFound = await mutateDb((db) => {
     const item = db.baoliao.find((x) => x.id === req.params.id);
-    if (!item) { notFound = true; return; }
+    if (!item) return true;
     if (title !== undefined) item.title = String(title).trim();
     if (url !== undefined) item.url = String(url);
     if (price !== undefined) item.price = String(price);
@@ -172,7 +159,7 @@ router.put('/:id', mutationGuard, wrapAsync(async (req, res) => {
     if (content !== undefined) item.content = String(content);
     if (status !== undefined) item.status = String(status);
     item.updatedAt = new Date().toISOString();
-    return persistAwait();
+    return false;
   });
   if (notFound) return res.status(404).json({ error: 'not_found' });
   const db = load();
@@ -182,14 +169,12 @@ router.put('/:id', mutationGuard, wrapAsync(async (req, res) => {
 
 // 删除
 router.delete('/:id', mutationGuard, wrapAsync(async (req, res) => {
-  // M-10：索引计算移入写锁内，避免前序删除使索引失效而误删 / 漏删
-  let notFound = false;
-  await withWriteLock(() => {
-    const db = load();
+  // M-10：索引计算移入写锁内，避免前序删除使索引失效而误删 / 漏删；A-10 统一写锁+落盘。
+  const notFound = await mutateDb((db) => {
     const idx = db.baoliao.findIndex((x) => x.id === req.params.id);
-    if (idx === -1) { notFound = true; return; }
+    if (idx === -1) return true;
     db.baoliao.splice(idx, 1);
-    return persistAwait();
+    return false;
   });
   if (notFound) return res.status(404).json({ error: 'not_found' });
   res.json({ ok: true });
@@ -206,15 +191,13 @@ router.post('/:id/submit', mutationGuard, wrapAsync(async (req, res) => {
   const { userId } = req.body || {};
   const user = userId ? dbPre.users.find((u) => u.id === userId) : dbPre.users[0];
   if (!user || !user.cookie) {
-    let notFound = false;
-    await withWriteLock(() => {
-      const db = load();
+    const notFound = await mutateDb((db) => {
       const item = db.baoliao.find((x) => x.id === req.params.id);
-      if (!item) { notFound = true; return; }
+      if (!item) return true;
       item.status = 'failed';
       item.lastResult = '请先添加 smzdm 账号并录入 Cookie';
       item.updatedAt = new Date().toISOString();
-      return persistAwait();
+      return false;
     });
     if (notFound) return res.status(404).json({ error: 'not_found' });
     return res.status(400).json({ error: 'no_user', message: '请先添加 smzdm 账号' });
@@ -227,36 +210,32 @@ router.post('/:id/submit', mutationGuard, wrapAsync(async (req, res) => {
       cat: ref.cat,
       content: ref.content
     });
-    let notFound = false;
-    await withWriteLock(() => {
-      const db = load();
+    const notFound = await mutateDb((db) => {
       const item = db.baoliao.find((x) => x.id === req.params.id);
-      if (!item) { notFound = true; return; }
+      if (!item) return true;
       item.status = 'submitted';
       item.smzdmUrl = r.url || '';
       item.lastResult = r.message || '提交成功';
       item.submittedAt = new Date().toISOString();
       item.updatedAt = item.submittedAt;
-      return persistAwait();
+      return false;
     });
     if (notFound) return res.status(404).json({ error: 'not_found' });
     const db = load();
     const item = db.baoliao.find((x) => x.id === req.params.id);
     res.json({ ok: true, result: r, item });
   } catch (e) {
-    let notFound = false;
-    await withWriteLock(() => {
-      const db = load();
+    const notFound = await mutateDb((db) => {
       const item = db.baoliao.find((x) => x.id === req.params.id);
-      if (!item) { notFound = true; return; }
+      if (!item) return true;
       item.status = 'failed';
       item.lastResult = e.message;
       item.updatedAt = new Date().toISOString();
-      return persistAwait();
+      return false;
     });
     if (notFound) return res.status(404).json({ error: 'not_found' });
     dbgLog('[baoliao] 任务执行异常：', e.message);
-    res.status(502).json({ error: 'adapter_error', message: '任务执行异常，请稍后重试' });
+    sendError(res, { status: 502, error: 'adapter_error', message: '任务执行异常，请稍后重试' });
   }
 }));
 

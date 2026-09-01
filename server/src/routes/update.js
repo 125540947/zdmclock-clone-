@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireAdmin } from '../auth.js';
 import * as realSelf from '../selfUpdate.js';
+import { sendError } from '../httpError.js';
 
 // 自动更新接口（管理级，需独立管理员鉴权，永远不匿名放行）。依赖以参数注入，便于测试替换。
 // - GET  /status ：本地仓库状态（分支/提交/是否脏/通道/是否支持更新）+ 后台更新任务进度
@@ -55,7 +56,7 @@ export function createUpdateRouter(self = realSelf) {
           : null
       });
     } catch (e) {
-      res.status(500).json({ error: '获取仓库状态失败：' + e.message });
+      sendError(res, { status: 500, error: 'repo_status_failed', message: '获取仓库状态失败：' + e.message });
     }
   });
 
@@ -69,7 +70,7 @@ export function createUpdateRouter(self = realSelf) {
       lastCheck = { ...r, at: Date.now() };
       res.json(r);
     } catch (e) {
-      res.status(500).json({ error: '检查更新失败：' + e.message });
+      sendError(res, { status: 500, error: 'check_update_failed', message: '检查更新失败：' + e.message });
     }
   });
 
