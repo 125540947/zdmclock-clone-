@@ -173,6 +173,15 @@ export function createApp({ rateLimit: enableRateLimit = true } = {}) {
     );
     next();
   });
+  // 禁止浏览器缓存 API 响应（P2 修复）：默认 Express 给 JSON 响应加 ETag，浏览器据此发
+  // If-None-Match 条件请求，命中回 304（空 body），前端 axios 解析到空 data → 误判空列表
+  // （如「获取模型」服务端返回 11 个模型、浏览器却显「未获取到模型列表」）。统一加 no-store
+  // 杜绝陈旧/空缓存造成的「服务端有数据、浏览器显空」错位。
+  app.use('/api', (req, res, next) => {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.set('Pragma', 'no-cache');
+    next();
+  });
   app.use(express.json({ limit: '256kb' })); // P1：限制请求体大小，防超大 payload DoS
 
   // 健康检查：并发探测依赖（DB 可读 + real 模式探 smzdm 可达性），整体受 deadline 约束，

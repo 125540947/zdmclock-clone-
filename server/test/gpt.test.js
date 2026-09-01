@@ -57,6 +57,13 @@ async function j(method, url, body, headers = {}) {
   return { status: res.status, data };
 }
 
+test('API 响应禁止浏览器缓存（Cache-Control: no-store）', async () => {
+  // 回归：早期未禁缓存，JSON 响应带 ETag，浏览器发 If-None-Match 命中 304（空 body），
+  // 前端 axios 解析到空 data → 误判空列表（如「获取模型」服务端有数据、浏览器显空）。
+  const res = await fetch(base + '/api/gpt/status');
+  assert.match(res.headers.get('Cache-Control') || '', /no-store/);
+});
+
 test('GET /api/gpt/status 同时识别环境密钥和页面保存密钥', async () => {
   const db = load();
   db.settings.gpt.apiKey = '';
