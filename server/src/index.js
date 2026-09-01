@@ -277,11 +277,12 @@ export function createApp({ rateLimit: enableRateLimit = true } = {}) {
         // 无需 no-store——此前的统一 no-store 导致每次页面访问都重传 JS/CSS，浪费带宽与静态 IO。
         // index.html 等 HTML 仍由下方 SPA 兜底强制 no-store（见 L-01）。
         setHeaders: (res, filePath) => {
-          if (/[\\/]assets[\\/]/.test(String(filePath))) {
-            res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
-          } else {
-            res.setHeader('Cache-Control', 'no-store, must-revalidate');
-          }
+          // 前端为单用户管理面板，体积与带宽可忽略；统一 no-store 彻底杜绝浏览器/代理
+          // 缓存旧 JS/CSS 导致「代码已更新、页面仍跑旧逻辑」（典型如「获取模型」芯片不出现、
+          // 旧 SPA 标签页点了按钮却看不到下拉）。内容哈希文件名 + 下方 SPA 兜底注入的 ?v=<构建戳>
+          // 已能保证 URL 变化，这里再叠加 no-store 作为双保险，连不规范的缓存代理也能绕开。
+          // （早期对 /assets/* 用 immutable 长缓存，曾被浏览器缓存一整天不重校验，是本轮 stale 根因。）
+          res.setHeader('Cache-Control', 'no-store, must-revalidate');
         }
       })
     );
