@@ -218,6 +218,15 @@ async function performDailyTask(task, cookie, options) {
     await doFollow(cookie, { target: String(target), type, keywordId: String(redirect.link_val || '') }, request);
     return `完成关注${type === 'user' ? '用户' : type === 'tag' ? '栏目' : '品牌'}`;
   }
+  const articleEvents = new Set([
+    'interactive.view.article',
+    'interactive.share',
+    'interactive.favorite',
+    'interactive.rating',
+    'interactive.comment'
+  ]);
+  // 未支持的活动应直接归为“跳过”。若先拉取文章，文章源异常会把本应跳过的任务误报成失败。
+  if (!articleEvents.has(event)) throw new Error(`暂不支持的活动类型：${event || '未知'}`);
   const candidates = await getDailyTaskArticles(task, cookie, request, articles);
   const picked = Array.from({ length: count }, (_, i) => candidates[i % candidates.length]).filter(Boolean);
   if (!picked.length) throw new Error('没有可用的任务文章');
@@ -325,9 +334,15 @@ export async function doDailyTasks(cookie, opts = {}) {
   const summary = `读取 ${initial.tasks.length} 项，完成 ${completed.length} 项，领取 ${rewards.length} 项` +
     (skipped.length ? `，跳过 ${skipped.length} 项` : '') +
     (failed.length ? `，失败 ${failed.length} 项` : '');
+  const details = [
+    completed.length ? `完成明细：${completed.join('；')}` : '',
+    rewards.length ? `领取明细：${rewards.join('；')}` : '',
+    skipped.length ? `跳过明细：${skipped.join('；')}` : '',
+    failed.length ? `失败明细：${failed.join('；')}` : ''
+  ].filter(Boolean);
   return {
     success: failed.length === 0,
-    message: `${summary}${rewards.length ? `：${rewards.join('；')}` : ''}`,
+    message: [summary, ...details].join('；'),
     rewards,
     completed,
     skipped,

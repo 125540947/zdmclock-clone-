@@ -1,6 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runCustomEndpointTask, getPath, renderBody, extractAsset, parseJsonp, CUSTOM_TYPES } from '../src/taskMatrix.js';
+import {
+  runCustomEndpointTask,
+  getPath,
+  renderBody,
+  extractAsset,
+  parseJsonp,
+  CUSTOM_TYPES,
+  REAL_STRATEGIES
+} from '../src/taskMatrix.js';
 
 // 默认 SMZDM_ADAPTER=mock（无 requestRaw），自定义任务应返回 pendingCapture（绝不伪造成功）
 function dbWithEndpoint(type, endpoint) {
@@ -111,4 +119,33 @@ test('dailyTasks 即便导入端点也始终走内置策略（不调用导入的
   const db = dbWithEndpoint('dailyTasks', { endpoint: 'https://custom/activity_task_receive', method: 'POST' });
   await runCustomEndpointTask({ type: 'dailyTasks', name: '每日任务' }, db, { id: 'u1', cookie: 'c' }, fakeAdapter);
   assert.ok(!calls.includes('https://custom/activity_task_receive'), 'dailyTasks 是多步流程，不应使用导入的单端点');
+});
+
+test('dailyTasks 将逐项失败原因传给执行明细层', async () => {
+  const originalHandler = REAL_STRATEGIES.dailyTasks.handler;
+  REAL_STRATEGIES.dailyTasks.handler = async () => ({
+    success: false,
+    message: '读取 4 项，失败 1 项；失败明细：失败浏览：系统繁忙',
+    completed: ['成功浏览（浏览 1 篇）'],
+    rewards: ['成功领取 10经验'],
+    skipped: ['发布爆料：暂不支持'],
+    failed: ['失败浏览：系统繁忙']
+  });
+  try {
+    const fakeAdapter = { requestRaw: async () => '{}' };
+    const db = { baoliao: [], settings: { gpt: {}, taskEndpoints: {} } };
+    const result = await runCustomEndpointTask(
+      { type: 'dailyTasks', name: '每日任务' },
+      db,
+      { id: 'u1', cookie: 'c' },
+      fakeAdapter
+    );
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.reasons, [{ articleId: null, error_msg: '失败浏览：系统繁忙' }]);
+    assert.deepEqual(result.result.failed, ['失败浏览：系统繁忙']);
+    assert.deepEqual(result.result.skipped, ['发布爆料：暂不支持']);
+  } finally {
+    REAL_STRATEGIES.dailyTasks.handler = originalHandler;
+  }
 });

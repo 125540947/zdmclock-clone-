@@ -217,4 +217,70 @@ test('doDailyTasks 每日读取、完成浏览任务、刷新后领取任务及�
   assert.equal(listCalls, 2);
   assert.ok(calls.some((x) => x.path === '/task/event_view_article_sync' && x.data.article_id === '12345'));
   assert.match(result.message, /读取 2 项，完成 1 项，领取 3 项/);
+  assert.match(result.message, /完成明细：浏览好文（浏览 1 篇）/);
+  assert.match(result.message, /领取明细：奖励-t_ready；奖励-t_view；阶段奖励到账/);
+});
+
+test('doDailyTasks 在汇总中列出每个跳过项和失败项的名称及原因', async () => {
+  let listCalls = 0;
+  const viewTask = (id, name) => ({
+    task_id: id,
+    task_name: name,
+    task_status: 2,
+    task_event_type: 'interactive.view.article',
+    task_even_num: 1,
+    article_id: id === 't_fail' ? '999' : '123',
+    channel_id: '76'
+  });
+  const initialTasks = [
+    viewTask('t_ok', '成功浏览'),
+    {
+      task_id: 't_publish', task_name: '发布爆料', task_status: 2,
+      task_event_type: 'publish.baoliao_new'
+    },
+    {
+      task_id: 't_follow', task_name: '关注达人', task_status: 2,
+      task_event_type: 'interactive.follow.user', task_redirect_url: {}
+    },
+    viewTask('t_fail', '失败浏览')
+  ];
+  const listResponse = (tasks) => ({ data: { data: { rows: [{ cell_data: {
+    activity_task: { default_list_v2: [{ task_list: tasks }] }
+  } }] } } });
+  const request = async (path, opts) => {
+    if (path === '/task/list_v2') {
+      listCalls++;
+      return listCalls === 1
+        ? listResponse(initialTasks)
+        : listResponse(initialTasks.map((task) => (
+          task.task_id === 't_ok' ? { ...task, task_status: 3 } : task
+        )));
+    }
+    if (path === '/task/event_view_article_sync') {
+      return opts.data.task_id === 't_fail'
+        ? { error_code: 500, error_msg: '系统繁忙' }
+        : { error_code: 0 };
+    }
+    if (path === '/task/activity_task_receive') {
+      return { error_code: 0, data: { reward_msg: '成功领取 10经验' } };
+    }
+    throw new Error('unexpected path: ' + path);
+  };
+
+  const result = await doDailyTasks('cookie', {
+    request,
+    getToken: async () => 'robot-token'
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(result.completed.length, 1);
+  assert.equal(result.rewards.length, 1);
+  assert.equal(result.skipped.length, 2);
+  assert.deepEqual(result.failed, ['失败浏览：系统繁忙']);
+  assert.match(result.message, /读取 4 项，完成 1 项，领取 1 项，跳过 2 项，失败 1 项/);
+  assert.match(result.message, /完成明细：成功浏览（浏览 1 篇）/);
+  assert.match(result.message, /领取明细：成功领取 10经验/);
+  assert.match(result.message, /跳过明细：发布爆料：暂不支持的活动类型：publish\.baoliao_new/);
+  assert.match(result.message, /关注达人：任务未提供可关注对象/);
+  assert.match(result.message, /失败明细：失败浏览：系统繁忙/);
 });

@@ -176,16 +176,29 @@ export async function runCustomEndpointTask(task, db, user, adapter = smzdm) {
       const r = await strategy.handler(user.cookie, params);
       const reward = extractReward(r.message || '');
       const success = r.success !== false;
+      const failed = Array.isArray(r.failed) ? r.failed : [];
       return {
         ok: success,
         success,
         message: r.message,
+        // 每日任务内部已经逐项记录失败名称与原因；继续向上传递给 taskRunner，
+        // 使执行明细的 reasons 区域能逐条显示，而不是只剩“失败 N 项”的汇总。
+        reasons: failed.length
+          ? failed.map((errorMsg) => ({ articleId: null, error_msg: errorMsg }))
+          : undefined,
         goldDelta: reward.gold,
         silverDelta: reward.silver,
         expDelta: reward.exp,
         levelAfter: null,
         explicit: { gold: reward.gold, silver: reward.silver, exp: reward.exp },
-        result: { success, message: r.message }
+        result: {
+          success,
+          message: r.message,
+          completed: Array.isArray(r.completed) ? r.completed : [],
+          rewards: Array.isArray(r.rewards) ? r.rewards : [],
+          skipped: Array.isArray(r.skipped) ? r.skipped : [],
+          failed
+        }
       };
     } catch (e) {
       return { ok: false, error: 'exec', message: `${task.name}执行失败：${e.message}` };
