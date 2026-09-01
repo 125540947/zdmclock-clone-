@@ -3,11 +3,13 @@
     <header class="page-head rise">
       <div>
         <h1>GPT 自动回复</h1>
-        <div class="sub">配置评论区自动回复（已接入后端真实大模型）</div>
+        <div class="sub">配置 AI 服务，并为每篇商品生成自然短评</div>
       </div>
     </header>
 
-    <section class="card rise" style="animation-delay:.05s">
+    <GptProviderConfig :config="cfg" :configured="serverConfigured" @updated="applyProviderConfig" />
+
+    <section class="card rise" style="animation-delay:.1s">
       <div class="row" style="border:none;padding-top:0">
         <div class="l">
           <div class="t">启用自动回复</div>
@@ -49,13 +51,11 @@
         <span class="tag" :class="cfg.enabled ? 'on' : 'off'">{{ cfg.enabled ? 'ON' : 'OFF' }}</span>
       </div>
 
-      <p v-if="!serverConfigured" class="warn">
-        ⚠️ 服务端未配置 GPT_API_KEY，即使启用也无法调用大模型。请在服务端 .env 设置 GPT_API_KEY（及可选的 GPT_API_BASE / GPT_MODEL）后重启。
-      </p>
-      <p v-else class="ok-line">✓ 服务端已配置大模型接口，可直接生成回复。</p>
+      <p v-if="!serverConfigured" class="warn">⚠️ 请先在上方填写并保存 API 密钥，否则自动评论不会运行。</p>
+      <p v-else class="ok-line">✓ AI 服务已配置，可生成回复和商品短评。</p>
     </section>
 
-    <section class="card rise" style="animation-delay:.1s">
+    <section class="card rise" style="animation-delay:.15s">
       <div class="t" style="margin-bottom:10px">测试生成回复</div>
       <div class="field">
         <label>待回复内容</label>
@@ -66,7 +66,7 @@
       <p v-if="replyErr" class="warn">{{ replyErr }}</p>
     </section>
 
-    <section class="card rise" style="animation-delay:.15s">
+    <section class="card rise" style="animation-delay:.2s">
       <div class="t" style="margin-bottom:10px">定时批量生成</div>
       <div class="d sub2">从「好价爆料」列表取内容，调用大模型批量生成评论草稿（可选自动发布为评论）。</div>
 
@@ -121,9 +121,20 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue';
 import api from '../api/client.js';
+import GptProviderConfig from '../components/GptProviderConfig.vue';
 
 const KEY = 'zdm_gpt_reply';
-const cfg = ref({ enabled: false, target: 'comment', tone: 'friendly', prompt: '' });
+const cfg = ref({
+  enabled: false,
+  target: 'comment',
+  tone: 'friendly',
+  prompt: '',
+  apiBase: 'https://api.openai.com/v1',
+  model: 'gpt-4o-mini',
+  hasApiKey: false,
+  hasSavedApiKey: false,
+  keySource: 'none'
+});
 const serverConfigured = ref(false);
 const inputText = ref('');
 const genBusy = ref(false);
@@ -146,7 +157,10 @@ async function load() {
   readLocal();
   try {
     const { data } = await api.get('/gpt/config');
-    if (data?.config) cfg.value = { ...cfg.value, ...data.config };
+    if (data?.config) {
+      cfg.value = { ...cfg.value, ...data.config };
+      serverConfigured.value = !!data.config.configured;
+    }
   } catch {
     /* 旧后端/未登录：退回本地配置 */
   }
@@ -161,10 +175,20 @@ async function load() {
 async function save() {
   saveLocal();
   try {
-    await api.put('/gpt/config', cfg.value);
+    await api.put('/gpt/config', {
+      enabled: cfg.value.enabled,
+      target: cfg.value.target,
+      tone: cfg.value.tone,
+      prompt: cfg.value.prompt
+    });
   } catch {
     /* 旧后端/未登录：仅保留本地，不阻断 */
   }
+}
+
+function applyProviderConfig(next) {
+  cfg.value = { ...cfg.value, ...next };
+  serverConfigured.value = !!next?.configured;
 }
 
 async function genReply() {

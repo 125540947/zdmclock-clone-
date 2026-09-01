@@ -5,7 +5,15 @@ import assert from 'node:assert/strict';
 
 // 必须在 import gptAdapter 之前设置，config 在加载时读取 GPT_API_KEY 决定 gptEnabled
 process.env.GPT_API_KEY = 'test-key';
-const { generateReply, generateProductComment, buildProductCommentPrompt, cleanReply, productCommentIssues } = await import('../src/gptAdapter.js');
+const {
+  generateReply,
+  generateProductComment,
+  buildProductCommentPrompt,
+  cleanReply,
+  productCommentIssues,
+  resolveGptProvider,
+  isGptConfigured
+} = await import('../src/gptAdapter.js');
 const { config } = await import('../src/config.js');
 
 const realFetch = globalThis.fetch;
@@ -43,6 +51,23 @@ test('generateReply 未配置 GPT_API_KEY 时直接抛错（不发起请求）',
   assert.equal(called, false);
   config.gptEnabled = prev;
   globalThis.fetch = realFetch;
+});
+
+test('resolveGptProvider 页面配置优先且状态不依赖进程重启', () => {
+  const prev = config.gptEnabled;
+  config.gptEnabled = false;
+  const p = resolveGptProvider({
+    apiKey: 'saved-key',
+    apiBase: 'https://api.deepseek.com/v1/',
+    model: 'deepseek-chat'
+  });
+  assert.equal(p.apiKey, 'saved-key');
+  assert.equal(p.apiBase, 'https://api.deepseek.com/v1');
+  assert.equal(p.model, 'deepseek-chat');
+  assert.equal(p.keySource, 'saved');
+  assert.equal(p.usePinnedFetch, true);
+  assert.equal(isGptConfigured({ apiKey: 'saved-key' }), true);
+  config.gptEnabled = prev;
 });
 
 test('buildSystemPrompt friendly 默认口吻', async () => {

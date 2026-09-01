@@ -47,7 +47,9 @@ function defaultData() {
     // 仅自定义端点任务（needsEndpoint=true）需要；配置缺失时该任务标"待抓包"。
     settings: {
       // GPT 自动回复配置（前端开关与提示词存这里，后端据此是否真正调用大模型）
-      gpt: { enabled: false, target: 'comment', tone: 'friendly', prompt: '' },
+      // apiKey 仅持久化在服务端数据文件中；任何 API 响应都不得回传明文（见 routes/gpt.js）。
+      // apiBase / model 留空时继续使用 .env 中的 GPT_API_BASE / GPT_MODEL，保持旧部署兼容。
+      gpt: { enabled: false, target: 'comment', tone: 'friendly', prompt: '', apiKey: '', apiBase: '', model: '' },
       // 推送通知配置（渠道 + 令牌）。env 的 PUSH_* 作为初始默认值，UI 可覆盖并持久化到 db
       push: {
         enabled: !!(config.pushChannel && config.pushChannel !== 'none' && (config.pushToken || config.pushWebhook || config.pushChatId)),

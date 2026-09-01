@@ -8,6 +8,7 @@
 // 请仅在自有账号、充分知悉费用与风险的前提下启用。
 
 import { config } from './config.js';
+import { pinnedFetch } from './dnsGuard.js';
 
 const TONE_PROMPT = {
   friendly: '像熟悉社区的普通网友一样随和交流，真诚但不过分热情',
@@ -89,13 +90,50 @@ function normalizeProductFact(value, maxLength) {
     .slice(0, maxLength) || '未提供';
 }
 
+function cleanBaseUrl(value) {
+  return String(value || '').trim().replace(/\/+$/, '');
+}
+
+function isLoopbackBase(apiBase) {
+  try {
+    const host = new URL(apiBase).hostname.toLowerCase();
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  } catch {
+    return false;
+  }
+}
+
+// 运行时 AI 服务配置：页面保存值优先，.env 作为兼容回退。
+// config.gptEnabled 保留为环境密钥是否启用的权威标记，便于旧部署和测试动态关闭环境配置。
+export function resolveGptProvider(saved = {}) {
+  const savedKey = typeof saved.apiKey === 'string' ? saved.apiKey.trim() : '';
+  const envKey = config.gptEnabled ? String(config.gptApiKey || '').trim() : '';
+  const apiKey = savedKey || envKey;
+  const apiBase = cleanBaseUrl(saved.apiBase || config.gptApiBase || 'https://api.openai.com/v1');
+  const model = String(saved.model || config.gptModel || 'gpt-4o-mini').trim();
+  return {
+    apiKey,
+    apiBase,
+    model,
+    configured: !!apiKey,
+    keySource: savedKey ? 'saved' : envKey ? 'environment' : 'none',
+    // 页面可配置的远程地址需要 DNS 校验并钉死连接，防止密钥被 SSRF / DNS 重绑定带走。
+    usePinnedFetch: !!(savedKey || saved.apiBase) && !isLoopbackBase(apiBase)
+  };
+}
+
+export function isGptConfigured(saved = {}) {
+  return resolveGptProvider(saved).configured;
+}
+
 // 生成一条回复。text 为待回复的原文（评论/私信内容）。
-async function requestCompletion(messages) {
-  if (!config.gptEnabled) {
+async function requestCompletion(messages, savedProvider = {}) {
+  const provider = resolveGptProvider(savedProvider);
+  if (!provider.configured) {
     throw new Error('服务端未配置 GPT_API_KEY，无法调用大模型');
   }
   const payload = {
-    model: config.gptModel,
+    model: provider.model,
     temperature: 0.9,
     max_tokens: 200,
     messages
@@ -103,11 +141,15 @@ async function requestCompletion(messages) {
   const timeoutMs = Number(process.env.GPT_REQUEST_TIMEOUT || 20000);
   let resp;
   try {
-    resp = await fetch(`${config.gptApiBase}/chat/completions`, {
+    const endpoint = /\/chat\/completions$/i.test(provider.apiBase)
+      ? provider.apiBase
+      : `${provider.apiBase}/chat/completions`;
+    const fetcher = provider.usePinnedFetch ? pinnedFetch : fetch;
+    resp = await fetcher(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.gptApiKey}`,
+        Authorization: `Bearer ${provider.apiKey}`,
         Accept: 'application/json'
       },
       body: JSON.stringify(payload),
@@ -135,15 +177,15 @@ async function requestCompletion(messages) {
   return reply;
 }
 
-export async function generateReply({ text, tone, prompt } = {}) {
+export async function generateReply({ text, tone, prompt, provider } = {}) {
   const userText = (text && String(text).trim()) || '你好';
   return requestCompletion([
     { role: 'system', content: buildSystemPrompt({ tone, prompt }) },
     { role: 'user', content: `待回复内容：\n---\n${userText}\n---\n只输出可以直接发送的回复正文。` }
-  ]);
+  ], provider);
 }
 
-export async function generateProductComment({ title, content, price, tone, prompt } = {}) {
+export async function generateProductComment({ title, content, price, tone, prompt, provider } = {}) {
   const facts = [
     `商品标题：${normalizeProductFact(title, 240)}`,
     `商品正文：${normalizeProductFact(content, 1600)}`,
@@ -154,7 +196,7 @@ export async function generateProductComment({ title, content, price, tone, prom
   let reply = await requestCompletion([
     { role: 'system', content: system },
     { role: 'user', content: user }
-  ]);
+  ], provider);
   let issues = productCommentIssues(reply);
   if (!issues.length) return reply;
 
@@ -166,7 +208,7 @@ export async function generateProductComment({ title, content, price, tone, prom
       role: 'user',
       content: `这条评论仍有明显机器味（${issues.join('、')}）。换一个具体切入点重写，像真人随手说一句，避开原句措辞。只输出评论正文。`
     }
-  ]);
+  ], provider);
   issues = productCommentIssues(reply);
   if (issues.length) throw new Error(`AI 评论未通过自然度检查：${issues.join('、')}`);
   return reply;

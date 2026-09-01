@@ -171,7 +171,8 @@ async function runEngagement(task, db, user, opts) {
             content: entry.content,
             price: entry.price,
             tone: db.settings.gpt.tone,
-            prompt: db.settings.gpt.prompt
+            prompt: db.settings.gpt.prompt,
+            provider: db.settings.gpt
           });
         }
         const r =
@@ -330,7 +331,8 @@ async function runGptBatch(task, db) {
         content: item.content,
         price: item.price,
         tone: db.settings.gpt.tone,
-        prompt: db.settings.gpt.prompt
+        prompt: db.settings.gpt.prompt,
+        provider: db.settings.gpt
       });
       const aid = normalizeArticleId(item.smzdmUrl || item.url || '');
       const draft = {
