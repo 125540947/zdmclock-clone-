@@ -47,7 +47,7 @@ const built = [
   { name: 'favorite', label: '自动收藏', icon: 'favorite' },
   { name: 'point', label: '自动点赞', icon: 'like' },
   { name: 'baoliao', label: '好价爆料', icon: 'baoliao' },
-  { name: 'gptReply', label: 'GPT 回复', icon: 'robot' },
+  { name: 'gptReply', label: 'AI 模型', icon: 'robot' },
   { name: 'assets', label: '资产仪表盘', icon: 'chart' },
   { name: 'admin', label: '管理后台', icon: 'admin', requiresAdmin: true }
 ];

@@ -39,7 +39,7 @@
             />
             <span class="hint-sm" v-if="t.articleSource === 'baoliao'">将对你好价列表中的文章自动取 ID 执行（无需手填）</span>
             <span class="hint-sm" v-else>评论/收藏/点赞需指定目标文章，否则运行会报错</span>
-            <span class="hint-sm" v-if="t.type === 'comment'">评论由 AI 阅读商品标题、内容和价格后现场生成；需先在 GPT 回复页启用模型。</span>
+            <span class="hint-sm" v-if="t.type === 'comment'">评论由 AI 阅读商品标题、内容和价格后现场生成；需先在「AI 模型」页启用服务。</span>
           </div>
           <div v-else-if="t.type === 'fetch'" class="art">
             <div class="row-limit">
@@ -53,7 +53,7 @@
                 @change="saveLimit(t)"
               />
             </div>
-            <span class="hint-sm">定时从 smzdm 公开好价列表抓取并写入爆料箱（自动去重），供评论/收藏/点赞与 GPT 生成取用</span>
+            <span class="hint-sm">定时从 smzdm 公开好价列表抓取并写入爆料箱（自动去重），供评论、收藏、点赞与 AI 生成取用</span>
           </div>
           <div v-else-if="t.builtin && !t.needsEndpoint" class="art">
             <span class="badge ok">✓ 内置青龙脚本（社区逆向端点，无需抓包）</span>

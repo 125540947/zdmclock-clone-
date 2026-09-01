@@ -74,7 +74,7 @@ const routes = [
     props: { taskId: 't_point', title: '自动点赞', icon: '👍', desc: '自动为内容点赞' }
   },
   { path: '/baoliao', name: 'baoliao', component: Baoliao, meta: { title: '好价爆料', icon: '📣' } },
-  { path: '/gptReply', name: 'gptReply', component: GptReply, meta: { title: 'GPT 回复', icon: '🤖' } },
+  { path: '/gptReply', name: 'gptReply', component: GptReply, meta: { title: 'AI 模型', icon: '🤖' } },
   { path: '/notify', redirect: '/admin/notify' },
   { path: '/assets', name: 'assets', component: AssetsView, meta: { title: '资产仪表盘', icon: '📈' } },
   { path: '/taskruns', name: 'taskruns', component: TaskRuns, meta: { title: '执行明细', icon: 'history' } },

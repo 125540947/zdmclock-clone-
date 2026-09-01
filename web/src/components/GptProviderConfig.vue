@@ -1,7 +1,22 @@
 <template>
   <section class="card rise" style="animation-delay:.05s">
-    <div class="title">AI 服务配置</div>
-    <div class="description">支持 OpenAI、DeepSeek、通义等兼容接口。密钥只保存到服务器，页面不会再次显示明文。</div>
+    <div class="title">AI 模型配置</div>
+    <div class="description">选择常用第三方服务，或接入任意 OpenAI 兼容接口。密钥只保存到服务器，页面不会再次显示明文。</div>
+
+    <div class="field">
+      <label>模型服务商</label>
+      <select
+        v-model="selectedProvider"
+        data-test="provider-preset"
+        class="input"
+        @change="applyProviderPreset"
+      >
+        <option v-for="provider in providers" :key="provider.id" :value="provider.id">
+          {{ provider.label }}
+        </option>
+      </select>
+      <span class="hint">{{ providerHint }}</span>
+    </div>
 
     <div class="provider-grid">
       <div class="field">
@@ -12,7 +27,7 @@
           class="input"
           placeholder="https://api.openai.com/v1"
         />
-        <span class="hint">填写到 /v1 即可，系统会自动补全 /chat/completions</span>
+        <span class="hint">填写服务商的 OpenAI 兼容地址，系统会自动补全 /chat/completions</span>
       </div>
       <div class="field">
         <label>模型名称</label>
@@ -59,6 +74,7 @@
 <script setup>
 import { ref, computed, watch } from 'vue';
 import api from '../api/client.js';
+import { AI_PROVIDER_PRESETS, identifyAiProvider } from '../config/aiProviderPresets.js';
 
 const props = defineProps({
   config: { type: Object, required: true },
@@ -68,20 +84,37 @@ const emit = defineEmits(['updated']);
 
 const apiBase = ref('https://api.openai.com/v1');
 const model = ref('gpt-4o-mini');
+const selectedProvider = ref('openai');
 const apiKeyInput = ref('');
 const busy = ref(false);
 const message = ref('');
 const error = ref('');
 const sourceText = computed(() => props.config.keySource === 'environment' ? '服务器环境' : '网页保存');
+const providers = AI_PROVIDER_PRESETS;
+const providerHint = computed(() => (
+  providers.find((item) => item.id === selectedProvider.value)?.hint || ''
+));
 
 watch(
   () => props.config,
   (value) => {
     apiBase.value = value?.apiBase || 'https://api.openai.com/v1';
     model.value = value?.model || 'gpt-4o-mini';
+    selectedProvider.value = identifyAiProvider(apiBase.value);
   },
   { immediate: true, deep: true }
 );
+
+watch(apiBase, (value) => {
+  selectedProvider.value = identifyAiProvider(value);
+});
+
+function applyProviderPreset() {
+  const preset = providers.find((item) => item.id === selectedProvider.value);
+  if (!preset || preset.id === 'custom') return;
+  apiBase.value = preset.apiBase;
+  model.value = preset.model;
+}
 
 async function saveProvider() {
   busy.value = true;

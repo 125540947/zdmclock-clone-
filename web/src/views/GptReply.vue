@@ -2,8 +2,8 @@
   <div>
     <header class="page-head rise">
       <div>
-        <h1>GPT 自动回复</h1>
-        <div class="sub">配置 AI 服务，并为每篇商品生成自然短评</div>
+        <h1>AI 模型与自动评论</h1>
+        <div class="sub">接入第三方模型，并为每篇商品生成自然短评</div>
       </div>
     </header>
 

@@ -48,16 +48,44 @@ beforeEach(() => {
   m.api.put.mockResolvedValue(configResponse());
 });
 
-describe('GPT 自动回复 AI 服务配置', () => {
-  it('展示接口地址、模型和密钥配置入口', async () => {
+describe('AI 模型与自动评论配置', () => {
+  it('展示服务商、接口地址、模型和密钥配置入口', async () => {
     const wrapper = mount(GptReply);
     await flushPromises();
 
-    expect(wrapper.text()).toContain('AI 服务配置');
+    expect(wrapper.text()).toContain('AI 模型配置');
+    expect(wrapper.find('[data-test="provider-preset"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="api-base"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="model"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="api-key"]').attributes('type')).toBe('password');
     expect(wrapper.text()).toContain('尚未配置密钥');
+  });
+
+  it('选择第三方服务商会自动填写对应接口和模型', async () => {
+    const wrapper = mount(GptReply);
+    await flushPromises();
+
+    await wrapper.find('[data-test="provider-preset"]').setValue('deepseek');
+    expect(wrapper.find('[data-test="api-base"]').element.value).toBe('https://api.deepseek.com');
+    expect(wrapper.find('[data-test="model"]').element.value).toBe('deepseek-v4-flash');
+
+    await wrapper.find('[data-test="provider-preset"]').setValue('qwen');
+    expect(wrapper.find('[data-test="api-base"]').element.value).toBe(
+      'https://dashscope.aliyuncs.com/compatible-mode/v1'
+    );
+    expect(wrapper.find('[data-test="model"]').element.value).toBe('qwen-plus');
+  });
+
+  it('支持 OpenRouter 和手工填写的自定义兼容接口', async () => {
+    const wrapper = mount(GptReply);
+    await flushPromises();
+
+    await wrapper.find('[data-test="provider-preset"]').setValue('openrouter');
+    expect(wrapper.find('[data-test="api-base"]').element.value).toBe('https://openrouter.ai/api/v1');
+    expect(wrapper.find('[data-test="model"]').element.value).toBe('openrouter/auto');
+
+    await wrapper.find('[data-test="api-base"]').setValue('https://ai.example.com/v1');
+    expect(wrapper.find('[data-test="provider-preset"]').element.value).toBe('custom');
   });
 
   it('保存页面填写的兼容接口、模型和密钥', async () => {
