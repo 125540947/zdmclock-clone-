@@ -27,6 +27,7 @@ mock.module(p('gptAdapter.js'), {
       return {
         configured: !!(savedKey || envKey),
         keySource: savedKey ? 'saved' : envKey ? 'environment' : 'none',
+        apiKey: savedKey || envKey,
         apiBase: saved.apiBase || config.gptApiBase,
         model: saved.model || config.gptModel
       };
@@ -200,6 +201,59 @@ test('POST /api/gpt/reply generateReply 抛错 → 502', async () => {
   assert.equal(r.status, 502);
   assert.equal(r.data.error, 'gpt_error');
   REPLY = { ok: true, reply: 'mocked reply' };
+});
+
+test('GET /api/gpt/models 成功拉取并规整模型列表（带鉴权头）', async () => {
+  const db = load();
+  db.settings.gpt = { apiBase: 'https://api.openai.com/v1', apiKey: 'k-secret', model: 'gpt-4o-mini' };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).startsWith('https://') && String(url).endsWith('/models')) {
+      assert.equal(url, 'https://api.openai.com/v1/models');
+      assert.equal(init.headers.Authorization, 'Bearer k-secret');
+      return {
+        ok: true,
+        json: async () => ({ object: 'list', data: [{ id: 'gpt-4o-mini' }, { id: 'gpt-4o' }, 'not-object'] })
+      };
+    }
+    return realFetch(url, init);
+  };
+  try {
+    const r = await j('GET', '/api/gpt/models');
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.data.models, ['gpt-4o-mini', 'gpt-4o', 'not-object']);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('GET /api/gpt/models 远端返回非 200 → 502 错误信封', async () => {
+  const db = load();
+  db.settings.gpt = { apiBase: 'https://api.deepseek.com/v1', apiKey: 'k-secret', model: 'deepseek-chat' };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).startsWith('https://') && String(url).endsWith('/models')) {
+      return { ok: false, status: 401, json: async () => ({ error: { message: 'unauthorized' } }) };
+    }
+    return realFetch(url, init);
+  };
+  try {
+    const r = await j('GET', '/api/gpt/models');
+    assert.equal(r.status, 502);
+    assert.equal(r.data.error, 'gpt_models_error');
+    assert.match(r.data.message, /unauthorized/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('GET /api/gpt/models 未配置接口地址 → 400', async () => {
+  const db = load();
+  config.gptApiBase = '';
+  db.settings.gpt = { apiBase: '', apiKey: '', model: '' };
+  const r = await j('GET', '/api/gpt/models');
+  assert.equal(r.status, 400);
+  assert.equal(r.data.error, 'gpt_not_configured');
 });
 
 test('关闭测试服务器', () => { server.close(); });

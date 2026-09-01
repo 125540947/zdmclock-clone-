@@ -4,12 +4,61 @@ import { authRequired, mutationGuard } from '../auth.js';
 import { generateReply, resolveGptProvider } from '../gptAdapter.js';
 import { wrapAsync } from '../wrapAsync.js';
 import { sendError } from '../httpError.js';
+import { pinnedFetch } from '../dnsGuard.js';
+
+const MODELS_TIMEOUT_MS = Number(process.env.GPT_REQUEST_TIMEOUT || 20000);
 
 const router = Router();
 
 const TONES = ['friendly', 'pro', 'humor'];
 const TARGETS = ['comment', 'message', 'all'];
 const MAX_KEY_LENGTH = 4096;
+
+// 拉取服务商可用模型列表（OpenAI 兼容 /models）。只读接口，但会用到已配置密钥，故走鉴权。
+// 仅访问 resolveGptProvider 解析出的可信地址（页面保存值已在校验时限制为 HTTPS），
+// 远端地址通过 pinnedFetch 钉死 DNS，避免密钥被 SSRF / DNS 重绑定带走。
+router.get('/models', authRequired, wrapAsync(async (req, res) => {
+  const provider = resolveGptProvider(load().settings.gpt);
+  const base = String(provider.apiBase || '').replace(/\/+$/, '');
+  if (!base) {
+    return sendError(res, { status: 400, error: 'gpt_not_configured', message: '请先填写接口地址并保存 AI 配置' });
+  }
+  const endpoint = /\/models$/i.test(base) ? base : `${base}/models`;
+  const fetcher = provider.usePinnedFetch ? pinnedFetch : fetch;
+  const headers = { Accept: 'application/json' };
+  if (provider.apiKey) headers.Authorization = `Bearer ${provider.apiKey}`;
+  try {
+    const resp = await fetcher(endpoint, {
+      method: 'GET',
+      headers,
+      signal: AbortSignal.timeout(MODELS_TIMEOUT_MS)
+    });
+    if (!resp.ok) {
+      let detail = '';
+      try {
+        const j = await resp.json();
+        detail = j?.error?.message || JSON.stringify(j).slice(0, 120);
+      } catch {
+        /* 忽略解析失败 */
+      }
+      return sendError(res, {
+        status: 502,
+        error: 'gpt_models_error',
+        message: `模型列表拉取失败（HTTP ${resp.status}）${detail ? '：' + detail : ''}`
+      });
+    }
+    const json = await resp.json();
+    const models = Array.isArray(json?.data)
+      ? json.data.map((m) => (typeof m === 'string' ? m : m?.id)).filter(Boolean)
+      : [];
+    res.json({ models });
+  } catch (e) {
+    if (e?.name === 'TimeoutError' || e?.name === 'AbortError') {
+      return sendError(res, { status: 504, error: 'gpt_models_timeout', message: `模型列表拉取超时（>${MODELS_TIMEOUT_MS}ms）` });
+    }
+    sendError(res, { status: 502, error: 'gpt_models_error', message: '模型列表拉取失败：' + (e?.message || '未知错误') });
+  }
+}));
 
 function publicConfig(gpt = {}) {
   const provider = resolveGptProvider(gpt);

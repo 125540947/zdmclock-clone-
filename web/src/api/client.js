@@ -200,6 +200,12 @@ export async function getCookieGrabberScript() {
   return data;
 }
 
+// ===== GPT 配置：拉取服务商可用模型列表（OpenAI 兼容 /models）=====
+export async function fetchGptModels() {
+  const { data } = await api.get('/gpt/models');
+  return data;
+}
+
 // ===== 系统更新（从 Git 仓库拉取最新代码，需独立管理员 Token）=====
 export async function getUpdateStatus() {
   const { data } = await api.get('/update/status', {
