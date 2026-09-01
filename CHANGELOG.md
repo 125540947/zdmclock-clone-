@@ -656,6 +656,32 @@
 
 ---
 
+## 批次 27 · 审计整改收尾（批次 B/C：A-07/A-09/A-10/A-11/A-12，2026-09-01）
+
+**改动要点**
+- 收尾 2026-09-01 全面审计报告的批次 B/C 剩余项（A-07、A-09、A-10、A-11、A-12），审计报告 `AUDIT_REPORT_2026-09-01.md` 一并入库作为权威依据。
+- A-07：好价 RSS 抓取前新增 `isSafeSmzdmRssUrl` 校验，`config.smzdmBaoliaoRssUrl` 须为 smzdm.com 及其子域（http/https 均可），拒绝 IP 字面量 / localhost / 第三方域名。此前 `call()` 在无 cookie 时仅走 `isSafePushUrl` 放行一切公网地址，缺少与 smzdm 专属白名单同等的护栏。因官方源 `feed.smzdm.com` 当前仅 HTTP 稳定可用，未复用强制 https 的 `notifier.isSafeSmzdmUrl`。
+- A-09：新增 `server/src/httpError.js` 的 `sendError(res,{status,error,message})`，把全局兜底 500 与 9 个路由文件的 18 处 5xx 统一为 `{ ok:false, error, message }`，与成功响应 `{ ok:true, ... }` 对称；调用方只需判断 `ok` 字段。`PUT /api/tasks/endpoints` 的 `unsafe_endpoint` / `unsafe_referer` / `invalid_type` / `invalid_params` 一并补齐 `ok:false`。保留既有 error 码，仅补字段，故既有断言不受影响。
+- A-10：`store.js` 新增 `mutateDb(fn)`，统一「锁内改内存 + await 落盘」语义，消除各写路由重复的 `withWriteLock(() => { ...; return persistAwait(); })` 样板，降低新增路由漏写 `persistAwait` 的概率（历史曾因 `health.js` 漏写导致 `POST /api/health/cookies` 有账号时 500）。已在 `baoliao.js`（9 处）/ `users.js`（6 处）落地。
+- A-11：`GptReply.vue` 移除 `zdm_gpt_reply` 键的 localStorage 读写，GPT 配置以服务端为唯一真相源（读取 `GET /gpt/config` + `/gpt/status`，保存 `PUT /gpt/config`），前端仅留服务端下发的 `serverConfigured` 标记，消除同源 XSS / 恶意扩展读取本地敏感配置的暴露面。
+
+**新增功能**
+- 新增 4 个测试文件共 10 项测试（A-12）：
+  - `test/a12_techDebt.test.js`（T3）：固化 A-02 `degradedWarned` 恒定有上限、A-03 `riskControl.state` 在 `resetRisk` 后清空。
+  - `test/a12_endpointSsrf.test.js`（T4）：`PUT /api/tasks/endpoints` 配非 smzdm 域 → 400 `unsafe_endpoint`；配 smzdm 子域 → 200 接受（不误伤合法端点）。
+  - `test/a12_errorEnvelope.test.js` + `test/a12_globalError.test.js`（T5）：`sendError` 产出统一信封；路由内部 catch（`gpt_error` 502）与全局 500 兜底（`server_error`）均走 `{ ok:false, error, message }`。
+- `realAdapter.js` 新增 A-02 回归测试钩子 `__warnDegradedChannel` / `__degradedWarnedSize`（仅单测使用，不影响运行时）。
+
+**问题修复**
+- 修复 `PUT /api/tasks/endpoints` 的 `unsafe_endpoint` 等安全校验响应缺少 `ok:false`、与统一错误信封不一致的问题（由新增 T4 测试暴露的 A-09 遗漏点）。
+- 修复新增测试文件 `mock.module` 跨文件泄漏：`a12_globalError` 把 `store.load` mock 为抛错后未复位，污染后续 `openModeVisibility.test.js`（表现为 `fetch failed`）。已为两个使用 `mock.module` 的测试文件补 `test.after(() => mock.reset())`。
+  - ⚠️ 说明：node:test 在同一进程内按文件顺序执行，模块 mock 在 `mock.reset()` 前持续生效；`gpt.test.js` / `notify.test.js` / `realAdapter*.test.js` / `startup.test.js` 亦使用 `mock.module` 但未复位，当前未引发失败（其 mock 对后续文件无副作用），暂不改动以免波动既有基线。
+- 后端全量测试 **494 项通过（494 pass / 0 fail / 0 cancelled）**，含前端 `web/dist` 重新构建。
+
+**代表提交**：`14b4a30`、`bd78c70`、`700c92b`、`f32153d`、`b4e8f34`、`8ab90ec`
+
+---
+
 ## 维护约定（默认规范）
 
 1. **分批原则**：每次整理历史或新增工作阶段，按**逻辑阶段**（功能/安全波次）或**时间**划分为批次；同一波次跨多日可合并为一批次。
