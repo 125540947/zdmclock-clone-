@@ -682,6 +682,24 @@
 
 ---
 
+## 批次 28 · 模型名称一键获取服务商模型列表（2026-09-01）
+
+**改动要点**
+- AI 模型配置页「模型名称」输入框旁新增「获取模型」按钮：点击后调用新增后端接口 `GET /api/gpt/models` 拉取服务商 OpenAI 兼容 `/models` 列表，结果以 `<datalist>` 回填候选；仍允许手动填写自定义模型名，降低填错模型名的概率。
+- 后端仅访问 `resolveGptProvider` 解析出的已配置可信地址（页面保存地址在校验时已限定 HTTPS），远端请求经 `pinnedFetch` 钉死 DNS，防 SSRF / DNS 重绑定；接口走 `authRequired`（会用到已配置密钥）。
+
+**新增功能**
+- `GET /api/gpt/models`：成功返回 `{ models: string[] }`（规整 `json.data[].id`）；未配置接口地址 → 400 `gpt_not_configured`；远端非 200 → 502 `gpt_models_error`（带远端明细）；超时 → 504 `gpt_models_timeout`。
+- 前端 `GptProviderConfig.vue` 增加「获取模型」按钮 + `<datalist>` 回填；`web/src/api/client.js` 新增 `fetchGptModels()`。
+- `server/test/gpt.test.js` +3 项路由测试（成功规整 / 远端 502 / 未配置 400）。
+
+**问题修复**
+- 无（纯新增能力）；顺带为 `gpt.test.js` 的 mock `resolveGptProvider` 补 `apiKey` 字段（此前缺该字段会导致 `/models` 不带鉴权头、测试误判 502）。
+
+**代表提交**：`7a329eb`、`13b349a`
+
+---
+
 ## 维护约定（默认规范）
 
 1. **分批原则**：每次整理历史或新增工作阶段，按**逻辑阶段**（功能/安全波次）或**时间**划分为批次；同一波次跨多日可合并为一批次。
