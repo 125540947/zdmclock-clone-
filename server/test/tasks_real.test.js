@@ -13,7 +13,8 @@ import {
   doFollow,
   doShare,
   doDailyTasks,
-  parseDailyTaskList
+  parseDailyTaskList,
+  getRecommendedFollowUsers
 } from '../src/smzdm/tasks_real.js';
 
 test('signFormData：按键字母排序 + 追加 key + md5 大写', () => {
@@ -123,11 +124,29 @@ test('doFollow 关注用户：target 命中即成功', async () => {
     assert.match(path, /\/dingyue\/create$/);
     assert.equal(opts.data.type, 'user');
     assert.equal(opts.data.keyword, 'alice');
+    assert.equal(opts.data.is_from_task, '0');
     return { error_code: 0, error_msg: '关注成功' };
   };
   const r = await doFollow('cookie', { target: 'alice', type: 'user' }, req);
   assert.equal(r.success, true);
   assert.match(r.message, /关注成功/);
+});
+
+test('getRecommendedFollowUsers 读取并规范化未关注与已关注达人', async () => {
+  const users = await getRecommendedFollowUsers('cookie', async (path, opts) => {
+    assert.equal(path, '/dy/user/dingyue/tuijian_search');
+    assert.equal(opts.base, 'https://dingyue-api.smzdm.com');
+    assert.deepEqual(opts.data, { type: 'user' });
+    return { error_code: 0, data: { rows: [
+      { type: 'user', keyword_id: '1001', keyword: '达人甲', is_follow: '0' },
+      { type: 'user', smzdm_id: '1002', nickname: '达人乙', is_follow: '1' },
+      { type: 'tag', keyword_id: '88', keyword: '栏目' }
+    ] } };
+  });
+  assert.deepEqual(users, [
+    { id: '1001', name: '达人甲', isFollow: false },
+    { id: '1002', name: '达人乙', isFollow: true }
+  ]);
 });
 
 test('doFollow 关注品牌：走 user_action 端点且 action=dingyue_lanmu_add', async () => {
@@ -283,4 +302,56 @@ test('doDailyTasks 在汇总中列出每个跳过项和失败项的名称及原�
   assert.match(result.message, /跳过明细：发布爆料：暂不支持的活动类型：publish\.baoliao_new/);
   assert.match(result.message, /关注达人：任务未提供可关注对象/);
   assert.match(result.message, /失败明细：失败浏览：系统繁忙/);
+});
+
+test('doDailyTasks 推荐达人任务读取真实达人 ID，完成后取消关注恢复状态', async () => {
+  let listCalls = 0;
+  const calls = [];
+  const task = (status) => ({
+    task_id: 't_follow',
+    task_name: '达人关注推荐',
+    task_status: status,
+    task_event_type: 'interactive.follow.user',
+    task_even_num: 3,
+    task_finished_num: 0,
+    task_redirect_url: { link_type: 'guanzhu', link_val: '83', sub_type: 'search_user' }
+  });
+  const listResponse = (status) => ({ data: { data: { rows: [{ cell_data: {
+    activity_task: { default_list_v2: [{ task_list: [task(status)] }] }
+  } }] } } });
+  const request = async (path, opts) => {
+    calls.push({ path, data: opts?.data });
+    if (path === '/task/list_v2') {
+      listCalls++;
+      return listResponse(listCalls === 1 ? 2 : 3);
+    }
+    if (path === '/dy/user/dingyue/tuijian_search') {
+      return { error_code: 0, data: { rows: [
+        { type: 'user', keyword_id: 'u1', is_follow: '0' },
+        { type: 'user', keyword_id: 'u2', is_follow: '1' },
+        { type: 'user', keyword_id: 'u3', is_follow: '0' },
+        { type: 'user', keyword_id: 'u4', is_follow: '0' }
+      ] } };
+    }
+    if (path === '/dingyue/create' || path === '/dingyue/destroy') return { error_code: 0 };
+    if (path === '/task/activity_task_receive') {
+      return { error_code: 0, data: { reward_msg: '成功领取 5经验' } };
+    }
+    throw new Error('unexpected path: ' + path);
+  };
+
+  const result = await doDailyTasks('cookie', {
+    request,
+    getToken: async () => 'robot-token',
+    wait: async () => {}
+  });
+
+  assert.equal(result.success, true);
+  assert.deepEqual(result.failed, []);
+  assert.match(result.message, /完成明细：达人关注推荐（关注并恢复 3 位推荐达人）/);
+  assert.match(result.message, /领取明细：成功领取 5经验/);
+  const creates = calls.filter((item) => item.path === '/dingyue/create');
+  const destroys = calls.filter((item) => item.path === '/dingyue/destroy');
+  assert.deepEqual(creates.map((item) => item.data.keyword), ['u1', 'u3', 'u4']);
+  assert.deepEqual(destroys.map((item) => item.data.keyword), ['u1', 'u3', 'u4']);
 });

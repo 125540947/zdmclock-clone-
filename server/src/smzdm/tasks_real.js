@@ -195,6 +195,29 @@ async function receiveDailyTaskReward(taskId, cookie, request, getToken) {
   return removeTags(r?.data?.reward_msg || r?.error_msg || '领取成功');
 }
 
+export async function getRecommendedFollowUsers(cookie, request = appRequest) {
+  const response = await request('/dy/user/dingyue/tuijian_search', {
+    cookie,
+    method: 'POST',
+    base: DINGYUE_BASE,
+    data: { type: 'user' }
+  });
+  if (Number(response?.error_code) !== 0) {
+    throw new Error('获取推荐达人失败：' + removeTags(response?.error_msg || '未知响应'));
+  }
+  const rows = Array.isArray(response?.data?.rows)
+    ? response.data.rows
+    : Array.isArray(response?.rows) ? response.rows : [];
+  return rows
+    .filter((item) => item && item.type === 'user')
+    .map((item) => ({
+      id: String(item.keyword_id || item.smzdm_id || '').trim(),
+      name: String(item.keyword || item.nickname || item.keyword_id || item.smzdm_id || '').trim(),
+      isFollow: String(item.is_follow || '0') === '1'
+    }))
+    .filter((item) => item.id);
+}
+
 function remainingCount(task) {
   const total = Number(task?.task_even_num ?? task?.task_event_num ?? 1);
   const finished = Number(task?.task_finished_num ?? 0);
@@ -203,7 +226,7 @@ function remainingCount(task) {
 }
 
 async function performDailyTask(task, cookie, options) {
-  const { request, adapter, articles, gpt, generateComment } = options;
+  const { request, adapter, articles, gpt, generateComment, wait } = options;
   const event = String(task?.task_event_type || '');
   const count = remainingCount(task);
   if (event === 'guide.crowd') {
@@ -212,6 +235,26 @@ async function performDailyTask(task, cookie, options) {
   }
   if (['interactive.follow.user', 'interactive.follow.tag', 'interactive.follow.brand'].includes(event)) {
     const redirect = task.task_redirect_url || {};
+    if (event === 'interactive.follow.user' && redirect.sub_type === 'search_user') {
+      const recommended = (await getRecommendedFollowUsers(cookie, request))
+        .filter((item) => !item.isFollow)
+        .slice(0, count);
+      if (recommended.length < count) {
+        throw new Error(`推荐达人不足：需要 ${count} 位，仅找到 ${recommended.length} 位未关注达人`);
+      }
+      for (const user of recommended) {
+        await doFollow(cookie, { target: user.id, type: 'user', method: 'create' }, request);
+        // 给服务端留出任务计数时间，再恢复原关注状态；测试可注入零等待实现。
+        await wait(800 + Math.floor(Math.random() * 701));
+        try {
+          await doFollow(cookie, { target: user.id, type: 'user', method: 'destroy' }, request);
+        } catch {
+          await wait(500);
+          await doFollow(cookie, { target: user.id, type: 'user', method: 'destroy' }, request);
+        }
+      }
+      return `关注并恢复 ${recommended.length} 位推荐达人`;
+    }
     const target = redirect.link_title || redirect.keyword || redirect.link_val;
     if (!target || String(target) === '0') throw new Error('任务未提供可关注对象');
     const type = event.endsWith('.tag') ? 'tag' : event.endsWith('.brand') ? 'brand' : 'user';
@@ -279,7 +322,15 @@ export async function doDailyTasks(cookie, opts = {}) {
   let tokenPromise;
   const getTokenCached = (c) => (tokenPromise ||= Promise.resolve(getToken(c)));
   const generateComment = opts.generateComment || generateProductComment;
-  const context = { request, adapter, articles: opts.articles || [], gpt: opts.gpt || {}, generateComment };
+  const wait = opts.wait || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const context = {
+    request,
+    adapter,
+    articles: opts.articles || [],
+    gpt: opts.gpt || {},
+    generateComment,
+    wait
+  };
   const first = await request('/task/list_v2', { cookie, method: 'POST', data: {} });
   const initial = parseDailyTaskList(first);
   const rewards = [];
@@ -500,13 +551,15 @@ export async function doFollow(cookie, { target, type = 'user', method = 'create
     data: {
       keyword: target,
       keyword_id: type === 'tag' ? keywordId || target : '',
+      ...(type === 'user' ? { is_from_task: '0' } : {}),
       type,
       refer: '',
       touchstone_event: ''
     }
   });
-  if (Number(r?.error_code) !== 0) throw new Error('关注失败：' + removeTags(r?.error_msg || '未知响应'));
-  return { success: true, message: removeTags(r?.error_msg || '关注成功') };
+  const actionText = method === 'destroy' ? '取消关注' : '关注';
+  if (Number(r?.error_code) !== 0) throw new Error(`${actionText}失败：` + removeTags(r?.error_msg || '未知响应'));
+  return { success: true, message: removeTags(r?.error_msg || `${actionText}成功`) };
 }
 
 // 分享文章（社区 smzdm_task library_task 逆向，user-api 签名接口）。
