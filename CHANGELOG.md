@@ -730,7 +730,24 @@
 - 模型列表空响应由「前端模糊提示不支持 /models」升级为「精确回显服务商原始响应」，为下一步精准修复 `extract` 或端点（如 `dashscope-intl`/`cn-hongkong.dashscope`/`*.maas.aliyuncs.com` 工作空间子域）提供一手依据。
 - `server/test/gpt.test.js` 现有 17 项路由用例全绿；全量 `node --test` 499 项通过。
 
-**代表提交**：（待 push，本地未提交）
+**代表提交**：`df6e061`（已部署 VPS）
+
+---
+
+## 批次 30 · 模型列表错误体探测（apihub 200+error，2026-09-01）
+
+**改动要点**
+- 线上实测定位根因：用户本地 `npm run dev` 的 `db.json` 无 apihub Key（仅 VPS 存过），本地后端不带鉴权调 `https://apihub.agnes-ai.com/v1/models`，该服务商返回 **HTTP 200 + `{"error":{"message":"未提供令牌"}}`**（非 4xx）。旧 `!resp.ok` 判据拦不到，被误当空列表 → 误导性「未获取到模型列表」。
+- `GET /api/gpt/models` 在解析前先对响应体做**错误体探测**：若响应体带 `error`/`message` 且不含任何模型数组（`data`/`output.models`/`models`），直接 `502 gpt_models_error` 回显服务商原话（如「未提供令牌」），不再沉默为空列表。真正空列表仍走 `gpt_models_empty` 诊断信封。
+
+**新增功能**
+- 无新能力；鉴权/配置类错误（Key 缺失或失效）现给出明确中文报错，而非空列表假象。
+
+**问题修复**
+- 修复「HTTP 200 + 错误体」被误判为空模型的盲区（apihub / 部分 DashScope 地域同款行为）。
+- `server/test/gpt.test.js` +1（apihub 200+错误体→502 `gpt_models_error` 且 `message` 含「未提供令牌」）；全量 `node --test` 500 项通过。
+
+**代表提交**：`b710047`（本地未部署）
 
 ---
 
