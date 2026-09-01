@@ -103,6 +103,21 @@ router.get('/models', authRequired, wrapAsync(async (req, res) => {
       });
     }
     const json = await resp.json();
+    // 部分服务商（apihub.agnes-ai.com、部分 DashScope 地域）出错时返回 HTTP 200 + 错误体
+    // （如 {"error":{"message":"未提供令牌"}}），而非 4xx。仅判 resp.ok 会把它误当空列表，
+    // 故在解析前先对响应体做错误探测：若响应体带 error/message 且无任何模型数组，则按错误上报。
+    const bodyErr = json?.error?.message || json?.error || json?.message;
+    const hasModelArray = Array.isArray(json?.data)
+      || Array.isArray(json?.output?.models)
+      || Array.isArray(json?.models);
+    if (bodyErr && !hasModelArray) {
+      const detail = typeof bodyErr === 'string' ? bodyErr : JSON.stringify(bodyErr).slice(0, 120);
+      return sendError(res, {
+        status: 502,
+        error: 'gpt_models_error',
+        message: `模型列表拉取失败（HTTP ${resp.status}）：${detail}`
+      });
+    }
     const models = source.extract(json);
     if (!models.length) {
       // 诊断：列表为空时回显服务商原始响应体（含顶层键名），便于定位返回结构/地域/工作空间差异。

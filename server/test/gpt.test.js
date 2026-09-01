@@ -297,4 +297,24 @@ test('GET /api/gpt/models 通义/DashScope 401（顶层 message）→ 502 错误
   }
 });
 
+test('GET /api/gpt/models 服务商返回 HTTP 200 + 错误体（未提供令牌）→ 502 错误信封', async () => {
+  const db = load();
+  db.settings.gpt = { apiBase: 'https://apihub.agnes-ai.com/v1', apiKey: '', model: 'gpt-4o-mini' };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).startsWith('https://') && String(url).endsWith('/models')) {
+      return { ok: true, json: async () => ({ error: { code: '', message: '未提供令牌 (request id: x)', type: 'AgnesAI_error' } }) };
+    }
+    return realFetch(url, init);
+  };
+  try {
+    const r = await j('GET', '/api/gpt/models');
+    assert.equal(r.status, 502);
+    assert.equal(r.data.error, 'gpt_models_error');
+    assert.match(r.data.message, /未提供令牌/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test('关闭测试服务器', () => { server.close(); });
