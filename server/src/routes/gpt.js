@@ -13,6 +13,13 @@ const router = Router();
 const TONES = ['friendly', 'pro', 'humor'];
 const TARGETS = ['comment', 'message', 'all'];
 const MAX_KEY_LENGTH = 4096;
+const TRANSIENT_MODEL_ERRORS = new Set([
+  'ECONNRESET',
+  'EAI_AGAIN',
+  'ETIMEDOUT',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_SOCKET'
+]);
 
 // 解析「模型列表」拉取源。绝大多数 OpenAI 兼容服务用 /models（data[].id）；
 // 但阿里云百炼 / DashScope 的 OpenAI 兼容端点不暴露模型清单，需改走原生 /api/v1/models
@@ -71,6 +78,29 @@ function extractModelsAny(json) {
   return [...new Set(out)];
 }
 
+function isTransientModelsError(error) {
+  const code = error?.code || error?.cause?.code;
+  return TRANSIENT_MODEL_ERRORS.has(code);
+}
+
+// 模型列表是幂等 GET。第三方网关偶尔会在 TLS/连接阶段重置连接，首次遇到明确的
+// 瞬时网络错误时立即重试一次；HTTP 鉴权错误、超时和业务错误均不重试。
+async function fetchModelsResponse(fetcher, source) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await fetcher(source.endpoint, {
+        method: 'GET',
+        headers: source.headers,
+        signal: AbortSignal.timeout(MODELS_TIMEOUT_MS)
+      });
+    } catch (error) {
+      if (attempt === 0 && isTransientModelsError(error)) continue;
+      throw error;
+    }
+  }
+  throw new Error('模型列表拉取失败');
+}
+
 // 拉取服务商可用模型列表。只读接口，但会用到已配置密钥，故走鉴权。
 // 仅访问 resolveGptProvider 解析出的可信地址（页面保存值已在校验时限制为 HTTPS），
 // 远端地址通过 pinnedFetch 钉死 DNS，避免密钥被 SSRF / DNS 重绑定带走。
@@ -83,11 +113,7 @@ router.get('/models', authRequired, wrapAsync(async (req, res) => {
   const source = resolveModelsSource(provider);
   const fetcher = provider.usePinnedFetch ? pinnedFetch : fetch;
   try {
-    const resp = await fetcher(source.endpoint, {
-      method: 'GET',
-      headers: source.headers,
-      signal: AbortSignal.timeout(MODELS_TIMEOUT_MS)
-    });
+    const resp = await fetchModelsResponse(fetcher, source);
     if (!resp.ok) {
       let detail = '';
       try {

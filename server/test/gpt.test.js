@@ -234,6 +234,38 @@ test('GET /api/gpt/models 成功拉取并规整模型列表（带鉴权头）', 
   }
 });
 
+test('GET /api/gpt/models 遇到一次 ECONNRESET 会重试并返回模型', async () => {
+  const db = load();
+  db.settings.gpt = { apiBase: 'https://apihub.agnes-ai.com/v1', apiKey: 'k-secret', model: 'agnes-2.5-flash' };
+  const realFetch = globalThis.fetch;
+  let attempts = 0;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).startsWith('https://') && String(url).endsWith('/models')) {
+      attempts += 1;
+      assert.equal(init.headers.Authorization, 'Bearer k-secret');
+      if (attempts === 1) {
+        const error = new Error('read ECONNRESET');
+        error.code = 'ECONNRESET';
+        throw error;
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ data: [{ id: 'agnes-2.5-flash' }, { id: 'agnes-2.5-pro' }] })
+      };
+    }
+    return realFetch(url, init);
+  };
+  try {
+    const r = await j('GET', '/api/gpt/models');
+    assert.equal(attempts, 2);
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.data.models, ['agnes-2.5-flash', 'agnes-2.5-pro']);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test('GET /api/gpt/models 远端返回非 200 → 502 错误信封', async () => {
   const db = load();
   db.settings.gpt = { apiBase: 'https://api.deepseek.com/v1', apiKey: 'k-secret', model: 'deepseek-chat' };

@@ -2,12 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 
 const m = vi.hoisted(() => ({
-  api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() }
+  api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
+  fetchGptModels: vi.fn()
 }));
 
 vi.mock('../src/api/client.js', () => ({
   default: m.api,
-  api: m.api
+  api: m.api,
+  fetchGptModels: m.fetchGptModels
 }));
 
 import GptReply from '../src/views/GptReply.vue';
@@ -37,6 +39,8 @@ beforeEach(() => {
   m.api.post.mockReset();
   m.api.put.mockReset();
   m.api.delete.mockReset();
+  m.fetchGptModels.mockReset();
+  m.fetchGptModels.mockResolvedValue({ models: [] });
   localStorage.clear();
   m.api.get.mockImplementation((url) => {
     if (url === '/gpt/config') return Promise.resolve(configResponse());
@@ -135,5 +139,25 @@ describe('AI 模型与自动评论配置', () => {
 
     const payload = m.api.put.mock.calls[0][1];
     expect(payload.apiKey).toBeUndefined();
+  });
+
+  it('获取模型后直接显示服务商返回的模型并可点击选择', async () => {
+    m.fetchGptModels.mockResolvedValue({
+      models: ['agnes-2.0-flash', 'agnes-2.5-flash', 'agnes-2.5-pro']
+    });
+    const wrapper = mount(GptReply);
+    await flushPromises();
+
+    await wrapper.find('[data-test="fetch-models"]').trigger('click');
+    await flushPromises();
+
+    expect(m.fetchGptModels).toHaveBeenCalledOnce();
+    expect(wrapper.text()).toContain('点击选择模型');
+    expect(wrapper.text()).toContain('agnes-2.5-pro');
+    expect(wrapper.findAll('.model-chip')).toHaveLength(3);
+    expect(wrapper.find('[data-test="model"]').element.value).toBe('agnes-2.0-flash');
+
+    await wrapper.findAll('.model-chip')[2].trigger('click');
+    expect(wrapper.find('[data-test="model"]').element.value).toBe('agnes-2.5-pro');
   });
 });

@@ -99,8 +99,7 @@
 
 <script setup>
 import { ref, computed, watch } from 'vue';
-import api from '../api/client.js';
-import { fetchGptModels } from '../api/client.js';
+import api, { fetchGptModels } from '../api/client.js';
 import { AI_PROVIDER_PRESETS, identifyAiProvider } from '../config/aiProviderPresets.js';
 
 const props = defineProps({
@@ -155,7 +154,9 @@ async function fetchModels() {
   fetchingModels.value = true;
   modelsError.value = '';
   try {
-    const { data } = await fetchGptModels();
+    // fetchGptModels 已经解包 axios 的 data，这里直接读取 models。
+    // 若再次按 { data } 解包，会把正常的 { models: [...] } 误判为空列表。
+    const data = await fetchGptModels();
     const list = Array.isArray(data?.models) ? data.models : [];
     availableModels.value = list;
     if (!list.length) {
