@@ -458,9 +458,9 @@ export async function runTask(task, db, opts = {}) {
   else r = await runAccountTask(task, db, opts);
 
   // —— 统一记录执行明细到 db.taskRuns ——
-  // 仅记录"确有动作 / 结果"的运行；纯 skipped（如定时签到无待签账号）每分钟都会触发，
-  // 若记录会刷屏（详见 runAccountTask 内的 skipped 分支），故跳过。
-  if (!(r && r.skipped)) {
+  // 仅静默忽略高频调度空转（如定时签到尚未到个人时间）；业务型跳过（众测受平台来源限制、
+  // 暂无活动等）仍写入执行明细，供页面准确显示“跳过”而不是“成功”。
+  if (!(r && r.silentSkip)) {
     await recordTaskRun(db, buildRecordFromResult(task, db, startedAt, r, opts)).catch(() => {});
   }
   return r;
@@ -508,6 +508,7 @@ async function runAccountTask(task, db, opts = {}) {
       return {
         ok: true,
         skipped: true,
+        silentSkip: true,
         message: `当前无账号需签到（时区 ${config.tz}，时段 ${nowHM}）`
       };
     }
@@ -518,6 +519,7 @@ async function runAccountTask(task, db, opts = {}) {
   const parts = [];
   const userResults = []; // 收集每账号结果，用于聚合结构化失败原因
   let okCount = 0;
+  let skippedCount = 0;
   const assetCache = new Map(); // P2-5：本轮内按账号缓存余额刷新结果，避免 N+1（同账号多任务只拉一次 smzdm）
   for (let i = 0; i < users.length; i++) {
     const user = users[i];
@@ -543,7 +545,7 @@ async function runAccountTask(task, db, opts = {}) {
         r = await runEngagement(task, db, user, opts);
       }
       // A → B 联动：任一账号动作成功，统一刷新权威资产并写入共享账本（供资产仪表盘读取）
-      if (r && r.ok) {
+      if (r && r.ok && !r.skipped) {
         // P2-5：N+1 节流——同一账号在本轮内只从 smzdm 拉一次余额（per-run 缓存），
         // 避免「每账号每成功任务都打一次 getUserInfo」的放大。注意：不可改用本地 user.assets 替代，
         // 否则 after≈before 会导致账本增量恒为 0（余额不再随签到/互动更新）。
@@ -566,7 +568,8 @@ async function runAccountTask(task, db, opts = {}) {
           persist();
         });
       }
-      if (r && r.ok) okCount += 1;
+      if (r && r.skipped) skippedCount += 1;
+      else if (r && r.ok) okCount += 1;
       parts.push(`${who}：${r ? r.message : '未知结果'}`);
       userResults.push({ who, r });
     } catch (e) {
@@ -576,7 +579,9 @@ async function runAccountTask(task, db, opts = {}) {
     });
   }
   const total = users.length;
-  const allOk = okCount === total;
+  const failedCount = total - okCount - skippedCount;
+  const allSkipped = skippedCount === total;
+  const noFailures = failedCount === 0;
   // 聚合结构化失败原因：互动任务带 articleId；签到 / 自定义端点带动作 + 文本原因。
   const reasons = [];
   for (const ur of userResults) {
@@ -591,14 +596,14 @@ async function runAccountTask(task, db, opts = {}) {
     }
   }
   const message =
-    `共 ${total} 个账号：${okCount} 成功 / ${total - okCount} 失败\n` + parts.join('\n');
+    `共 ${total} 个账号：${okCount} 成功 / ${failedCount} 失败 / ${skippedCount} 跳过\n` + parts.join('\n');
   // 全部成功才标 ok；部分失败标 partial（调度器据此仍记为完成，避免误报红色错误）
   return {
-    ok: allOk,
-    partial: !allOk && okCount > 0,
-    skipped: false,
+    ok: noFailures,
+    partial: failedCount > 0 && okCount > 0,
+    skipped: allSkipped,
     reasons,
-    result: { success: allOk, message, perUser: parts },
+    result: { success: noFailures && !allSkipped, skipped: allSkipped, message, perUser: parts },
     message
   };
 }

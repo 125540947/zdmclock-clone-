@@ -149,3 +149,30 @@ test('dailyTasks 将逐项失败原因传给执行明细层', async () => {
     REAL_STRATEGIES.dailyTasks.handler = originalHandler;
   }
 });
+
+test('内置任务 softSkip 向上传递为 skipped，不伪装成执行成功', async () => {
+  const originalHandler = REAL_STRATEGIES.crowdtest.handler;
+  REAL_STRATEGIES.crowdtest.handler = async () => ({
+    success: true,
+    softSkip: true,
+    skipReason: 'app_source_required',
+    message: '众测受平台来源限制，已跳过'
+  });
+  try {
+    const fakeAdapter = { requestRaw: async () => '{}' };
+    const db = { settings: { taskEndpoints: {} } };
+    const result = await runCustomEndpointTask(
+      { type: 'crowdtest', name: '众测申请' },
+      db,
+      { id: 'u1', cookie: 'c' },
+      fakeAdapter
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.skipped, true);
+    assert.equal(result.result.success, false);
+    assert.equal(result.result.softSkipped, true);
+    assert.equal(result.result.skipReason, 'app_source_required');
+  } finally {
+    REAL_STRATEGIES.crowdtest.handler = originalHandler;
+  }
+});

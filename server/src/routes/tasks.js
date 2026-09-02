@@ -353,18 +353,21 @@ router.post('/:id/run', mutationGuard, async (req, res) => {
   const { userId, count, articleId, articleSource } = req.body || {};
   try {
     const r = await runTask(t, db, { userId, count, articleId, articleSource });
-    if (!r.ok) {
+    if (!r.ok && !r.skipped) {
       notify(db, { title: `❌ 任务失败 · ${t.name}`, message: r.message }).catch(() => {});
       return res.status(400).json({ error: r.error, message: r.message });
     }
     // M-09 修复：手动运行任务的 lastRun 同样使用「配置时区」日期，与定时调度（scheduler tick）口径一致，
     // 避免 UTC 容器下任务执行日期落在 tz 前一天，与状态页"今天"跨日冲突。
     t.lastRun = todayStrTZ(config.tz);
-    t.lastResult = r.result.message;
-    t.status = 'done';
+    t.lastResult = r.result ? r.result.message : r.message;
+    t.status = r.skipped ? 'skipped' : 'done';
     await withWriteLock(() => persistAwait());
-    notify(db, { title: `✅ 任务完成 · ${t.name}`, message: r.result.message }).catch(() => {});
-    res.json({ ok: true, result: r.result });
+    notify(db, {
+      title: r.skipped ? `⏭️ 任务跳过 · ${t.name}` : `✅ 任务完成 · ${t.name}`,
+      message: t.lastResult
+    }).catch(() => {});
+    res.json({ ok: true, skipped: !!r.skipped, result: r.result });
   } catch (e) {
     notify(db, { title: `❌ 任务异常 · ${t.name}`, message: e.message }).catch(() => {});
     t.lastResult = e.message;

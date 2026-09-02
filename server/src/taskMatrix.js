@@ -22,7 +22,7 @@ export { REAL_STRATEGIES, REAL_STRATEGY_TYPES };
 export const CUSTOM_TASK_DEFS = [
   { type: 'lottery', name: '每日抽奖', icon: '🎰', builtin: true, desc: '已内置青龙社区逆向端点（jsonp_draw）；active_id 自动从 smzdm 转盘专题页获取，开启即运行，无需手填' },
   { type: 'turntable', name: '转盘抽奖', icon: '🎡', builtin: true, desc: '已内置青龙社区逆向端点（jsonp_draw）；active_id 自动获取（含会员/值会员双转盘），无需手填' },
-  { type: 'crowdtest', name: '全民众测', icon: '🧪', builtin: true, desc: '已内置：自动发现全民众测活动并完成能量值任务（无需 crowd_id）；也可填 crowd_id 走"申请具体商品"' },
+  { type: 'crowdtest', name: '全民众测', icon: '🧪', builtin: true, desc: '自动尝试发现全民众测活动；若平台要求 App 来源则明确跳过（非 Cookie 失效），也可导入 App 抓包端点或填 crowd_id' },
   { type: 'follow', name: '自动关注', icon: '➕', builtin: true, desc: '已内置青龙社区逆向端点（dingyue-api 关注用户/栏目/品牌，app 签名）；填 target（用户名/栏目名/品牌名）即可运行，无需抓包。target 支持填数组，每次运行自动关注列表里的下一个（轮询），实现「每次适配」' },
   { type: 'share', name: '自动分享', icon: '🔗', builtin: true, desc: '已内置青龙社区逆向端点（user-api 分享流程 complete_share_rule/daily_reward/callback）；填 articleId 即可运行，无需抓包' },
   { type: 'dailyTasks', name: '每日任务', icon: '📋', builtin: true, desc: '已内置：每天读取活动任务，自动完成支持的任务并领取任务及阶段奖励' }
@@ -176,10 +176,12 @@ export async function runCustomEndpointTask(task, db, user, adapter = smzdm) {
       const r = await strategy.handler(user.cookie, params);
       const reward = extractReward(r.message || '');
       const success = r.success !== false;
+      const softSkipped = r.softSkip === true;
       const failed = Array.isArray(r.failed) ? r.failed : [];
       return {
         ok: success,
         success,
+        skipped: softSkipped,
         message: r.message,
         // 每日任务内部已经逐项记录失败名称与原因；继续向上传递给 taskRunner，
         // 使执行明细的 reasons 区域能逐条显示，而不是只剩“失败 N 项”的汇总。
@@ -192,7 +194,9 @@ export async function runCustomEndpointTask(task, db, user, adapter = smzdm) {
         levelAfter: null,
         explicit: { gold: reward.gold, silver: reward.silver, exp: reward.exp },
         result: {
-          success,
+          success: success && !softSkipped,
+          softSkipped,
+          skipReason: softSkipped ? (r.skipReason || 'no_action') : undefined,
           message: r.message,
           completed: Array.isArray(r.completed) ? r.completed : [],
           rewards: Array.isArray(r.rewards) ? r.rewards : [],

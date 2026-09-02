@@ -456,14 +456,20 @@ async function doCrowdEnergyTasks(cookie, fetcher = call) {
   try {
     activityId = await getTestingActivityId(cookie, fetcher);
   } catch (e) {
-    // 接口异常（未登录 / 接口变更 / 网络）：软跳过，不计入失败，附带诊断信息便于排查
-    return {
-      success: true,
-      softSkip: true,
-      message: '全民众测跳过：' + e.message + '（如持续出现请检查 Cookie 或 smzdm 接口是否变更）',
-      rewards: [],
-      count: 0
-    };
+    const detail = String(e?.message || e || '未知错误');
+    // error_code 12「来源错误」是平台对非 App 来源的明确拒绝，与 Cookie 是否有效无关。
+    // 这是可预期的平台限制，按“跳过”返回；其他鉴权、网络或接口错误继续抛出，不能伪装成成功。
+    if (/来源错误|(?:error_code|错误代码)[:\s]*12/i.test(detail)) {
+      return {
+        success: true,
+        softSkip: true,
+        skipReason: 'app_source_required',
+        message: '全民众测已跳过：该接口仅允许什么值得买 App 来源调用，服务器请求被平台拒绝（error_code 12，非 Cookie 失效）',
+        rewards: [],
+        count: 0
+      };
+    }
+    throw e;
   }
   if (!activityId) {
     // 无进行中的全民众测活动（活动为周期性开启，并非一直有）：软跳过，不计入失败

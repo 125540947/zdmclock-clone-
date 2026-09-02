@@ -100,6 +100,21 @@ test('doCrowdtest 自动模式：无进行中活动时软跳过（不计入失�
   assert.match(r.message, /暂无可参与的活动|未开启|无进行中活动/);
 });
 
+test('doCrowdtest 自动模式：来源错误按平台限制跳过，且明确不是 Cookie 失效', async () => {
+  const fetcher = async () => ({ error_code: 12, error_msg: '来源错误' });
+  const r = await doCrowdtest('cookie', { call: fetcher });
+  assert.equal(r.success, true);
+  assert.equal(r.softSkip, true);
+  assert.equal(r.skipReason, 'app_source_required');
+  assert.match(r.message, /仅允许.*App|平台拒绝/);
+  assert.match(r.message, /非 Cookie 失效/);
+});
+
+test('doCrowdtest 自动模式：非来源限制的接口错误仍计为失败', async () => {
+  const fetcher = async () => ({ error_code: 500, error_msg: '系统繁忙' });
+  await assert.rejects(() => doCrowdtest('cookie', { call: fetcher }), /系统繁忙/);
+});
+
 test('doCrowdtest 显式 crowd_id：走 ajax_participate 申请路径', async () => {
   const fetcher = async (url) => {
     if (url.includes('ajax_participate')) return { error_code: 0, error_msg: '申请成功' };

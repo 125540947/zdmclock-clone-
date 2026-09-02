@@ -13,6 +13,7 @@ const { runTask, collectArticleIds, resolveUsers, runClockForUser, sampleArticle
 const { load } = await import('../src/store.js');
 const { config } = await import('../src/config.js');
 const { smzdm } = await import('../src/smzdm/adapter.js');
+const { REAL_STRATEGIES } = await import('../src/smzdm/tasks_real.js');
 const { resolvedCheckInTime } = await import('../src/clockSchedule.js');
 
 // 本文件不涉及风控断言：关闭"人类化随机等待"以保持用例快速且确定性
@@ -105,6 +106,41 @@ test('runTask 多账号签到全成功：ok=true 且聚合两人', async () => {
   assert.equal(r.partial, false);
   assert.match(r.message, /2 个账号/);
   assert.match(r.message, /2 成功/);
+});
+
+test('runTask 众测 softSkip 记录为跳过，且不写成功资产账本', async () => {
+  const originalHandler = REAL_STRATEGIES.crowdtest.handler;
+  const originalRequestRaw = smzdm.requestRaw;
+  REAL_STRATEGIES.crowdtest.handler = async () => ({
+    success: true,
+    softSkip: true,
+    skipReason: 'app_source_required',
+    message: '全民众测已跳过：仅允许 App 来源调用'
+  });
+  smzdm.requestRaw = async () => '{}';
+  const db = {
+    users: [{ id: 'u1', nickname: '12', cookie: 'c', assets: { gold: 0, silver: 0, exp: 0 } }],
+    clockRecords: [],
+    baoliao: [],
+    settings: { taskEndpoints: {} },
+    assetLedger: [],
+    assetSnapshots: [],
+    taskRuns: []
+  };
+  try {
+    const r = await runTask({ id: 't_crowdtest', type: 'crowdtest', name: '众测申请' }, db, {});
+    assert.equal(r.ok, true);
+    assert.equal(r.skipped, true);
+    assert.match(r.message, /0 成功 \/ 0 失败 \/ 1 跳过/);
+    assert.equal(db.assetLedger.length, 0, '跳过不是成功动作，不应写入资产账本');
+    assert.equal(db.taskRuns.length, 1, '业务型跳过仍应出现在执行明细中');
+    assert.equal(db.taskRuns[0].skipped, true);
+    assert.equal(db.taskRuns[0].ok, true);
+  } finally {
+    REAL_STRATEGIES.crowdtest.handler = originalHandler;
+    if (originalRequestRaw === undefined) delete smzdm.requestRaw;
+    else smzdm.requestRaw = originalRequestRaw;
+  }
 });
 
 test('runClockForUser 瞬时失败按指数退避重试后成功', async () => {

@@ -69,7 +69,8 @@
                 <p class="hint-sm">
                   该任务已内置真实端点与签名，开启后<strong>自动运行</strong>：
                   转盘/抽奖会<strong>自动从 smzdm 专题页获取 active_id</strong>（无需手填）；
-                  众测会<strong>自动跑全民众测能量值任务</strong>（无需 crowd_id）。
+                  众测会<strong>自动尝试全民众测能量值任务</strong>（无需 crowd_id）；若平台要求 App 来源，
+                  本次会明确显示“跳过”，这不代表 Cookie 失效。
                   仅在想覆盖时才填参数：<code>active_id</code> / <code>crowd_id</code> /
                   <code>topicUrl</code>（专题页链接）均可选填。
                 </p>
