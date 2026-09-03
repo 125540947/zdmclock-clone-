@@ -878,6 +878,25 @@
 
 ---
 
+## 批次 35·补二 · GPT 请求超时与 token 预算耦合（2026-09-01）
+
+**改动要点**
+- 批次 35·补把输出 token 预算放宽到 4096 后，原 `GPT_REQUEST_TIMEOUT=20000` 反过来成了新的瓶颈：思维链偶发跑飞时，本应「答案截断为空」的失败会变成「请求超时」，且超时错误此前未纳入 `isRetriableCommentError`，空返回重试兜不住，等于把一种失败换成了另一种。
+- 二者必须耦合调参。线上实测出词速率约 50~110 tokens/s，按最保守的 50 计，跑满 4096 预算约需 82s；超时若小于该值，放宽的预算根本用不到。
+
+**新增功能**
+- 新增可配置请求超时 `GPT_REQUEST_TIMEOUT`（`config.gptRequestTimeout`），默认 `90000`，取值收敛在 `5000~300000`，便于与 `GPT_MAX_TOKENS` 同步调整。
+
+**问题修复**
+- `config.gptRequestTimeout` 默认 `90000ms`；`gptAdapter.js` 超时改读 `config.gptRequestTimeout`，消除原先裸 `Number(env)` 在填非法值时得到 `NaN`、进而令 `AbortSignal.timeout` 抛错的隐患（统一走 `boundedInt` 钳制）。
+- `isRetriableCommentError` 正则追加「请求超时」：与空返回同源（思维链偶发跑飞，只是撞在超时而非预算上），同属可重试的随机波动，复用既有 `maxCommentRetry=2` 退避链路；真故障仍一次判失败。
+- `.env.example` 补充 `GPT_REQUEST_TIMEOUT` 及「须与 `GPT_MAX_TOKENS` 匹配」的耦合说明（已有测试守护该不变量）。
+- 测试：`gptAdapter.test.js` 新增「超时取自 config」与「超时余量≥跑满预算所需（90s ≥ 81.9s）」不变量 2 项；`taskRunner.test.js` 新增超时可重试用例。后端全量 **512 项通过**（本次全量一度卡在 `update.test.js` 的后台 git 操作，隔离复跑 9/9 通过、再跑全量 512/512，确认为 sandbox 偶发而非回归）。
+
+**代表提交**：`65fd97d`
+
+---
+
 ## 维护约定（默认规范）
 
 1. **分批原则**：每次整理历史或新增工作阶段，按**逻辑阶段**（功能/安全波次）或**时间**划分为批次；同一波次跨多日可合并为一批次。
