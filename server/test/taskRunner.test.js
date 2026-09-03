@@ -9,7 +9,7 @@ process.env.DATA_DIR = path.join(os.tmpdir(), 'zdm-task-' + process.pid + '-' + 
 process.env.GPT_API_KEY = 'test-key'; // 使 config.gptEnabled=true，runGptBatch 真实路径可达
 process.env.CLOCK_STAGGER_MS = '0'; // 测试关闭错峰，保证批量用例快速且确定
 process.env.CLOCK_STAGGER_JITTER_MS = '0';
-const { runTask, collectArticleIds, resolveUsers, runClockForUser, sampleArticleIds, computeSampleSize, withAccountLock } = await import('../src/taskRunner.js');
+const { runTask, collectArticleIds, resolveUsers, runClockForUser, sampleArticleIds, computeSampleSize, withAccountLock, isRetriableCommentError } = await import('../src/taskRunner.js');
 const { load } = await import('../src/store.js');
 const { config } = await import('../src/config.js');
 const { smzdm } = await import('../src/smzdm/adapter.js');
@@ -482,4 +482,22 @@ test('withAccountLock：不同 userId 互不阻塞', async () => {
   await Promise.all([runA, runB]);
   assert.equal(a, 2);
   assert.equal(b, 2);
+});
+
+// A-13 批次 35·补：推理模型偶发把 token 预算全用在思维链上，答案被截断为空。
+// 这类失败是随机的（同一篇同一预算重复请求 reasoning 波动 111~301+），应复用评论退避重试兜住；
+// 但真故障（鉴权、参数、缺商品信息等）必须一次判失败，不能被重试掩盖。
+test('isRetriableCommentError：限流与模型空返回可重试', () => {
+  assert.equal(isRetriableCommentError('评论速度太快，请稍后再试'), true);
+  assert.equal(isRetriableCommentError('操作太频繁'), true);
+  assert.equal(isRetriableCommentError('大模型返回内容为空（请检查模型与参数）'), true);
+});
+
+test('isRetriableCommentError：真故障不重试', () => {
+  assert.equal(isRetriableCommentError('缺少商品标题、内容和价格；请改用“从好价列表取”'), false);
+  assert.equal(isRetriableCommentError('自动评论需要先启用 AI 回复'), false);
+  assert.equal(isRetriableCommentError('GPT 接口错误 401：invalid api key'), false);
+  assert.equal(isRetriableCommentError('AI 评论未通过自然度检查：疑似广告腔'), false);
+  assert.equal(isRetriableCommentError(''), false);
+  assert.equal(isRetriableCommentError(undefined), false);
 });

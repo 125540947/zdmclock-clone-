@@ -142,9 +142,12 @@ export const config = {
   // （如 stepfun/step-3.7-flash），这类模型先输出 reasoning（思维链）再输出答案 content，
   // 而 OpenAI 兼容接口的 max_tokens 是 reasoning + content 的【总】预算。旧值 200 对推理模型过小，
   // reasoning 占满预算后答案 content 被截断为空（finish_reason=length），导致评论/回复任务
-  // 偶发「大模型返回内容为空」。提高到 1024 给推理模型留出余量（模型会在答案后自然停止，
-  // 不会真生成 1024 token，实际计费按 completion_tokens 实算，不浪费）。可经 GPT_MAX_TOKENS 调整。
-  gptMaxTokens: boundedInt(process.env.GPT_MAX_TOKENS, 256, 8192, 1024),
+  // 偶发「大模型返回内容为空」。模型会在答案写完后自然停止，不会真生成满额 token，
+  // 实际计费按 completion_tokens 实算，因此上限只是天花板、放宽不增加常态成本。
+  // 默认值取 4096 而非 1024：线上实测同一篇商品、同一预算连打 3 次，reasoning 长度随机波动很大
+  // （111 / 208 / 301 tokens，completion 359 / 664 / 983），1024 下 983 已贴上限，偶发的长思维链
+  // 会直接越界截断。4096 相对实测峰值留 4 倍余量。可经 GPT_MAX_TOKENS 调整。
+  gptMaxTokens: boundedInt(process.env.GPT_MAX_TOKENS, 256, 8192, 4096),
   // 推送通知（可选）：渠道 + 凭据，作为初始默认；UI 配置会持久化覆盖（见 db.settings.push）
   // channel: serverchan | bark | telegram | webhook；留空表示未配置
   pushChannel: process.env.PUSH_CHANNEL || '',

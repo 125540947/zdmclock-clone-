@@ -109,6 +109,14 @@ export function computeSampleSize(poolSize, limit, rng = Math.random) {
   return Math.min(poolSize, r);
 }
 
+// 评论失败中「值得退避重试」的两类偶发错误（其余错误一次即判失败，避免掩盖真故障）：
+// 1) smzdm 评论限流（"速度太快"等提示）；
+// 2) 推理模型把 token 预算全花在思维链上、答案被截断成空串（批次 35 实证：同一篇商品用同一预算
+//    重复请求，reasoning 长度随机波动 111~301+ tokens，偶发越界；重试通常即可拿到正常输出）。
+export function isRetriableCommentError(message) {
+  return /速度太快|太快|频率|频繁|请稍后|返回内容为空/.test(String(message || ''));
+}
+
 // 评论 / 收藏 / 点赞：支持单篇（manual）或多篇（baoliao）批量执行
 async function runEngagement(task, db, user, opts) {
   const action = task.type; // 'comment' | 'favorite' | 'point'
@@ -155,7 +163,8 @@ async function runEngagement(task, db, user, opts) {
       }
       dbgLog('[smzdm-debug] engagement 拟人化等待后继续：第', idx + 1, '/', articleIds.length, '篇，articleId=', aid);
     }
-    // 评论被 smzdm 限流（"速度太快"）时针对性退避重试，提升成功率；收藏/点赞不受此限
+    // 评论遇偶发错误（限流 / 模型空返回，见 isRetriableCommentError）时退避重试，提升成功率；
+    // 收藏、点赞不走生成链路也不受限流影响，故不重试
     const maxCommentRetry = action === 'comment' ? 2 : 0;
     let attempt = 0;
     while (attempt <= maxCommentRetry) {
@@ -189,12 +198,11 @@ async function runEngagement(task, db, user, opts) {
         results.push(r.message);
         break;
       } catch (e) {
-        const rateLimited = /速度太快|太快|频率|频繁|请稍后/.test(e.message);
-        if (attempt < maxCommentRetry && rateLimited) {
+        if (attempt < maxCommentRetry && isRetriableCommentError(e.message)) {
           // 退避：在原有间隔基础上额外延长，逐渐拉开节奏避免再次被限
           attempt++;
           await sleep(config.engagementDelayMaxMs * attempt + jitterDelay(config.engagementDelayMinMs, config.engagementDelayMaxMs));
-          dbgLog('[smzdm-debug] 评论被限流，退避重试：第', attempt, '次，articleId=', aid);
+          dbgLog('[smzdm-debug] 评论失败可重试，退避重试：第', attempt, '次，articleId=', aid, '原因=', e.message);
           continue;
         }
         failed += 1;
