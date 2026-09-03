@@ -25,6 +25,55 @@ export function healthCheckDue(minute, lastMinute, interval) {
   return Number.isFinite(interval) && interval > 0 && minute - lastMinute >= interval;
 }
 
+// 分时段随机执行（批次 38）：任务配置 randomSchedule 时，忽略固定 cron，改为"当天随机时刻计划"。
+// 设计：每个任务每天在 [start,end] 窗口内随机选 slots 个不重复时刻（按配置时区），调度器在这些时刻触发任务；
+// 队列（commentQueue）仍负责把 N 篇拆成多片消化，随机计划决定"几点发"——两者正交，共同构成拟人节奏，
+// 避免"每天 9/12/15/18/21 准点"的机械感。计划按"日期+任务"缓存于内存，当天稳定（重启后当天重新随机，
+// 已发评论仍记录在队列中、不会重复发）。
+const randomPlans = new Map(); // taskId -> { date: 'YYYY-MM-DD', times: number[]（分钟） }
+
+function parsePlanHM(hm, fallbackMin) {
+  if (typeof hm !== 'string' || !/^\d{1,2}:\d{2}$/.test(hm)) return fallbackMin;
+  const [h, m] = hm.split(':').map(Number);
+  return Math.min(1439, Math.max(0, h * 60 + m));
+}
+
+// 纯函数：在 [startMin,endMin] 内生成 slots 个不重复随机分钟（升序），rng 可注入便于单测。
+export function generateRandomPlanTimes(startMin, endMin, slots, rng = Math.random) {
+  const lo = Math.min(startMin, endMin);
+  const hi = Math.max(startMin, endMin);
+  const n = Math.max(1, Math.min(48, (slots | 0) || 1));
+  const span = hi - lo;
+  const times = [];
+  const used = new Set();
+  let guard = 0;
+  const maxGuard = n * 50 + 50;
+  while (times.length < n && guard < maxGuard) {
+    guard++;
+    const m = lo + Math.floor(rng() * (span + 1));
+    if (!used.has(m)) {
+      used.add(m);
+      times.push(m);
+    }
+  }
+  times.sort((a, b) => a - b);
+  return times;
+}
+
+// 取/建某任务当天的随机执行计划；日期变更自动重算。
+function ensureRandomPlan(t, z) {
+  const dateStr = z.date; // zonedWallClock 已按配置时区折算的"今天"
+  const cached = randomPlans.get(t.id);
+  if (cached && cached.date === dateStr) return cached.times;
+  const rs = t.randomSchedule || {};
+  const start = parsePlanHM(rs.start || config.engagementRandomWindowStart, 8 * 60);
+  const end = parsePlanHM(rs.end || config.engagementRandomWindowEnd, 23 * 60);
+  const slots = rs.slots || config.engagementRandomSlots;
+  const times = generateRandomPlanTimes(start, end, slots);
+  randomPlans.set(t.id, { date: dateStr, times });
+  return times;
+}
+
 // 单字段匹配：支持 * 、*/n 、a-b 、a,b,c
 function fieldMatch(field, val, min, _max) {
   if (field === '*') return true;
@@ -206,13 +255,30 @@ export function tick() {
     const startupEnabled = (db.tasks || []).some((t) => t.type === 'startup' && t.enabled);
     const jobs = [];
     for (const t of db.tasks) {
-      if (!t.enabled || !t.cron) continue;
-      // 账号级流水线任务：智能启动调度接管时跳过（仍可手动在「自动任务」页单跑）
-      if (startupEnabled && ACCOUNT_PIPELINE_TYPES.has(t.type)) continue;
-      if (!cronMatch(t.cron, z)) continue;
+      if (!t.enabled) continue;
+      // 分时段随机执行（批次 38）：randomSchedule 启用时忽略固定 cron，改用当天随机时刻计划；
+      // 队列（commentQueue）仍负责把 N 篇拆成多片消化，随机计划只决定"几点发"，两者正交。
+      let matched = false;
+      let drainRemaining = false;
+      if (t.randomSchedule && t.randomSchedule.enabled) {
+        const plan = ensureRandomPlan(t, z);
+        const cur = z.getHours() * 60 + z.getMinutes();
+        if (plan.includes(cur)) {
+          matched = true;
+          // 当天最后一个随机时刻：把队列剩余全部发完，确保 campaign 当天收尾（避免跨天漏评）
+          drainRemaining = cur === plan[plan.length - 1];
+        }
+      } else {
+        // 账号级流水线任务：智能启动调度接管时跳过（仍可手动在「自动任务」页单跑）
+        if (!t.cron) continue;
+        if (startupEnabled && ACCOUNT_PIPELINE_TYPES.has(t.type)) continue;
+        if (!cronMatch(t.cron, z)) continue;
+        matched = true; // 固定 cron 命中：本分钟执行（randomSchedule 分支已在命中时置 true）
+      }
+      if (!matched) continue;
       if (lastFiredMinute[t.id] === minuteKey) continue; // 本分钟已触发，跳过
       lastFiredMinute[t.id] = minuteKey;
-      const job = runTask(t, db, { scheduled: true })
+      const job = runTask(t, db, { scheduled: true, drainRemaining })
         .then((r) => {
           // 多账号部分成功视为完成；业务型软跳过单独标记，不能伪装成绿色成功。
           const completed = r.ok || r.partial || r.skipped;

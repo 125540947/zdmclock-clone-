@@ -17,7 +17,7 @@ function defaultData() {
       // 完整日常流水线（签到+互动+抽奖等）。启用后，主调度不再对账号级任务按固定 cron 全员同刻触发，
       // 改由本任务按账号错峰统一跑（第一定律：避免多账号同时启动把 VPS 打爆）。
       { id: 't_startup', type: 'startup', name: '智能启动调度', icon: '🚀', enabled: true, cron: '* * * * *', lastRun: null, lastResult: null, status: 'idle' },
-      { id: 't_comment', type: 'comment', name: '自动评论', icon: '💬', enabled: false, cron: '0 9,12,15,18,21 * * *', articleId: '', articleSource: 'manual', commentQueue: [], commentCampaignDate: null, commentCampaignTotal: 0, lastRun: null, lastResult: null, status: 'idle' },
+      { id: 't_comment', type: 'comment', name: '自动评论', icon: '💬', enabled: false, cron: '0 9,12,15,18,21 * * *', randomSchedule: { enabled: true, start: '08:00', end: '23:00', slots: 6 }, articleId: '', articleSource: 'manual', commentQueue: [], commentCampaignDate: null, commentCampaignTotal: 0, lastRun: null, lastResult: null, status: 'idle' },
       { id: 't_favorite', type: 'favorite', name: '自动收藏', icon: '⭐', enabled: false, cron: '0 11 * * *', articleId: '', articleSource: 'manual', lastRun: null, lastResult: null, status: 'idle' },
       { id: 't_point', type: 'point', name: '自动点赞', icon: '👍', enabled: false, cron: '0 12 * * *', articleId: '', articleSource: 'manual', lastRun: null, lastResult: null, status: 'idle' },
       // GPT 定时批量生成：从好价列表取内容 → 大模型生成评论草稿（可选自动发布）
@@ -204,6 +204,12 @@ export function load() {
   const commentTask = cache.tasks.find((t) => t.id === 't_comment');
   if (commentTask && commentTask.cron === '0 10 * * *') {
     commentTask.cron = '0 9,12,15,18,21 * * *';
+    migrated = true;
+  }
+  // 批次 38：评论任务启用"分时段随机执行"（randomSchedule），在 08:00–23:00 窗口内随机选时刻，
+  // 取代固定 cron 时段，进一步拟人。仅对 t_comment 默认开启；旧库缺省补上。
+  if (commentTask && !('randomSchedule' in commentTask)) {
+    commentTask.randomSchedule = { enabled: true, start: '08:00', end: '23:00', slots: 6 };
     migrated = true;
   }
   // 启动期清理旧库超出的签到记录（内存截断），仅在实际发生迁移或截断时落盘一次

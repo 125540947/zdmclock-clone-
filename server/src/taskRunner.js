@@ -166,9 +166,13 @@ async function runEngagement(task, db, user, opts) {
         };
       }
     }
-    // 本时间片取前 batchPerSlot 条，并从队列移除（失败项不再重试，避免反复撞限流）
-    const batch = (task.commentQueue || []).slice(0, config.engagementBatchPerSlot);
-    task.commentQueue = (task.commentQueue || []).slice(config.engagementBatchPerSlot);
+    // 本时间片取前 batchPerSlot 条，并从队列移除（失败项不再重试，避免反复撞限流）。
+    // 若为当天最后一个随机时刻（opts.drainRemaining，由调度器在随机计划末位打标），则把剩余全部发完，
+    // 确保 campaign 当天收尾，避免跨天漏评。
+    const takeCount =
+      opts && opts.drainRemaining ? (task.commentQueue || []).length : config.engagementBatchPerSlot;
+    const batch = (task.commentQueue || []).slice(0, takeCount);
+    task.commentQueue = (task.commentQueue || []).slice(takeCount);
     articleIds = batch;
   } else if (articleSource === 'baoliao') {
     // 兼容（关闭分时段 / 收藏 / 点赞）：一次性抽样处理

@@ -667,3 +667,58 @@ test('runEngagement 关闭分时段（engagementQueueEnabled=false）时仍一�
     config.engagementDelayLongProbability = prevProb;
   }
 });
+
+test('runEngagement 分时段：drainRemaining 末位时刻一次发完剩余队列（确保当天收尾）', async () => {
+  // 模拟 campaign 进行中（已发 2 篇、队列剩 4 篇），本次为当天最后一个随机时刻：
+  // drainRemaining 应忽略 engagementBatchPerSlot，把剩余 4 篇一次发完，避免跨天漏评。
+  const prevQ = config.engagementQueueEnabled;
+  const prevBatch = config.engagementBatchPerSlot;
+  const prevMin = config.engagementDelayMinMs;
+  const prevMax = config.engagementDelayMaxMs;
+  const prevProb = config.engagementDelayLongProbability;
+  const prevTz = config.tz;
+  config.engagementQueueEnabled = true;
+  config.engagementBatchPerSlot = 2; // 每片 2 篇（drainRemaining 应忽略此上限）
+  config.engagementDelayMinMs = 0;
+  config.engagementDelayMaxMs = 0;
+  config.engagementDelayLongProbability = 0;
+  config.tz = 'local';
+  const d = new Date();
+  const todayStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const db = {
+    users: [{ id: 'u1', cookie: 'c' }],
+    baoliao: Array.from({ length: 6 }, (_, i) => ({
+      smzdmUrl: 'https://x/p/' + (500 + i),
+      title: `商品 ${i}`,
+      content: '小巧便携',
+      price: `${99 + i} 元`
+    })),
+    settings: { gpt: { enabled: true, tone: 'friendly', prompt: '' } },
+    taskRuns: []
+  };
+  const called = [];
+  const orig = smzdm.doComment;
+  smzdm.doComment = async (cookie, opts) => { called.push(opts.articleId); return { count: 1, message: '评论成功' }; };
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: '这个尺寸放办公桌挺合适。' } }] }) });
+  // 模拟 campaign 进行中（已发 2 篇、队列剩 4 篇）：队列须存与 collectArticleIds 同构的文章对象，
+  // 不能只存字符串 id（runEngagement 取 entry.id / entry.title 生成评论），故用真实形状构造剩余 4 篇。
+  const allIds = collectArticleIds({ articleSource: 'baoliao' }, db, 'baoliao');
+  const remainingQueue = allIds.slice(2); // 取后 4 篇作为"待发剩余"，前 2 篇视为已发
+  const task = { type: 'comment', articleSource: 'baoliao', limit: 6, commentQueue: remainingQueue, commentCampaignDate: todayStr, commentCampaignTotal: 6, name: '评论' };
+  try {
+    const r = await runTask(task, db, { drainRemaining: true });
+    assert.equal(r.ok, true);
+    assert.equal(called.length, 4, 'drainRemaining 应忽略 batchPerSlot，一次发完剩余 4 篇');
+    assert.equal(task.commentQueue.length, 0, '末位时刻后队列清空');
+    assert.match(r.message, /分时段：本片 6\/6 篇/);
+  } finally {
+    smzdm.doComment = orig;
+    globalThis.fetch = realFetch;
+    config.engagementQueueEnabled = prevQ;
+    config.engagementBatchPerSlot = prevBatch;
+    config.engagementDelayMinMs = prevMin;
+    config.engagementDelayMaxMs = prevMax;
+    config.engagementDelayLongProbability = prevProb;
+    config.tz = prevTz;
+  }
+});

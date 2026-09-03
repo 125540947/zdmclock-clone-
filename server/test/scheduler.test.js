@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { cronMatch, validateCron, healthCheckDue } = await import('../src/scheduler.js');
+const { cronMatch, validateCron, healthCheckDue, generateRandomPlanTimes } = await import('../src/scheduler.js');
 const { zonedWallClock } = await import('../src/clockSchedule.js');
 
 // 固定锚点：2026-08-06 是星期四（getDay() === 4）
@@ -113,4 +113,40 @@ test('cronMatch 接受 zonedWallClock 对象按墙钟求值', () => {
   const z = zonedWallClock(inst, 'Asia/Shanghai'); // 09:30 周四
   assert.equal(cronMatch('30 9 * * *', z), true);
   assert.equal(cronMatch('0 10 * * *', z), false);
+});
+
+// ===================== 批次 38：分时段随机执行计划生成 =====================
+test('generateRandomPlanTimes：窗口内不重复、升序、数量受控', () => {
+  // 固定 rng 保证可复现：在 [480,1380]（08:00–23:00）内取 6 个不重复随机分钟
+  let i = 0;
+  const seq = [0.1, 0.5, 0.9, 0.3, 0.7, 0.2, 0.99, 0.4]; // 循环取用
+  const rng = () => seq[i++ % seq.length];
+  const times = generateRandomPlanTimes(480, 1380, 6, rng);
+  assert.equal(times.length, 6, '返回 slots 个时刻');
+  assert.equal(new Set(times).size, 6, '不重复');
+  assert.ok(times.every((m) => m >= 480 && m <= 1380), '全部落在窗口内');
+  // 升序
+  for (let k = 1; k < times.length; k++) assert.ok(times[k] > times[k - 1], '升序排列');
+});
+
+test('generateRandomPlanTimes：slots 上限封顶 48、空窗口退化为单点', () => {
+  // slots 超 48 应被钳制
+  const big = generateRandomPlanTimes(600, 605, 100, () => 0.5);
+  assert.ok(big.length <= 48, 'slots 不超过 48');
+  // 窗口极小（相邻分钟）也只能产出 1 个不重复点
+  const tiny = generateRandomPlanTimes(600, 600, 5, () => 0);
+  assert.equal(tiny.length, 1);
+  assert.equal(tiny[0], 600);
+});
+
+test('generateRandomPlanTimes：lo>hi 时自动交换区间', () => {
+  // 故意反序传参（1380,480），函数内部应取 min/max 归一化；用变化 rng 保证 3 个不重复值可生成
+  let i = 0;
+  const seq = [0.1, 0.5, 0.9, 0.3, 0.7, 0.2, 0.99, 0.4];
+  const rng = () => seq[i++ % seq.length];
+  const t = generateRandomPlanTimes(1380, 480, 3, rng);
+  assert.equal(t.length, 3);
+  assert.ok(t.every((m) => m >= 480 && m <= 1380), '交换后结果仍落在原窗口内');
+  assert.equal(new Set(t).size, 3, '反序参数下仍不重复');
+  for (let k = 1; k < t.length; k++) assert.ok(t[k] > t[k - 1], '升序排列');
 });

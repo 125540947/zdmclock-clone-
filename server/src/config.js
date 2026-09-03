@@ -226,6 +226,13 @@ export const config = {
   //   默认 3；配合默认 cron '0 9,12,15,18,21 * * *'（5 个时间片）可把 12 篇拆成约 4 片消化，而非一次性 12 篇。
   engagementQueueEnabled: parseBool(process.env.ENGAGEMENT_QUEUE_ENABLED, true),
   engagementBatchPerSlot: boundedInt(process.env.ENGAGEMENT_BATCH_PER_SLOT, 1, 50, 3),
+  // 分时段随机执行（批次 38）：评论等任务可配置 randomSchedule，在窗口内随机选若干时刻执行，而非固定 cron 时段。
+  // - engagementRandomWindowStart/End：默认随机窗口 08:00–23:00（用户诉求"8-23 点随机拟人执行"）。
+  // - engagementRandomSlots：每天在窗口内随机选几个时刻（默认 6）；队列负责把 N 篇拆开，随机计划负责"几点发"。
+  //   当天最后一个随机时刻会把队列剩余全部发完，确保 campaign 当天收尾。
+  engagementRandomWindowStart: process.env.ENGAGEMENT_RANDOM_WINDOW_START || '08:00',
+  engagementRandomWindowEnd: process.env.ENGAGEMENT_RANDOM_WINDOW_END || '23:00',
+  engagementRandomSlots: boundedInt(process.env.ENGAGEMENT_RANDOM_SLOTS, 1, 48, 6),
   // 持久化与容量上限（P1-4）：
   // - clockRecordsMaxPerUser：每个账号保留最近 N 条签到记录（按日期降序截断），防止 db.json 无限膨胀。
   //   设为 0 可关闭截断（不推荐，仅调试用）。
