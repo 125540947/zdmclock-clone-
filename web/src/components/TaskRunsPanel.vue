@@ -45,6 +45,15 @@
             <span class="reason-msg">{{ rs.error_msg }}</span>
           </div>
         </div>
+        <div v-if="r.details && r.details.length && r.type === 'comment'" class="run-details">
+          <div class="run-details-title">回复详情</div>
+          <div v-for="(d, i) in r.details" :key="i" class="run-detail" :class="{ bad: !d.ok }">
+            <span class="detail-idx">{{ i + 1 }}.</span>
+            <span class="detail-aid">文章 {{ d.articleId }}</span>
+            <span class="detail-comment">「{{ d.comment || '（未生成）' }}」</span>
+            <span v-if="!d.ok" class="detail-msg">失败：{{ d.message }}</span>
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -397,5 +406,43 @@ onMounted(loadRuns);
   color: #ffb3ac;
   font-size: 13px;
   margin-top: 10px;
+}
+.run-details {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-top: 1px dashed var(--border);
+  padding-top: 8px;
+}
+.run-details-title {
+  font-size: 11px;
+  color: var(--text-faint);
+  letter-spacing: 0.04em;
+  margin-bottom: 2px;
+}
+.run-detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: baseline;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.run-detail.bad .detail-comment {
+  color: #ffb3ac;
+}
+.detail-idx {
+  color: var(--text-faint);
+}
+.detail-aid {
+  color: var(--gold);
+}
+.detail-comment {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.detail-msg {
+  color: #ffb3ac;
 }
 </style>

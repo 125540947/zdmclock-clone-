@@ -118,6 +118,13 @@ test('productCommentIssues 识别常见 AI 套话，放行具体口语短评', (
   assert.deepEqual(productCommentIssues('1.2L 两个人吃估计都够了。'), []);
 });
 
+test('productCommentIssues 识别新增的导购/营销腔（闭眼入、不容错过等）', () => {
+  assert.ok(productCommentIssues('这款闭眼入就完事了，不容错过。').length > 0);
+  assert.ok(productCommentIssues('性价比之王，强烈推荐入手。').length > 0);
+  // 具体口语短评仍应放行
+  assert.deepEqual(productCommentIssues('1.2L 两个人吃估计都够了。'), []);
+});
+
 test('generateProductComment 首稿有 AI 味时携带问题自动重写', async () => {
   const replies = ['总体来说，这款产品性价比很高，值得入手。', '1.2L 两个人吃估计都够了。'];
   let calls = 0;

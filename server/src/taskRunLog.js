@@ -15,6 +15,7 @@ const MAX_TASK_RUNS = 3000;
 //   ok / partial / skipped
 //   message(完整文本，同 lastResult) / perUser[](各账号一行文本)
 //   reasons[]: { action, articleId, error_msg, user }  ← 结构化失败原因
+//   details[]: { articleId, title, action, comment, ok, message }  ← 评论等互动逐篇明细（"显示回复详情"）
 export function buildTaskRunRecord({
   taskId,
   taskName,
@@ -27,7 +28,8 @@ export function buildTaskRunRecord({
   skipped,
   message,
   perUser,
-  reasons
+  reasons,
+  details
 }) {
   return {
     id: `run_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
@@ -43,7 +45,8 @@ export function buildTaskRunRecord({
     skipped: !!skipped,
     message: message || '',
     perUser: Array.isArray(perUser) ? perUser : [],
-    reasons: Array.isArray(reasons) ? reasons : []
+    reasons: Array.isArray(reasons) ? reasons : [],
+    details: Array.isArray(details) ? details : []
   };
 }
 

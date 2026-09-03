@@ -485,6 +485,8 @@ onMounted(load);
   font-size: 12px;
   color: var(--gold);
   margin-top: 3px;
+  white-space: pre-line;
+  line-height: 1.55;
 }
 .task-meta .art {
   margin-top: 6px;

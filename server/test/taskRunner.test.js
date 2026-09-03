@@ -438,6 +438,50 @@ test('runEngagement baoliao 来源随机取样（不遍历全量）+ 拟人化�
   }
 });
 
+test('runEngagement 评论结果含每篇回复详情（details）：文章ID + 生成评论正文', async () => {
+  // 关闭延迟保证用例快速确定；评论任务应逐篇记录生成的评论正文，供"显示回复详情"
+  const prevMin = config.engagementDelayMinMs;
+  const prevMax = config.engagementDelayMaxMs;
+  const prevProb = config.engagementDelayLongProbability;
+  config.engagementDelayMinMs = 0;
+  config.engagementDelayMaxMs = 0;
+  config.engagementDelayLongProbability = 0;
+  const db = {
+    users: [{ id: 'u1', cookie: 'c' }],
+    baoliao: Array.from({ length: 4 }, (_, i) => ({
+      smzdmUrl: 'https://x/p/' + (200 + i),
+      title: `商品 ${i}`,
+      content: '小巧便携',
+      price: `${99 + i} 元`
+    })),
+    settings: { gpt: { enabled: true, tone: 'friendly', prompt: '' } }
+  };
+  const orig = smzdm.doComment;
+  smzdm.doComment = async (cookie, opts) => ({ count: 1, message: '评论成功', articleId: opts.articleId });
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => ({ choices: [{ message: { content: '这个尺寸放办公桌挺合适。' } }] })
+  });
+  try {
+    const r = await runTask({ type: 'comment', articleSource: 'baoliao', limit: 4, name: '评论' }, db, {});
+    assert.equal(r.ok, true);
+    assert.ok(Array.isArray(r.result.details), 'result.details 应为数组');
+    assert.equal(r.result.details.length, 4, '每篇都应有一条详情');
+    assert.ok(r.result.details.every((d) => d.action === 'comment' && d.ok === true));
+    assert.ok(
+      r.result.details.every((d) => d.comment === '这个尺寸放办公桌挺合适。'),
+      '每条详情都应记录本次生成的评论正文'
+    );
+    // 结果文本也逐条列出评论正文，便于直接在任务卡片 / 执行明细看到"发了什么"
+    assert.match(r.message, /文章 200 「这个尺寸放办公桌挺合适。」/);
+  } finally {
+    smzdm.doComment = orig;
+    config.engagementDelayMinMs = prevMin;
+    config.engagementDelayMaxMs = prevMax;
+    config.engagementDelayLongProbability = prevProb;
+  }
+});
+
 test('还原全局 fetch', () => {
   globalThis.fetch = realFetch;
   assert.ok(true);

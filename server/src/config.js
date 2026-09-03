@@ -210,11 +210,12 @@ export const config = {
   riskMaxExtraMs: boundedInt(process.env.RISK_MAX_EXTRA_MS, 0, 600000, 60000),
   // 互动（评论/点赞/收藏）拟人化随机延迟（毫秒）：每条操作之间等待不规则时长，
   // 打破固定频率，使行为更接近真人浏览，降低被 smzdm 风控识别为批量脚本的概率。
-  engagementDelayMinMs: boundedInt(process.env.ENGAGEMENT_DELAY_MIN_MS, 0, 600000, 2000),
-  engagementDelayMaxMs: boundedInt(process.env.ENGAGEMENT_DELAY_MAX_MS, 0, 600000, 15000),
+  // 默认区间偏"从容"——评论任务不会背靠背一气呵成，而是一条一条错峰发出（"不用一下子就回复"）。
+  engagementDelayMinMs: boundedInt(process.env.ENGAGEMENT_DELAY_MIN_MS, 0, 600000, 3000),
+  engagementDelayMaxMs: boundedInt(process.env.ENGAGEMENT_DELAY_MAX_MS, 0, 600000, 18000),
   // 偶发"长思考"停顿：以该概率在基础延迟后再叠加一次更长随机等待（拟人不规律节奏）。设 0 关闭。
-  engagementDelayLongProbability: boundedNum(process.env.ENGAGEMENT_DELAY_LONG_PROB, 0, 1, 0.15),
-  engagementDelayLongMaxMs: boundedInt(process.env.ENGAGEMENT_DELAY_LONG_MAX_MS, 0, 600000, 30000),
+  engagementDelayLongProbability: boundedNum(process.env.ENGAGEMENT_DELAY_LONG_PROB, 0, 1, 0.18),
+  engagementDelayLongMaxMs: boundedInt(process.env.ENGAGEMENT_DELAY_LONG_MAX_MS, 0, 600000, 45000),
   // 未配置 limit（随机挑选条数上限）时，baoliao 来源的默认随机取样区间（含端点）；
   // 实际取样数 = [min,max] 间随机整数（封顶为池大小），模拟真人"只挑部分好价互动"，而非全量遍历。
   engagementSampleDefaultMin: boundedInt(process.env.ENGAGEMENT_SAMPLE_MIN, 0, 100, 3),

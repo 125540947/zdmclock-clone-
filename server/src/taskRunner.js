@@ -148,7 +148,8 @@ async function runEngagement(task, db, user, opts) {
   const errors = [];
   // 结构化失败原因：{ articleId, error_msg }，供 taskRunLog 记录"失败原因是什么"
   const reasons = [];
-  const results = [];
+  // 每篇回复详情：{ articleId, title, action, comment, ok, message }，供"显示回复详情"渲染
+  const details = [];
   for (let idx = 0; idx < articleIds.length; idx++) {
     const entry = articleIds[idx];
     const aid = entry.id;
@@ -168,6 +169,7 @@ async function runEngagement(task, db, user, opts) {
     // 收藏、点赞不走生成链路也不受限流影响，故不重试
     const maxCommentRetry = action === 'comment' ? 2 : 0;
     let attempt = 0;
+    let commentText = ''; // 提升到循环外层：无论成功失败都记录本次生成的评论正文
     while (attempt <= maxCommentRetry) {
       try {
         let commentContent = '';
@@ -184,6 +186,7 @@ async function runEngagement(task, db, user, opts) {
             prompt: db.settings.gpt.prompt,
             provider: db.settings.gpt
           });
+          commentText = commentContent; // 记录生成的评论，供结果详情展示
         }
         const r =
           action === 'comment'
@@ -196,7 +199,14 @@ async function runEngagement(task, db, user, opts) {
             ? await smzdm.doFavorite(user.cookie, { count: perArticleCount, articleId: aid, channelId: chId })
             : await smzdm.doPoint(user.cookie, { count: perArticleCount, articleId: aid, channelId: chId });
         done += r.count || 1;
-        results.push(r.message);
+        details.push({
+          articleId: aid,
+          title: entry.title || '',
+          action,
+          comment: action === 'comment' ? commentText : '',
+          ok: true,
+          message: r.message
+        });
         break;
       } catch (e) {
         if (attempt < maxCommentRetry && isRetriableCommentError(e.message)) {
@@ -209,6 +219,14 @@ async function runEngagement(task, db, user, opts) {
         failed += 1;
         errors.push(`文章 ${aid}: ${e.message}`);
         reasons.push({ articleId: aid || null, error_msg: e.message });
+        details.push({
+          articleId: aid,
+          title: entry.title || '',
+          action,
+          comment: action === 'comment' ? commentText : '',
+          ok: false,
+          message: e.message
+        });
         break;
       }
     }
@@ -217,14 +235,25 @@ async function runEngagement(task, db, user, opts) {
   // 抽样场景在结果里标明"从 N 篇中随机选取 M 篇"，便于核对（全量未抽样时不显示）
   const sampledFrom =
     articleSource === 'baoliao' && poolSize > total ? `（从 ${poolSize} 篇中随机选取 ${total} 篇）` : '';
+  // "显示回复详情"：评论任务把每篇生成的评论正文逐条列出，方便核对 AI 实际发了什么。
+  const detailLines =
+    action === 'comment' && details.length
+      ? details
+          .map((d, i) => {
+            const c = d.comment ? `「${d.comment}」` : '（未生成）';
+            return `${i + 1}. 文章 ${d.articleId} ${c}${d.ok ? '' : ` 失败：${d.message}`}`;
+          })
+          .join('\n')
+      : '';
   const message =
     `共 ${total} 篇${sampledFrom}：成功 ${total - failed} 篇（${done} 次动作）` +
-    (failed ? `，失败 ${failed} 篇：${errors.join('；')}` : '');
+    (failed ? `，失败 ${failed} 篇：${errors.join('；')}` : '') +
+    (detailLines ? `\n${detailLines}` : '');
   const ok = failed === 0;
   return {
     ok,
     // scheduler / run 接口取 r.result.message 作为 lastResult
-    result: { success: ok, message, count: done, articleIds, poolSize, partial: failed > 0 },
+    result: { success: ok, message, count: done, articleIds, poolSize, partial: failed > 0, details },
     // 结构化失败原因，taskRunLog 直接复用（避免对 message 做脆弱的字符串解析）
     reasons,
     message
@@ -604,6 +633,11 @@ async function runAccountTask(task, db, opts = {}) {
       reasons.push({ action: task.type, articleId: null, error_msg: ur.error, user: ur.who });
     }
   }
+  // 聚合每账号回复详情（评论任务逐篇评论正文），供执行明细页结构化展示"显示回复详情"。
+  const details = [];
+  for (const ur of userResults) {
+    if (ur.r && Array.isArray(ur.r.result?.details)) details.push(...ur.r.result.details);
+  }
   const message =
     `共 ${total} 个账号：${okCount} 成功 / ${failedCount} 失败 / ${skippedCount} 跳过\n` + parts.join('\n');
   // 全部成功才标 ok；部分失败标 partial（调度器据此仍记为完成，避免误报红色错误）
@@ -612,7 +646,7 @@ async function runAccountTask(task, db, opts = {}) {
     partial: failedCount > 0 && okCount > 0,
     skipped: allSkipped,
     reasons,
-    result: { success: noFailures && !allSkipped, skipped: allSkipped, message, perUser: parts },
+    result: { success: noFailures && !allSkipped, skipped: allSkipped, message, perUser: parts, details },
     message
   };
 }
@@ -637,6 +671,7 @@ function buildRecordFromResult(task, db, startedAt, r, opts) {
     skipped: !!(r && r.skipped),
     message: (r && r.message) || '',
     perUser: r && r.result && Array.isArray(r.result.perUser) ? r.result.perUser : [],
-    reasons: r && Array.isArray(r.reasons) ? r.reasons : []
+    reasons: r && Array.isArray(r.reasons) ? r.reasons : [],
+    details: r && r.result && Array.isArray(r.result.details) ? r.result.details : []
   };
 }
