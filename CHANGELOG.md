@@ -874,7 +874,7 @@
 - `config.gptMaxTokens` 默认值由 `1024` 提高到 `4096`（相对实测峰值留约 4 倍余量），`.env.example` 同步更新并补充「reasoning 长度随机波动」的说明。上限只是天花板，计费按实际 `completion_tokens` 结算，放宽不增加常态成本。
 - 新增 2 项针对 `isRetriableCommentError` 的测试（可重试集合 + 真故障不重试，含空串与 `undefined` 边界）。后端全量 **510 项通过**，改动文件定向 ESLint 无告警。
 
-**代表提交**：`ee03265`
+**代表提交**：`2dedc17`
 
 ---
 
