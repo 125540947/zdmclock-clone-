@@ -840,6 +840,26 @@
 
 ---
 
+## 批次 35 · 推理模型输出预算修复（评论「大模型返回内容为空」，2026-09-01）
+
+**改动要点**
+- 复现场景：一轮评论任务 12 篇中 6 篇失败于 `文章 <id>: 大模型返回内容为空（请检查模型与参数）`，成功/失败两组都混有「有完整商品信息」与「仅有标题」的条目，排除商品数据缺失、`cleanReply` 逻辑与网关偶发抖动三种猜测。
+- 在 VPS 上以线上真实凭据直连所用路由（base `https://app.kilo.ai/api/gateway`、model `kilo-auto/free`）逐档实测 `max_tokens`，锁定根因：该路由把请求转发给**推理模型** `stepfun/step-3.7-flash`，而 OpenAI 兼容接口的 `max_tokens` 是**思维链 reasoning + 答案 content 的总预算**；原先硬编码的 `200` 被 reasoning 吃满后，答案 `content` 直接被截断成空串，响应 `finish_reason=length`、`completion_tokens=200`、`reasoning_tokens=71`，HTTP 仍是 200，因此上层只能看到「返回内容为空」。
+- 实测对照：`max_tokens=200` → 空内容（finish=length）；`1024` → 正常输出（finish=stop、`completion_tokens=379`）；`2048` → 正常。计费按实际 `completion_tokens` 结算，放宽上限不会凭空增加开销。
+
+**新增功能**
+- 新增可配置输出上限 `GPT_MAX_TOKENS`（`config.gptMaxTokens`），默认 `1024`，取值收敛在 `256~8192`，便于按所选模型是否带思维链自行调整。
+- `.env.example` 补充该项说明，写明「max_tokens 为 reasoning + content 总预算」这一易踩坑点及其空返回表现。
+
+**问题修复**
+- 修复评论自动回复在推理模型下约半数概率失败于「大模型返回内容为空」：`requestCompletion` 的 `payload.max_tokens` 由硬编码 `200` 改为 `config.gptMaxTokens`。
+- 空内容分支不再静默抛错，先输出诊断日志（`model / finish_reason / completion_tokens / prompt_tokens`）再抛出。此前 6 条完全相同的错误串会被 journald 重复行抑制，导致线上日志里看不到全部失败；日志中带上每条不同的 `prompt_tokens` 可规避抑制，后续同类问题可直接从服务日志判断是截断还是模型真的空返回。
+- 新增 2 项回归测试（断言 `max_tokens` 取自 `config.gptMaxTokens` 且不再等于 `200`、以及配置值落在合理区间），`server` 侧 `gptAdapter.test.js` 17 项全部通过。
+
+**代表提交**：`558e561`
+
+---
+
 ## 维护约定（默认规范）
 
 1. **分批原则**：每次整理历史或新增工作阶段，按**逻辑阶段**（功能/安全波次）或**时间**划分为批次；同一波次跨多日可合并为一批次。
