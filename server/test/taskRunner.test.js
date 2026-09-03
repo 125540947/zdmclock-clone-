@@ -14,7 +14,7 @@ const { load } = await import('../src/store.js');
 const { config } = await import('../src/config.js');
 const { smzdm } = await import('../src/smzdm/adapter.js');
 const { REAL_STRATEGIES } = await import('../src/smzdm/tasks_real.js');
-const { resolvedCheckInTime } = await import('../src/clockSchedule.js');
+const { resolvedCheckInTime, ACCOUNT_PIPELINE_TYPES } = await import('../src/clockSchedule.js');
 
 // 本文件不涉及风控断言：关闭"人类化随机等待"以保持用例快速且确定性
 config.riskEnabled = false;
@@ -393,13 +393,15 @@ test('computeSampleSize：limit 受控、默认随机、空池封顶', () => {
 });
 
 test('runEngagement baoliao 来源随机取样（不遍历全量）+ 拟人化延迟可关闭', async () => {
-  // 关闭延迟，保证用例快速且确定性（避免 2~15s 真实等待）
+  // 关闭延迟，保证用例快速且确定性（避免 2~15s 真实等待）；显式关闭分时段队列以验证"一次性抽样"旧路径
   const prevMin = config.engagementDelayMinMs;
   const prevMax = config.engagementDelayMaxMs;
   const prevProb = config.engagementDelayLongProbability;
+  const prevQ = config.engagementQueueEnabled;
   config.engagementDelayMinMs = 0;
   config.engagementDelayMaxMs = 0;
   config.engagementDelayLongProbability = 0;
+  config.engagementQueueEnabled = false;
   const db = {
     users: [{ id: 'u1', cookie: 'c' }],
     baoliao: Array.from({ length: 8 }, (_, i) => ({
@@ -435,17 +437,21 @@ test('runEngagement baoliao 来源随机取样（不遍历全量）+ 拟人化�
     config.engagementDelayMinMs = prevMin;
     config.engagementDelayMaxMs = prevMax;
     config.engagementDelayLongProbability = prevProb;
+    config.engagementQueueEnabled = prevQ;
   }
 });
 
 test('runEngagement 评论结果含每篇回复详情（details）：文章ID + 生成评论正文', async () => {
   // 关闭延迟保证用例快速确定；评论任务应逐篇记录生成的评论正文，供"显示回复详情"
+  // 显式关闭分时段队列以验证"一次性处理全部抽样"旧路径（分时段路径见批次 37 测试）
   const prevMin = config.engagementDelayMinMs;
   const prevMax = config.engagementDelayMaxMs;
   const prevProb = config.engagementDelayLongProbability;
+  const prevQ = config.engagementQueueEnabled;
   config.engagementDelayMinMs = 0;
   config.engagementDelayMaxMs = 0;
   config.engagementDelayLongProbability = 0;
+  config.engagementQueueEnabled = false;
   const db = {
     users: [{ id: 'u1', cookie: 'c' }],
     baoliao: Array.from({ length: 4 }, (_, i) => ({
@@ -479,6 +485,7 @@ test('runEngagement 评论结果含每篇回复详情（details）：文章ID + 
     config.engagementDelayMinMs = prevMin;
     config.engagementDelayMaxMs = prevMax;
     config.engagementDelayLongProbability = prevProb;
+    config.engagementQueueEnabled = prevQ;
   }
 });
 
@@ -546,4 +553,117 @@ test('isRetriableCommentError：真故障不重试', () => {
   assert.equal(isRetriableCommentError('AI 评论未通过自然度检查：疑似广告腔'), false);
   assert.equal(isRetriableCommentError(''), false);
   assert.equal(isRetriableCommentError(undefined), false);
+});
+
+// ===================== 批次 37：分时间段拟人回复（commentQueue 跨时间片逐片消化） =====================
+
+test("ACCOUNT_PIPELINE_TYPES 不含 'comment'：评论任务由其独立多时段 cron 驱动，不被启动调度一次性爆发", () => {
+  // 若评论被纳入启动调度，每个账号每天只启动一次，12 篇会集中在一刻爆发，与"分时间段拟人回复"诉求相悖。
+  assert.equal(ACCOUNT_PIPELINE_TYPES.has('comment'), false, 'comment 必须独立于启动调度，才能走自身多时段 cron + commentQueue 逐片消化');
+});
+
+test('runEngagement 分时段：同一 campaign 跨多次运行（模拟多个时间片）逐步消化队列，而非一次跑完', async () => {
+  // 开启分时段队列；每片最多 2 篇；关闭延迟保证用例快速确定
+  const prevQ = config.engagementQueueEnabled;
+  const prevBatch = config.engagementBatchPerSlot;
+  const prevMin = config.engagementDelayMinMs;
+  const prevMax = config.engagementDelayMaxMs;
+  const prevProb = config.engagementDelayLongProbability;
+  const prevTz = config.tz;
+  config.engagementQueueEnabled = true;
+  config.engagementBatchPerSlot = 2;
+  config.engagementDelayMinMs = 0;
+  config.engagementDelayMaxMs = 0;
+  config.engagementDelayLongProbability = 0;
+  config.tz = 'local';
+  const db = {
+    users: [{ id: 'u1', cookie: 'c' }],
+    baoliao: Array.from({ length: 6 }, (_, i) => ({
+      smzdmUrl: 'https://x/p/' + (300 + i),
+      title: `商品 ${i}`,
+      content: '小巧便携',
+      price: `${99 + i} 元`
+    })),
+    settings: { gpt: { enabled: true, tone: 'friendly', prompt: '' } },
+    taskRuns: []
+  };
+  const called = [];
+  const orig = smzdm.doComment;
+  smzdm.doComment = async (cookie, opts) => { called.push(opts.articleId); return { count: 1, message: '评论成功' }; };
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: '这个尺寸放办公桌挺合适。' } }] }) });
+  // 同一 task 对象跨多次运行（模拟多个时间片），队列持久化在 task 上（与调度器逐片落盘一致）
+  const task = { type: 'comment', articleSource: 'baoliao', limit: 6, commentQueue: [], commentCampaignDate: null, commentCampaignTotal: 0, name: '评论' };
+  try {
+    const r1 = await runTask(task, db, {});
+    assert.equal(r1.ok, true);
+    assert.equal(called.length, 2, '第一个时间片只评 2 篇（batchPerSlot=2），而非一次跑完 6 篇');
+    assert.match(r1.message, /分时段：本片 2\/6 篇/);
+    const allIds = ['300', '301', '302', '303', '304', '305'];
+    assert.ok(called.every((x) => allIds.includes(x)));
+
+    const r2 = await runTask(task, db, {});
+    assert.equal(called.length, 4, '第二个时间片再评 2 篇，累计 4 篇');
+    assert.match(r2.message, /分时段：本片 4\/6 篇/);
+    assert.equal(new Set(called).size, 4, '各时间片评的是不同文章（不重复发）');
+    assert.equal(task.commentQueue.length, 2, 'campaign 剩余 2 篇留给后续时间片');
+
+    const r3 = await runTask(task, db, {});
+    assert.equal(called.length, 6, '第三个时间片评完剩余 2 篇');
+    assert.equal(task.commentQueue.length, 0, 'campaign 已消化完');
+    assert.match(r3.message, /分时段：本片 6\/6 篇/);
+
+    // 第四个时间片（当日内已完成 campaign）：应跳过，不再重开 campaign 重新评论
+    const r4 = await runTask(task, db, {});
+    assert.equal(called.length, 6, '当日内 campaign 已完成，不再发新评论');
+    assert.equal(r4.skipped, true, '今日 campaign 已完成 → 本时间片跳过');
+  } finally {
+    smzdm.doComment = orig;
+    globalThis.fetch = realFetch;
+    config.engagementQueueEnabled = prevQ;
+    config.engagementBatchPerSlot = prevBatch;
+    config.engagementDelayMinMs = prevMin;
+    config.engagementDelayMaxMs = prevMax;
+    config.engagementDelayLongProbability = prevProb;
+    config.tz = prevTz;
+  }
+});
+
+test('runEngagement 关闭分时段（engagementQueueEnabled=false）时仍一次性抽样处理', async () => {
+  // 配置开关关闭应回退到原行为：单运行处理整批，不写入队列
+  const prevQ = config.engagementQueueEnabled;
+  const prevMin = config.engagementDelayMinMs;
+  const prevMax = config.engagementDelayMaxMs;
+  const prevProb = config.engagementDelayLongProbability;
+  config.engagementQueueEnabled = false;
+  config.engagementDelayMinMs = 0;
+  config.engagementDelayMaxMs = 0;
+  config.engagementDelayLongProbability = 0;
+  const db = {
+    users: [{ id: 'u1', cookie: 'c' }],
+    baoliao: Array.from({ length: 8 }, (_, i) => ({
+      smzdmUrl: 'https://x/p/' + (400 + i),
+      title: `商品 ${i}`,
+      content: '小巧便携',
+      price: `${99 + i} 元`
+    })),
+    settings: { gpt: { enabled: true, tone: 'friendly', prompt: '' } },
+    taskRuns: []
+  };
+  const orig = smzdm.doComment;
+  smzdm.doComment = async () => ({ count: 1, message: '评论成功' });
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: '不错。' } }] }) });
+  const task = { type: 'comment', articleSource: 'baoliao', limit: 6, commentQueue: [], commentCampaignDate: null, commentCampaignTotal: 0, name: '评论' };
+  try {
+    const r = await runTask(task, db, {});
+    assert.equal(r.ok, true);
+    assert.equal(task.commentQueue.length, 0, '关闭分时段时不写队列（一次性处理）');
+    assert.match(r.message, /从 8 篇中随机选取 6 篇/);
+  } finally {
+    smzdm.doComment = orig;
+    globalThis.fetch = realFetch;
+    config.engagementQueueEnabled = prevQ;
+    config.engagementDelayMinMs = prevMin;
+    config.engagementDelayMaxMs = prevMax;
+    config.engagementDelayLongProbability = prevProb;
+  }
 });

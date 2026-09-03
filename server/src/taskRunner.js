@@ -134,11 +134,44 @@ async function runEngagement(task, db, user, opts) {
           : '请先填写目标文章ID或链接'
     };
   }
-  // baoliao 来源：不再全量遍历，改为从池中随机抽样若干条，模拟真人"只挑部分好价互动"。
-  // 取样条数由任务 limit 控制上限；未配置则按 [engagementSampleDefaultMin,Max] 随机取。
+  // —— 分时间段拟人回复（批次 37）——
+  // 把"一次跑完 N 篇"拆成跨多个时间片逐步消化：任务挂一个持久化队列 commentQueue（本次 campaign 待评文章 refs），
+  // 每个被调度命中的时间片只取前 engagementBatchPerSlot 条处理，剩余留在队列等下个时间片；
+  // 队列空 + 跨到新的一天时，重新从好价池抽样一批开启新 campaign（commentCampaignDate 标记 campaign 所属日期）。
+  // 仅对 baoliao 来源的"评论"任务生效（manual 单篇无"分批"意义；用户诉求"一下子回 12 个"正是 baoliao 抽样场景；
+  // 收藏/点赞保持原一次性行为，避免未经请求就改变其节奏）。队列状态持久化在任务对象上，
+  // 由调度器 / 手动运行统一落盘（见 scheduler.js / routes/tasks.js），进程重启不丢失已完成进度。
+  const queueMode = config.engagementQueueEnabled && articleSource === 'baoliao' && action === 'comment';
   let articleIds = allIds;
   const poolSize = allIds.length;
-  if (articleSource === 'baoliao') {
+  if (queueMode) {
+    const today = todayStrTZ(config.tz);
+    if (task.commentCampaignDate === today && Array.isArray(task.commentQueue)) {
+      // 今日 campaign 仍在进行或已完成：沿用既有队列
+      if (task.commentQueue.length === 0) {
+        // 今日 campaign 已全部消化完，本时间片无需动作（避免同日反复重开 campaign 造成重复评论）
+        return { ok: true, skipped: true, silentSkip: true, message: '今日分时段评论 campaign 已完成，本时间片跳过' };
+      }
+    } else {
+      // 新的一天 / 无 campaign：重新抽样整批写入队列（只存 refs，执行时才真正评论）
+      const sampled = sampleArticleIds(allIds, computeSampleSize(poolSize, task.limit));
+      task.commentQueue = sampled;
+      task.commentCampaignDate = today;
+      task.commentCampaignTotal = sampled.length;
+      if (sampled.length === 0) {
+        return {
+          ok: false,
+          error: 'no_article',
+          message: '好价列表中没有可用文章ID（请先添加带链接的好价，或改用手动指定）'
+        };
+      }
+    }
+    // 本时间片取前 batchPerSlot 条，并从队列移除（失败项不再重试，避免反复撞限流）
+    const batch = (task.commentQueue || []).slice(0, config.engagementBatchPerSlot);
+    task.commentQueue = (task.commentQueue || []).slice(config.engagementBatchPerSlot);
+    articleIds = batch;
+  } else if (articleSource === 'baoliao') {
+    // 兼容（关闭分时段 / 收藏 / 点赞）：一次性抽样处理
     articleIds = sampleArticleIds(allIds, computeSampleSize(poolSize, task.limit));
   }
   // baoliao 来源：每篇各执行 1 次（一篇一动作，避免刷量）；manual 可用 count 重复多次
@@ -232,9 +265,18 @@ async function runEngagement(task, db, user, opts) {
     }
   }
   const total = articleIds.length;
-  // 抽样场景在结果里标明"从 N 篇中随机选取 M 篇"，便于核对（全量未抽样时不显示）
-  const sampledFrom =
-    articleSource === 'baoliao' && poolSize > total ? `（从 ${poolSize} 篇中随机选取 ${total} 篇）` : '';
+  // 进度提示：
+  // - 分时段场景：标明"本片消化 M/N 篇 / 剩余 R 篇待下个时间片"，便于核对节奏是否真的"分时间段"；
+  // - 抽样（非分时段）场景：标明"从 P 篇中随机选取 M 篇"。
+  let progressNote = '';
+  if (queueMode) {
+    const campaignSize = task.commentCampaignTotal || 0;
+    const remaining = Array.isArray(task.commentQueue) ? task.commentQueue.length : 0;
+    const handled = campaignSize - remaining;
+    progressNote = `（分时段：本片 ${handled}/${campaignSize} 篇，剩余 ${remaining} 篇待下个时间片）`;
+  } else if (articleSource === 'baoliao' && poolSize > total) {
+    progressNote = `（从 ${poolSize} 篇中随机选取 ${total} 篇）`;
+  }
   // "显示回复详情"：评论任务把每篇生成的评论正文逐条列出，方便核对 AI 实际发了什么。
   const detailLines =
     action === 'comment' && details.length
@@ -246,7 +288,7 @@ async function runEngagement(task, db, user, opts) {
           .join('\n')
       : '';
   const message =
-    `共 ${total} 篇${sampledFrom}：成功 ${total - failed} 篇（${done} 次动作）` +
+    `共 ${total} 篇${progressNote}：成功 ${total - failed} 篇（${done} 次动作）` +
     (failed ? `，失败 ${failed} 篇：${errors.join('；')}` : '') +
     (detailLines ? `\n${detailLines}` : '');
   const ok = failed === 0;

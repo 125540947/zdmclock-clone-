@@ -108,9 +108,12 @@ export function assignAutoCheckInTime(userId, cfg = config) {
 // gpt / fetch 为全局任务（不绑定单个账号），不在此集合，仍走各自独立 cron。
 // 该集合被 startup.js 与 scheduler.js 共用：当 t_startup 启用时，主调度 tick 会跳过这些类型，
 // 改由智能启动调度按账号错峰统一跑，避免「固定 cron 全员同刻 + 启动调度」重复执行。
+// 注意：'comment' 刻意【不】在此集合——评论任务的诉求是"分时间段拟人回复"（一天内多个时间片各评几篇，
+// 而非一次性评完 12 篇）。若纳入启动调度，每个账号每天只启动一次，评论会集中在一刻爆发，与诉求相悖。
+// 因此评论任务交由其自身多时段 cron（默认 '0 9,12,15,18,21 * * *'）驱动，由 runEngagement 的
+// commentQueue 逐片消化（见 taskRunner.js / 批次 37）。收藏/点赞等仍走启动调度。
 export const ACCOUNT_PIPELINE_TYPES = new Set([
   'clock',
-  'comment',
   'favorite',
   'point',
   'lottery',

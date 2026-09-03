@@ -918,6 +918,26 @@
 
 ---
 
+## 批次 37 · 自动评论分时间段拟人回复：commentQueue 跨时间片逐片消化（2026-09-01）
+
+**改动要点**
+- 承接批次 36 用户新反馈「你还没考虑回复时间段，你现在是一下子就回复 12 个」：此前只在单次运行内做拟人化错峰（约 2~4 分钟把 12 篇一口气发完），本质仍是一次性爆发。
+- 本批次把「一次跑完 N 篇」拆成**跨多个时间片**逐步消化：评论任务挂一个**持久化队列** `commentQueue`（本次 campaign 待评文章 refs），每个被调度命中的时间片只取前 `engagementBatchPerSlot` 条处理，剩余留在队列等下个时间片；队列空 + 跨到新的一天时重新抽样开启新 campaign（`commentCampaignDate` 标记 campaign 所属日期，`commentCampaignTotal` 记总篇数供进度展示）。
+- 配套把评论任务**从「智能启动调度」流水线中解耦**：原 `ACCOUNT_PIPELINE_TYPES` 含 `comment`，导致 `t_startup`（默认启用）每天只启动一次、评论集中在一刻爆发——这与「分时间段」诉求根本冲突。现把 `comment` 移出该集合，改由其自身**多时段 cron**（默认 `0 9,12,15,18,21 * * *`）驱动，配合队列把 12 篇拆成约 4 个时间片（每片 ~3 篇）逐步消化。收藏/点赞等仍走启动调度，行为不变。
+
+**新增功能**
+- 分时段评论队列：`taskRunner.runEngagement` 在 `baoliao` 来源 + `comment` 任务 + `engagementQueueEnabled` 开启时进入队列模式；队列状态（`commentQueue` / `commentCampaignDate` / `commentCampaignTotal`）持久化在任务对象上，由调度器 / 手动运行统一落盘，进程重启不丢已完成进度。
+- 配置项：`engagementQueueEnabled`（默认开）、`engagementBatchPerSlot`（默认 3，每片最多评几篇）。
+- 结果进度提示：评论结果文本新增「（分时段：本片 M/N 篇，剩余 R 篇待下个时间片）」，任务卡片与执行明细可直接核对节奏是否真「分时间段」；当日内 campaign 已完成的时间片返回 `skipped`（silentSkip，不写执行明细，避免刷屏）。
+- 旧库迁移：`store.load` 为 `comment`/`favorite`/`point` 等任务补齐 `commentQueue` / `commentCampaignDate` / `commentCampaignTotal`；并把 `t_comment` 旧默认 cron `0 10 * * *` 迁移为 `0 9,12,15,18,21 * * *`（仅当仍是旧默认值时，避免覆盖用户自定义）。
+
+**问题修复**
+- 根因闭环：评论「一下子回 12 个」的根因是启动调度每天只跑一次、评论被集中爆发；通过解耦 + 队列彻底改为逐片消化。
+
+**代表提交**：（本批次合入后以源码提交 hash 回填）
+
+---
+
 ## 维护约定（默认规范）
 
 1. **分批原则**：每次整理历史或新增工作阶段，按**逻辑阶段**（功能/安全波次）或**时间**划分为批次；同一波次跨多日可合并为一批次。

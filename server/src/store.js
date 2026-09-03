@@ -17,7 +17,7 @@ function defaultData() {
       // 完整日常流水线（签到+互动+抽奖等）。启用后，主调度不再对账号级任务按固定 cron 全员同刻触发，
       // 改由本任务按账号错峰统一跑（第一定律：避免多账号同时启动把 VPS 打爆）。
       { id: 't_startup', type: 'startup', name: '智能启动调度', icon: '🚀', enabled: true, cron: '* * * * *', lastRun: null, lastResult: null, status: 'idle' },
-      { id: 't_comment', type: 'comment', name: '自动评论', icon: '💬', enabled: false, cron: '0 10 * * *', articleId: '', articleSource: 'manual', lastRun: null, lastResult: null, status: 'idle' },
+      { id: 't_comment', type: 'comment', name: '自动评论', icon: '💬', enabled: false, cron: '0 9,12,15,18,21 * * *', articleId: '', articleSource: 'manual', commentQueue: [], commentCampaignDate: null, commentCampaignTotal: 0, lastRun: null, lastResult: null, status: 'idle' },
       { id: 't_favorite', type: 'favorite', name: '自动收藏', icon: '⭐', enabled: false, cron: '0 11 * * *', articleId: '', articleSource: 'manual', lastRun: null, lastResult: null, status: 'idle' },
       { id: 't_point', type: 'point', name: '自动点赞', icon: '👍', enabled: false, cron: '0 12 * * *', articleId: '', articleSource: 'manual', lastRun: null, lastResult: null, status: 'idle' },
       // GPT 定时批量生成：从好价列表取内容 → 大模型生成评论草稿（可选自动发布）
@@ -120,6 +120,10 @@ export function load() {
     if (t.type !== 'clock') {
       if (!('articleId' in t)) t.articleId = '';
       if (!('articleSource' in t)) t.articleSource = 'manual';
+      // 批次 37：分时段评论队列字段迁移（旧库缺省补空，避免 runEngagement 读 undefined 报错）
+      if (!('commentQueue' in t)) t.commentQueue = [];
+      if (!('commentCampaignDate' in t)) t.commentCampaignDate = null;
+      if (!('commentCampaignTotal' in t)) t.commentCampaignTotal = 0;
     }
   });
   for (const dt of d.tasks) {
@@ -192,6 +196,14 @@ export function load() {
   const clockTask = cache.tasks.find((t) => t.id === 't_clock');
   if (clockTask && clockTask.cron === '0 9 * * *') {
     clockTask.cron = config.clockTaskCron;
+    migrated = true;
+  }
+  // 自动评论任务 cron 迁移：旧版 '0 10 * * *'（每天 10:00 一次性评完 ~12 篇）改为多时段轮询
+  // '0 9,12,15,18,21 * * *'，配合 commentQueue 把 12 篇拆成多个时间片（每片约 3 篇）逐步消化，
+  // 实现"分时间段拟人回复"。仅当仍是旧默认值时迁移，避免覆盖用户自定义 cron。
+  const commentTask = cache.tasks.find((t) => t.id === 't_comment');
+  if (commentTask && commentTask.cron === '0 10 * * *') {
+    commentTask.cron = '0 9,12,15,18,21 * * *';
     migrated = true;
   }
   // 启动期清理旧库超出的签到记录（内存截断），仅在实际发生迁移或截断时落盘一次

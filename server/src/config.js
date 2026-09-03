@@ -220,6 +220,12 @@ export const config = {
   // 实际取样数 = [min,max] 间随机整数（封顶为池大小），模拟真人"只挑部分好价互动"，而非全量遍历。
   engagementSampleDefaultMin: boundedInt(process.env.ENGAGEMENT_SAMPLE_MIN, 0, 100, 3),
   engagementSampleDefaultMax: boundedInt(process.env.ENGAGEMENT_SAMPLE_MAX, 0, 100, 12),
+  // 分时段拟人回复（批次 37）：把评论任务拆成多个时间片逐步消化，而非一次跑完 N 篇。
+  // - engagementQueueEnabled：开关（仅对 baoliao 来源的"评论"任务生效）。默认开，模拟真人"分几次慢慢评"。
+  // - engagementBatchPerSlot：每个被调度命中的时间片最多评几篇（须配合多时段 cron 才真正"分时间段"）。
+  //   默认 3；配合默认 cron '0 9,12,15,18,21 * * *'（5 个时间片）可把 12 篇拆成约 4 片消化，而非一次性 12 篇。
+  engagementQueueEnabled: parseBool(process.env.ENGAGEMENT_QUEUE_ENABLED, true),
+  engagementBatchPerSlot: boundedInt(process.env.ENGAGEMENT_BATCH_PER_SLOT, 1, 50, 3),
   // 持久化与容量上限（P1-4）：
   // - clockRecordsMaxPerUser：每个账号保留最近 N 条签到记录（按日期降序截断），防止 db.json 无限膨胀。
   //   设为 0 可关闭截断（不推荐，仅调试用）。
