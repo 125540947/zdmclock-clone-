@@ -160,6 +160,24 @@ test('generateReply 走正确的 chat/completions 端点', async () => {
   assert.equal(lastReq.init.headers.Authorization, 'Bearer test-key');
 });
 
+test('requestCompletion 使用 config.gptMaxTokens 作为输出上限（A-13 推理模型截断修复）', async () => {
+  const prev = config.gptMaxTokens;
+  config.gptMaxTokens = 1234;
+  mockFetchOnce({ choices: [{ message: { content: 'r' } }] });
+  await generateReply({ text: 'x' });
+  const body = JSON.parse(lastReq.init.body);
+  assert.equal(body.max_tokens, 1234);
+  assert.notEqual(body.max_tokens, 200); // 回归：不得再硬编码 200（推理模型会因此截断为空）
+  config.gptMaxTokens = prev;
+});
+
+test('config.gptMaxTokens 落在合理区间（A-13）', () => {
+  // 本文件 import 前未设 GPT_MAX_TOKENS，应回退默认 1024；仅校验有限数字且在边界内，
+  // 避免对运行环境变量做强假设。
+  assert.ok(Number.isFinite(config.gptMaxTokens));
+  assert.ok(config.gptMaxTokens >= 256 && config.gptMaxTokens <= 8192);
+});
+
 // 还原真实 fetch，避免影响其它文件
 test('还原全局 fetch', () => {
   globalThis.fetch = realFetch;

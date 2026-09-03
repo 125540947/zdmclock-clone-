@@ -135,7 +135,7 @@ async function requestCompletion(messages, savedProvider = {}) {
   const payload = {
     model: provider.model,
     temperature: 0.9,
-    max_tokens: 200,
+    max_tokens: config.gptMaxTokens,
     messages
   };
   const timeoutMs = Number(process.env.GPT_REQUEST_TIMEOUT || 20000);
@@ -172,8 +172,20 @@ async function requestCompletion(messages, savedProvider = {}) {
     throw new Error(`大模型返回 HTTP ${resp.status}${detail ? '：' + detail : ''}`);
   }
   const json = await resp.json();
-  const reply = cleanReply(json?.choices?.[0]?.message?.content);
-  if (!reply) throw new Error('大模型返回内容为空（请检查模型与参数）');
+  const rawContent = json?.choices?.[0]?.message?.content;
+  const reply = cleanReply(rawContent);
+  if (!reply) {
+    // 诊断：推理模型（如 kilo-auto/free 路由的 stepfun/step-3.7-flash）会先输出 reasoning 再输出
+    // content，而 max_tokens 是两者总预算；若被截断（finish_reason=length）答案会为空。这里记录
+    // finish_reason / usage 便于区分「真·空返回」与「token 预算截断」，且每条含不同的 prompt_tokens，
+    // 不会雷同，不会被 journald 的重复行抑制吞掉（A-13 根因定位与复现所需）。
+    const choice = json?.choices?.[0] || {};
+    console.warn(
+      `[gptAdapter] 大模型返回内容为空：model=${provider.model} finish_reason=${choice.finish_reason} ` +
+      `completion_tokens=${json?.usage?.completion_tokens} prompt_tokens=${json?.usage?.prompt_tokens}`
+    );
+    throw new Error('大模型返回内容为空（请检查模型与参数）');
+  }
   return reply;
 }
 

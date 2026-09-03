@@ -138,6 +138,13 @@ export const config = {
   gptApiBase: (process.env.GPT_API_BASE || 'https://api.openai.com/v1').replace(/\/$/, ''),
   gptModel: process.env.GPT_MODEL || 'gpt-4o-mini',
   gptEnabled: !!process.env.GPT_API_KEY,
+  // GPT 输出 token 上限（A-13 修复）：kilo-auto/free 等路由会把请求转发给「推理模型」
+  // （如 stepfun/step-3.7-flash），这类模型先输出 reasoning（思维链）再输出答案 content，
+  // 而 OpenAI 兼容接口的 max_tokens 是 reasoning + content 的【总】预算。旧值 200 对推理模型过小，
+  // reasoning 占满预算后答案 content 被截断为空（finish_reason=length），导致评论/回复任务
+  // 偶发「大模型返回内容为空」。提高到 1024 给推理模型留出余量（模型会在答案后自然停止，
+  // 不会真生成 1024 token，实际计费按 completion_tokens 实算，不浪费）。可经 GPT_MAX_TOKENS 调整。
+  gptMaxTokens: boundedInt(process.env.GPT_MAX_TOKENS, 256, 8192, 1024),
   // 推送通知（可选）：渠道 + 凭据，作为初始默认；UI 配置会持久化覆盖（见 db.settings.push）
   // channel: serverchan | bark | telegram | webhook；留空表示未配置
   pushChannel: process.env.PUSH_CHANNEL || '',
