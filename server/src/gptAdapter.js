@@ -138,7 +138,8 @@ async function requestCompletion(messages, savedProvider = {}) {
     max_tokens: config.gptMaxTokens,
     messages
   };
-  const timeoutMs = Number(process.env.GPT_REQUEST_TIMEOUT || 20000);
+  // 走 config 统一钳制（原先是裸 Number(env)，填非法值会得到 NaN 并让 AbortSignal.timeout 抛错）
+  const timeoutMs = config.gptRequestTimeout;
   let resp;
   try {
     const endpoint = /\/chat\/completions$/i.test(provider.apiBase)

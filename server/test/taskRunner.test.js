@@ -487,10 +487,12 @@ test('withAccountLock：不同 userId 互不阻塞', async () => {
 // A-13 批次 35·补：推理模型偶发把 token 预算全用在思维链上，答案被截断为空。
 // 这类失败是随机的（同一篇同一预算重复请求 reasoning 波动 111~301+），应复用评论退避重试兜住；
 // 但真故障（鉴权、参数、缺商品信息等）必须一次判失败，不能被重试掩盖。
-test('isRetriableCommentError：限流与模型空返回可重试', () => {
+test('isRetriableCommentError：限流、模型空返回与请求超时可重试', () => {
   assert.equal(isRetriableCommentError('评论速度太快，请稍后再试'), true);
   assert.equal(isRetriableCommentError('操作太频繁'), true);
   assert.equal(isRetriableCommentError('大模型返回内容为空（请检查模型与参数）'), true);
+  // 超时与空返回同源（思维链偶发跑飞），撞在超时上也应重试
+  assert.equal(isRetriableCommentError('大模型请求超时（>90000ms），请检查网络或 GPT_API_BASE'), true);
 });
 
 test('isRetriableCommentError：真故障不重试', () => {

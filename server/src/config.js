@@ -148,6 +148,10 @@ export const config = {
   // （111 / 208 / 301 tokens，completion 359 / 664 / 983），1024 下 983 已贴上限，偶发的长思维链
   // 会直接越界截断。4096 相对实测峰值留 4 倍余量。可经 GPT_MAX_TOKENS 调整。
   gptMaxTokens: boundedInt(process.env.GPT_MAX_TOKENS, 256, 8192, 4096),
+  // GPT 单次请求超时。必须与 gptMaxTokens 匹配：超时若小于「跑满预算所需时间」，放宽的预算就用不到，
+  // 思维链跑飞时只会把「答案截断为空」换成「请求超时」。线上实测出词速率约 50~110 tokens/s，
+  // 按最慢 50 计，跑满 4096 预算约需 82s，故默认给 90s（常态生成仅 6~9s，不影响正常时延）。
+  gptRequestTimeout: boundedInt(process.env.GPT_REQUEST_TIMEOUT, 5000, 300000, 90000),
   // 推送通知（可选）：渠道 + 凭据，作为初始默认；UI 配置会持久化覆盖（见 db.settings.push）
   // channel: serverchan | bark | telegram | webhook；留空表示未配置
   pushChannel: process.env.PUSH_CHANNEL || '',

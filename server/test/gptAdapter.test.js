@@ -172,10 +172,34 @@ test('requestCompletion 使用 config.gptMaxTokens 作为输出上限（A-13 推
 });
 
 test('config.gptMaxTokens 落在合理区间（A-13）', () => {
-  // 本文件 import 前未设 GPT_MAX_TOKENS，应回退默认 1024；仅校验有限数字且在边界内，
+  // 本文件 import 前未设 GPT_MAX_TOKENS，应回退默认值；仅校验有限数字且在边界内，
   // 避免对运行环境变量做强假设。
   assert.ok(Number.isFinite(config.gptMaxTokens));
   assert.ok(config.gptMaxTokens >= 256 && config.gptMaxTokens <= 8192);
+});
+
+test('requestCompletion 超时取自 config.gptRequestTimeout（不再裸读 env）', async () => {
+  const prev = config.gptRequestTimeout;
+  config.gptRequestTimeout = 12345;
+  // 让 fetch 直接抛超时，断言错误信息里带上配置值（说明 timeoutMs 来自 config）
+  globalThis.fetch = async () => {
+    const e = new Error('aborted');
+    e.name = 'TimeoutError';
+    throw e;
+  };
+  await assert.rejects(() => generateReply({ text: 'x' }), /请求超时（>12345ms）|>12345ms/);
+  config.gptRequestTimeout = prev;
+});
+
+test('超时余量必须够跑满 token 预算（防止只调预算不调超时）', () => {
+  // 线上实测出词速率约 50~110 tokens/s；按最保守的 50 tokens/s 计，跑满 gptMaxTokens 所需毫秒数
+  // 必须 ≤ 超时值，否则放宽的预算根本用不到，思维链跑飞时只会从「截断为空」变成「请求超时」。
+  const SLOWEST_TOKENS_PER_SEC = 50;
+  const needMs = (config.gptMaxTokens / SLOWEST_TOKENS_PER_SEC) * 1000;
+  assert.ok(
+    config.gptRequestTimeout >= needMs,
+    `超时 ${config.gptRequestTimeout}ms 不足以产出 ${config.gptMaxTokens} tokens（约需 ${Math.round(needMs)}ms）`
+  );
 });
 
 // 还原真实 fetch，避免影响其它文件

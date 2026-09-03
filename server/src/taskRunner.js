@@ -109,12 +109,13 @@ export function computeSampleSize(poolSize, limit, rng = Math.random) {
   return Math.min(poolSize, r);
 }
 
-// 评论失败中「值得退避重试」的两类偶发错误（其余错误一次即判失败，避免掩盖真故障）：
+// 评论失败中「值得退避重试」的偶发错误（其余错误一次即判失败，避免掩盖真故障）：
 // 1) smzdm 评论限流（"速度太快"等提示）；
 // 2) 推理模型把 token 预算全花在思维链上、答案被截断成空串（批次 35 实证：同一篇商品用同一预算
-//    重复请求，reasoning 长度随机波动 111~301+ tokens，偶发越界；重试通常即可拿到正常输出）。
+//    重复请求，reasoning 长度随机波动 111~301+ tokens，偶发越界；重试通常即可拿到正常输出）;
+// 3) 大模型请求超时——与 2) 同源（思维链偶发跑飞，只是撞在超时而非预算上），同属可重试的随机波动。
 export function isRetriableCommentError(message) {
-  return /速度太快|太快|频率|频繁|请稍后|返回内容为空/.test(String(message || ''));
+  return /速度太快|太快|频率|频繁|请稍后|返回内容为空|请求超时/.test(String(message || ''));
 }
 
 // 评论 / 收藏 / 点赞：支持单篇（manual）或多篇（baoliao）批量执行
