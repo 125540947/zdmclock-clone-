@@ -938,6 +938,27 @@
 
 ---
 
+## 批次 38 · 评论任务分时段「随机」执行：08:00–23:00 窗口内随机选时刻（2026-09-01）
+
+**改动要点**
+- 承接批次 37 用户新反馈「不要那么定时，下次拟人执行随机 8-23 点这段时间」：批次 37 把评论拆成多时间片，但时刻仍是固定 `0 9,12,15,18,21`（每天准点），机械感仍在。
+- 本批次引入 **randomSchedule** 任务配置：启用时**忽略固定 cron**，改为「当天随机时刻计划」——在 `[start,end]` 窗口内随机选 `slots` 个**不重复**时刻触发任务。随机计划决定「几点发」，批次 37 的 `commentQueue` 仍负责把 N 篇拆成多片消化，**两者正交**，共同构成真正拟人的「不定时、慢慢评」节奏。
+- 计划按「日期 + 任务」缓存于内存，**当天稳定**（重启后当天重新随机，已发评论记录在队列里不会重复发）；跨天自动重算。当天**最后一个随机时刻**由调度器打标 `drainRemaining`，`runEngagement` 据此一次发完队列剩余，确保 campaign 当天收尾、不跨天漏评。
+
+**新增功能**
+- `scheduler.generateRandomPlanTimes(startMin, endMin, slots, rng)` 纯函数：在窗口内生成 `slots` 个不重复升序随机分钟；`rng` 可注入便于单测；`lo>hi` 自动交换区间；`slots` 封顶 48（防退化）。
+- `ensureRandomPlan(t, z)`：取/建某任务当天计划，时区口径与 cron 求值一致（`zonedWallClock`）；读任务 `randomSchedule.{start,end,slots}` 或 config 默认值。
+- 调度 `tick`：任务 `randomSchedule.enabled` 时，若当前分钟在当天随机计划内则命中并在末位时刻置 `drainRemaining`；否则走原固定 cron 分支（逻辑不变）。
+- 配置项：`engagementRandomWindowStart` / `engagementRandomWindowEnd`（默认 `08:00` / `23:00`）、`engagementRandomSlots`（默认 6）。
+- `t_comment` 默认开启 `randomSchedule:{enabled:true,start:'08:00',end:'23:00',slots:6}`（保留旧 cron `0 9,12,15,18,21 * * *` 作为手动/兜底）；旧库迁移为缺省任务补齐该字段。
+
+**问题修复**
+- ⚠️ 批次 38 初版引入 **tick 回归**：固定 cron 分支命中后漏置 `matched=true`，导致 `t_fetch` 等所有固定 cron 任务被 `if (!matched) continue` 整体跳过（表现为定时刷新好价等不再执行）。由 `schedulerTick.test.js`「同分钟去重」单测捕获并修复——固定 cron 命中处补 `matched = true`。根因是重构调度分支时把「命中即落库执行」的隐式语义显式化为 `matched` 标志，但固定分支遗漏置位。
+
+**代表提交**：`00266d2`（源码+测试，后端全量 521 项通过）
+
+---
+
 ## 维护约定（默认规范）
 
 1. **分批原则**：每次整理历史或新增工作阶段，按**逻辑阶段**（功能/安全波次）或**时间**划分为批次；同一波次跨多日可合并为一批次。
