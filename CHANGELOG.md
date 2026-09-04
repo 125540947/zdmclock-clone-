@@ -1049,6 +1049,20 @@
 
 ---
 
+## 批次 44 · 频道无法确认时不再静默退化，杜绝假成功（2026-09-04）
+
+**改动要点**
+- 承接 `AUDIT_REPORT_2026-09-04` 的 P1-数据正确性「频道回退可能造成假成功」：详情接口返回 104（Deal 贴）且 www 兜底仍取不到真实 channel_id 时，旧逻辑退化为 `'1'`，会对错误频道发起动作并被 smzdm 记为成功，却未作用于目标文章，造成「假成功」。
+- `resolveChannelId` 在无法确认真实频道时改为返回 `null`（保留 `warnDegradedChannel` 告警可观测，文案改为「已跳过动作，不再静默退化 1」）。上层 `doFavorite`/`doPoint` 既有 `if (!channelId) throw` 守卫将其如实判为失败，明细显示「无法解析文章频道ID」。
+
+**问题修复**
+- 消除频道假成功：确须互动的帖子由浏览器导入携带真实 channel_id（`preferredChannelId` 短路复用，优先于服务端脆弱取数）兜底，而非赌 `'1'`。
+- 同步测试：`realAdapterNet.test.js` 的「article-api 与 www 都失败」断言由退化 `'1'` 改为期望 `null`；新增 `doFavorite` 在 `resolveChannelIdImpl` 返回 `null` 时如实抛错的回归测试。
+
+**代表提交**：`c9e8926`（realAdapter.js + 2 测试；后端全量 555 项通过、0 skipped）
+
+---
+
 ## 维护约定（默认规范）
 
 1. **分批原则**：每次整理历史或新增工作阶段，按**逻辑阶段**（功能/安全波次）或**时间**划分为批次；同一波次跨多日可合并为一批次。
