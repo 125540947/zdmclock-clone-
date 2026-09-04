@@ -12,7 +12,9 @@ const {
   cleanReply,
   productCommentIssues,
   resolveGptProvider,
-  isGptConfigured
+  isGptConfigured,
+  isPlaceholderTitle,
+  hasUsableProductFact
 } = await import('../src/gptAdapter.js');
 const { config } = await import('../src/config.js');
 
@@ -135,7 +137,7 @@ test('generateProductComment 首稿有 AI 味时携带问题自动重写', async
   const reply = await generateProductComment({ title: '1.2L 电饭煲', content: '双碗容量', price: '79 元' });
   assert.equal(reply, '1.2L 两个人吃估计都够了。');
   assert.equal(calls, 2);
-  assert.match(lastReq.init.body, /明显机器味/);
+  assert.match(lastReq.init.body, /这条评论不能用/);
 });
 
 test('buildSystemPrompt 拼接自定义 prompt', async () => {
@@ -207,6 +209,90 @@ test('超时余量必须够跑满 token 预算（防止只调预算不调超时�
     config.gptRequestTimeout >= needMs,
     `超时 ${config.gptRequestTimeout}ms 不足以产出 ${config.gptMaxTokens} tokens（约需 ${Math.round(needMs)}ms）`
   );
+});
+
+// ===== 批次 39：自动评论话术"太冲"回归测试 =====
+// 线上实证：导入只有链接时标题被回填成「文章 <id>」占位、正文与价格为空，
+// 模型把提示词里的"自然追问"演绎成质问/嘲讽发布者，并原样通过检查直接发布。
+
+const OFFENDING_SAMPLES = [
+  '啥正文都不给，就甩个长文章id糊弄人呢？',
+  '啥内容啥价格都不说，就给个编号糊弄谁呢？',
+  '啥信息都没有就挂个文章ID，这是卖啥啊？'
+];
+
+test('productCommentIssues 识别攻击性质问/嘲讽（线上"太冲"真实样本）', () => {
+  for (const sample of OFFENDING_SAMPLES) {
+    const issues = productCommentIssues(sample);
+    assert.ok(
+      issues.includes('语气带质问或嘲讽'),
+      `应识别出冲话术，实际放行：${sample} → ${JSON.stringify(issues)}`
+    );
+  }
+});
+
+test('productCommentIssues 收敛临界冲话术（累不累）', () => {
+  assert.ok(productCommentIssues('39块还整优惠券，累不累啊').includes('语气带质问或嘲讽'));
+});
+
+test('productCommentIssues 放行带具体信息的口语短评与轻微调侃（不误伤）', () => {
+  // 前两条是用户明确认可"甚至不错"的参照样本，第三条是既有用例
+  assert.deepEqual(productCommentIssues('299这价蔡司1.67还带钛架，商家不会算错账吧？'), []);
+  assert.deepEqual(productCommentIssues('这价拿Z7Pro？比我上周看的便宜快两百块'), []);
+  assert.deepEqual(productCommentIssues('1.2L 两个人吃估计都够了。'), []);
+});
+
+test('buildProductCommentPrompt 明确禁止质问、嘲讽与数落发布者', () => {
+  const prompt = buildProductCommentPrompt({ tone: 'friendly' });
+  assert.match(prompt, /禁止质问、嘲讽、阴阳怪气或数落发布者/);
+  assert.match(prompt, /糊弄/);
+  // 回归：不允许再出现把"信息不足"导向追问发布者的措辞
+  assert.doesNotMatch(prompt, /自然追问/);
+});
+
+test('isPlaceholderTitle 识别导入侧回填的「文章 <id>」占位标题', () => {
+  assert.equal(isPlaceholderTitle('文章 180074206'), true);
+  assert.equal(isPlaceholderTitle('文章180074206'), true);
+  assert.equal(isPlaceholderTitle(' 文章 180074206 '), true);
+  assert.equal(isPlaceholderTitle('蔡司1.67钛架'), false);
+  assert.equal(isPlaceholderTitle(''), false);
+});
+
+test('hasUsableProductFact 占位标题 + 空正文空价格视为无可用信息', () => {
+  // 线上 3 条好价的真实形态：只有回填的占位标题
+  assert.equal(hasUsableProductFact({ title: '文章 180074206', content: '', price: '' }), false);
+  assert.equal(hasUsableProductFact({ title: '文章 180074206' }), false);
+  assert.equal(hasUsableProductFact({}), false);
+  // 任一要素有真实内容即视为可用
+  assert.equal(hasUsableProductFact({ title: '蔡司1.67钛架', content: '', price: '' }), true);
+  assert.equal(hasUsableProductFact({ title: '文章 180074206', content: '适合一人食', price: '' }), true);
+  assert.equal(hasUsableProductFact({ title: '文章 180074206', content: '', price: '299' }), true);
+});
+
+test('generateProductComment 占位标题按「未提供」传给模型（不再喂裸文章ID）', async () => {
+  mockFetchOnce({ choices: [{ message: { content: '这个价我先观望下。' } }] });
+  await generateProductComment({ title: '文章 180074206', content: '', price: '' });
+  const body = JSON.parse(lastReq.init.body);
+  assert.match(body.messages[1].content, /商品标题：未提供/);
+  assert.match(body.messages[1].content, /商品正文：未提供/);
+  assert.match(body.messages[1].content, /商品价格：未提供/);
+  assert.doesNotMatch(body.messages[1].content, /180074206/);
+});
+
+test('generateProductComment 首稿话术太冲时带语气约束重写后发布', async () => {
+  const replies = ['啥正文都不给，就甩个长文章id糊弄人呢？', '这个价我先观望下。'];
+  let calls = 0;
+  globalThis.fetch = async (url, init) => {
+    lastReq = { url, init };
+    return { ok: true, json: async () => ({ choices: [{ message: { content: replies[calls++] } }] }) };
+  };
+  const reply = await generateProductComment({ title: '蔡司1.67钛架', content: '', price: '299' });
+  assert.equal(reply, '这个价我先观望下。');
+  assert.equal(calls, 2); // 首稿被拦下并触发一次重写
+  const rewriteBody = JSON.parse(lastReq.init.body);
+  assert.match(rewriteBody.messages.at(-1).content, /语气带质问或嘲讽/);
+  assert.match(rewriteBody.messages.at(-1).content, /语气必须平和/);
+  assert.match(rewriteBody.messages.at(-1).content, /不得质问、嘲讽或数落发布者/);
 });
 
 // 还原真实 fetch，避免影响其它文件

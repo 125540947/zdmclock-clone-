@@ -546,11 +546,21 @@ test('isRetriableCommentError：限流、模型空返回与请求超时可重试
   assert.equal(isRetriableCommentError('大模型请求超时（>90000ms），请检查网络或 GPT_API_BASE'), true);
 });
 
+// 批次 39：自然度检查未通过改为可重试。
+// 原先判为不可重试（见下方旧断言），那是建立在"过滤器只拦模板腔"的假设上——拦下即判失败没问题。
+// 新增"语气带质问或嘲讽"过滤后，若仍一次判失败，线上体验会从"发一句冲话"退化成"任务直接变红"；
+// 模型输出本身是随机的，退避重试通常能拿到合规版本，故纳入可重试（上限仍为 maxCommentRetry=2）。
+test('isRetriableCommentError：自然度检查未通过可重试（给模型第二次机会）', () => {
+  assert.equal(isRetriableCommentError('AI 评论未通过自然度检查：语气带质问或嘲讽'), true);
+  assert.equal(isRetriableCommentError('AI 评论未通过自然度检查：含模板化或 AI 化措辞'), true);
+});
+
 test('isRetriableCommentError：真故障不重试', () => {
   assert.equal(isRetriableCommentError('缺少商品标题、内容和价格；请改用“从好价列表取”'), false);
+  // 商品信息不足是确定性跳过，重试无意义
+  assert.equal(isRetriableCommentError('商品信息不足（仅有文章ID占位标题），已跳过该篇以免生成无意义评论'), false);
   assert.equal(isRetriableCommentError('自动评论需要先启用 AI 回复'), false);
   assert.equal(isRetriableCommentError('GPT 接口错误 401：invalid api key'), false);
-  assert.equal(isRetriableCommentError('AI 评论未通过自然度检查：疑似广告腔'), false);
   assert.equal(isRetriableCommentError(''), false);
   assert.equal(isRetriableCommentError(undefined), false);
 });

@@ -16,6 +16,13 @@ const p = (rel) => pathToFileURL(path.resolve(SRC, rel)).href;
 let REPLY = { ok: true, reply: 'mocked reply' };
 mock.module(p('gptAdapter.js'), {
   namedExports: {
+    // 批次 39：taskRunner 会 import 这两个判定函数，mock 必须同步提供，否则模块实例化失败
+    isPlaceholderTitle: (v) => /^文章\s*\d+$/u.test(String(v || '').trim()),
+    hasUsableProductFact: ({ title, content, price } = {}) =>
+      (String(title || '').trim() && !/^文章\s*\d+$/u.test(String(title || '').trim())) ||
+      String(content || '').trim().length > 0 ||
+      String(price || '').trim().length > 0,
+    // 可切换的 generateReply 行为（闭包变量，避免重复注册 mock）
     generateReply: async ({ text } = {}) => {
       if (!REPLY.ok) throw new Error(REPLY.error || 'boom');
       return REPLY.reply + ':' + (text || '');

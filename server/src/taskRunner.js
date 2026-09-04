@@ -3,7 +3,7 @@ import { applyClock, localYesterdayStr } from './clockCore.js';
 import { withWriteLock, persist, genId, mergeBaoliao, todayStr, todayStrTZ, yesterdayStrTZ } from './store.js';
 import { recordTaskRun } from './taskRunLog.js';
 import { normalizeArticleId } from './smzdm/articleId.js';
-import { generateProductComment } from './gptAdapter.js';
+import { generateProductComment, hasUsableProductFact } from './gptAdapter.js';
 import { config } from './config.js';
 import { resolvedCheckInTime, fmtHM, parseHM, zonedWallClock } from './clockSchedule.js';
 import {
@@ -113,9 +113,12 @@ export function computeSampleSize(poolSize, limit, rng = Math.random) {
 // 1) smzdm 评论限流（"速度太快"等提示）；
 // 2) 推理模型把 token 预算全花在思维链上、答案被截断成空串（批次 35 实证：同一篇商品用同一预算
 //    重复请求，reasoning 长度随机波动 111~301+ tokens，偶发越界；重试通常即可拿到正常输出）;
-// 3) 大模型请求超时——与 2) 同源（思维链偶发跑飞，只是撞在超时而非预算上），同属可重试的随机波动。
+// 3) 大模型请求超时——与 2) 同源（思维链偶发跑飞，只是撞在超时而非预算上），同属可重试的随机波动；
+// 4) 自然度检查未通过（模板腔 / 语气带质问或嘲讽）——模型输出本身是随机的，换一次请求常常就能
+//    拿到合规版本。批次 39：若不让这类错误重试，新增的"冲话术"过滤会把"发一句冲话"退化成
+//    "任务直接判失败变红"，故纳入退避重试，给模型第二次机会。
 export function isRetriableCommentError(message) {
-  return /速度太快|太快|频率|频繁|请稍后|返回内容为空|请求超时/.test(String(message || ''));
+  return /速度太快|太快|频率|频繁|请稍后|返回内容为空|请求超时|未通过自然度检查/.test(String(message || ''));
 }
 
 // 评论 / 收藏 / 点赞：支持单篇（manual）或多篇（baoliao）批量执行
@@ -214,6 +217,12 @@ async function runEngagement(task, db, user, opts) {
           if (!db.settings?.gpt?.enabled) throw new Error('自动评论需要先启用 AI 回复');
           if (!entry.title && !entry.content && !entry.price) {
             throw new Error('缺少商品标题、内容和价格；请改用“从好价列表取”');
+          }
+          // 批次 39：标题若是导入侧回填的「文章 <id>」占位（只粘贴链接导入且正文/价格为空），
+          // 模型没有任何可用信息，只会靠质问发布者"找话说"（线上实证产出「就甩个长文章id糊弄人呢？」）。
+          // 这里直接跳过该篇并给出可操作原因，而不是把 ID 喂给大模型。
+          if (!hasUsableProductFact(entry)) {
+            throw new Error('商品信息不足（仅有文章ID占位标题），已跳过该篇以免生成无意义评论；请补全标题或价格');
           }
           commentContent = await generateProductComment({
             title: entry.title,
@@ -409,6 +418,13 @@ async function runGptBatch(task, db) {
   // P1-3：LLM 生成与自动发布（网络 IO，最多 10 条 LLM 往返）在写锁外完成，
   // 避免独占全局写链、阻塞并发签到（runClockForUser → withWriteLock）。最后一次性持锁落账。
   for (const item of items) {
+    // 批次 39：与互动链路同款保护——占位标题（仅文章ID）+ 无正文无价格时不调大模型，
+    // 否则只会生成质问发布者的冲话术（该链路还可能在 autoPost 下直接发出去）。
+    if (!hasUsableProductFact(item)) {
+      failed += 1;
+      errors.push(`「${item.title || item.id}」商品信息不足（仅有文章ID占位标题），已跳过`);
+      continue;
+    }
     try {
       const reply = await generateProductComment({
         title: item.title,
