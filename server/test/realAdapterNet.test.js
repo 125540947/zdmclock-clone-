@@ -196,7 +196,7 @@ test('resolveChannelId：article-api 失败 → www 正则兜底', async () => {
   assert.equal(cid, '88');
 });
 
-test('resolveChannelId：article-api 与 www 都失败 → 退化为 1', async () => {
+test('resolveChannelId：article-api 与 www 都失败 → 返回 null（不再静默退化 1，避免假成功）', async () => {
   installFetch((url) => {
     const u = String(url);
     if (u.includes('/article_detail/')) return { ok: false, status: 500, text: async () => '', arrayBuffer: async () => Buffer.alloc(0) };
@@ -204,7 +204,7 @@ test('resolveChannelId：article-api 与 www 都失败 → 退化为 1', async (
     throw new Error('非预期: ' + url);
   });
   const cid = await resolveChannelId('777777', 'sess=abc');
-  assert.equal(cid, '1');
+  assert.equal(cid, null);
 });
 
 // ---------- getUserInfo ----------

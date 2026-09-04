@@ -316,7 +316,7 @@ function warnDegradedChannel(articleId) {
   if (degradedWarned.size >= DEGRADED_WARN_MAX) degradedWarned.clear();
   degradedWarned.add(articleId);
   console.warn(
-    `[smzdm] 文章 ${articleId} 的 channel_id 取数失败，已退化使用 '1'（好价/Deal 贴真实频道≠1，可能被 smzdm 拒绝；建议从浏览器导入时携带真实 channel_id）`
+    `[smzdm] 文章 ${articleId} 无法确认真实 channel_id（article-api/www 均未取到），已跳过动作（不再静默退化 '1' 以避免假成功）；如需互动请从浏览器导入携带真实 channel_id`
   );
 }
 
@@ -365,17 +365,16 @@ export async function resolveChannelId(articleId, cookie, preferredChannelId = n
       dbgLog('[smzdm-debug] resolveChannelId www failed:', e.message, 'articleId=', articleId);
     }
   }
-  // 3) 兜底：取不到（部分 JS 渲染页面静态 HTML 无 channel_id 字段）则退化为 '1'。
-  //    注：不再复用"上一次成功值"做跨账号兜底——channel_id 按文章固定，且日志已验证
-  //    channel_id=1 亦可被 smzdm 接受为有效（P2-6：消除跨账号借用掩盖解析失败）。
+  // 3) 取不到真实频道：不再静默退化为 '1'（P1-数据正确性，AUDIT_REPORT_2026-09-04）。
+  //    退化 '1' 会对错误频道发起动作、被 smzdm 记为成功却未作用于目标文章，造成「假成功」。
+  //    改为返回 null：上层 doFavorite/doPoint 的 `if (!channelId) throw` 会如实判失败，
+  //    明细显示「无法解析文章频道ID」而非假成功。确须互动的帖子由浏览器导入携带真实 channel_id（preferredChannelId）兜底。
   if (!cid) {
-    cid = '1';
-    dbgLog('[smzdm-debug] resolveChannelId fallback use=1 articleId=', articleId, '(article-api/www 均未取到真实 channel_id)');
+    dbgLog('[smzdm-debug] resolveChannelId unconfirmed articleId=', articleId, '(article-api/www 均未取到真实 channel_id)，返回 null');
     warnDegradedChannel(articleId);
+    return null;
   }
-  if (cid) {
-    setChannelCache(articleId, cid);
-  }
+  setChannelCache(articleId, cid);
   return cid;
 }
 

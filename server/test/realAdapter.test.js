@@ -315,6 +315,18 @@ test('doFavorite：已收藏软成功', async () => {
   assert.equal(r.success, true);
 });
 
+test('doFavorite：resolveChannelId 返回 null → 如实抛错（不记假成功）', async () => {
+  await assert.rejects(
+    realAdapter.doFavorite('sess=abc', {
+      articleId: '555',
+      callImpl: async () => ({ error_code: 0 }),
+      sleepImpl: async () => {},
+      resolveChannelIdImpl: async () => null
+    }),
+    /无法解析文章频道ID/
+  );
+});
+
 test('doPoint：点赞成功（data.msg 提示，error_code=0 即成功）', async () => {
   let gotBody = null;
   const callImpl = async (path, opts) => {
