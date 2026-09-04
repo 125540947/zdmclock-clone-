@@ -11,7 +11,7 @@
 import { call, appRequest, realAdapter } from './realAdapter.js';
 import { parseJsonp, removeTags, extractReward } from './parse.js';
 import { normalizeArticleId } from './articleId.js';
-import { generateProductComment } from '../gptAdapter.js';
+import { generateProductComment, hasUsableProductFact } from '../gptAdapter.js';
 
 const ANDROID_XRW = { 'x-requested-with': 'com.smzdm.client.android' };
 const M_REFERER = 'https://m.smzdm.com/';
@@ -299,7 +299,14 @@ async function performDailyTask(task, cookie, options) {
   }
   if (event === 'interactive.comment') {
     if (!gpt?.enabled) throw new Error('评论任务需要先启用 AI 回复');
-    for (const article of picked) {
+    // 批次 41：与 runEngagement / runGptBatch 同款保护——占位标题条目（只粘贴链接导入产生的
+    // 「文章 <id>」+ 空正文空价格）不调大模型、不发评论。这种条目没有任何可用信息，模型
+    // 只会靠质问发布者"找话说"，与 runEngagement 实证同源。过滤逐篇进行：可用的继续评、
+    // 不可用的静默跳过，整个 doDailyTasks 不因此失败（performDailyTask 返回的字符串会
+    // 反映跳过数量，doDailyTasks 仍归入 completed 而非 failed）。
+    const skippable = picked.filter((a) => hasUsableProductFact(a));
+    if (!skippable.length) return '无可用商品信息（占位标题或缺正文/价格），已全部跳过';
+    for (const article of skippable) {
       const content = await generateComment({
         title: article.title,
         content: article.content,
@@ -309,7 +316,8 @@ async function performDailyTask(task, cookie, options) {
       });
       await adapter.doComment(cookie, { articleId: article.id, content });
     }
-    return `AI 评论 ${picked.length} 篇`;
+    const skippedCount = picked.length - skippable.length;
+    return `AI 评论 ${skippable.length} 篇` + (skippedCount ? `（跳过 ${skippedCount} 篇信息不足）` : '');
   }
   throw new Error(`暂不支持的活动类型：${event || '未知'}`);
 }
