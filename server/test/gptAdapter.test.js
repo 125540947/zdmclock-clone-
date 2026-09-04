@@ -242,6 +242,28 @@ test('productCommentIssues 放行带具体信息的口语短评与轻微调侃�
   assert.deepEqual(productCommentIssues('1.2L 两个人吃估计都够了。'), []);
 });
 
+// 批次 40：主理人独立抽查发现 `什么意思` 过宽（误伤「这价什么意思，比昨天还贵」这类
+// 针对商品的正常反应），并补两段漏网嘲讽变体。回归钉：必须同时放行正面短句与拦截贬损变体。
+test('productCommentIssues 放行针对商品的「什么意思」价格吐槽（批次 40 误伤修复）', () => {
+  assert.deepEqual(productCommentIssues('这价什么意思，比昨天还贵'), []);
+});
+
+test('productCommentIssues 不误伤「这叫什么 + 正面词」（新模式零误伤回归）', () => {
+  // 「这叫什么神仙价格」结构是「这叫什么 + 名词」，新规则用 `这(?:也|能)叫`（叫前是 也/能）
+  // 不会匹配「什」字开头，必须放行。
+  assert.deepEqual(productCommentIssues('这叫什么神仙价格'), []);
+  // 其他正面俚语同步回归钉
+  assert.deepEqual(productCommentIssues('这价格还要啥自行车'), []);
+});
+
+test('productCommentIssues 拦截嘲讽贬损变体（批次 40 补漏）', () => {
+  // 主理人提供的两个漏网样本
+  assert.ok(productCommentIssues('这也能叫爆料？').includes('语气带质问或嘲讽'));
+  assert.ok(productCommentIssues('怕不是把人当傻子').includes('语气带质问或嘲讽'));
+  // 同模式近亲：把消费者当韭菜也是攻击
+  assert.ok(productCommentIssues('商家把人当韭菜').includes('语气带质问或嘲讽'));
+});
+
 test('buildProductCommentPrompt 明确禁止质问、嘲讽与数落发布者', () => {
   const prompt = buildProductCommentPrompt({ tone: 'friendly' });
   assert.match(prompt, /禁止质问、嘲讽、阴阳怪气或数落发布者/);
