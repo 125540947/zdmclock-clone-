@@ -28,6 +28,8 @@ mock.module(p('gptAdapter.js'), {
       return REPLY.reply + ':' + (text || '');
     },
     generateProductComment: async () => 'mocked product comment',
+    // taskRunner / tasks_real 在发布前会复用自然度检查；路由测试只需提供安全短评结果。
+    productCommentIssues: () => [],
     resolveGptProvider: (saved = {}) => {
       const savedKey = typeof saved.apiKey === 'string' ? saved.apiKey.trim() : '';
       const envKey = config.gptEnabled ? String(config.gptApiKey || '').trim() : '';

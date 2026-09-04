@@ -3,7 +3,7 @@ import { applyClock, localYesterdayStr } from './clockCore.js';
 import { withWriteLock, persist, genId, mergeBaoliao, todayStr, todayStrTZ, yesterdayStrTZ } from './store.js';
 import { recordTaskRun } from './taskRunLog.js';
 import { normalizeArticleId } from './smzdm/articleId.js';
-import { generateProductComment, hasUsableProductFact } from './gptAdapter.js';
+import { generateProductComment, hasUsableProductFact, productCommentIssues } from './gptAdapter.js';
 import { config } from './config.js';
 import { resolvedCheckInTime, fmtHM, parseHM, zonedWallClock } from './clockSchedule.js';
 import {
@@ -19,6 +19,14 @@ import { applyAssetEffect, taskNameOf } from './assetLedger.js';
 import { dbgLog } from './log.js';
 
 const CUSTOM_SET = new Set(CUSTOM_TYPES);
+
+// 发布前最后一道安全闸门：即使后续替换模型适配器或测试桩绕过生成器，
+// 也不能把攻击性/模板化评论直接发到社区。
+function assertSafeProductComment(reply) {
+  const issues = productCommentIssues(reply);
+  if (issues.length) throw new Error(`AI 评论未通过自然度检查：${issues.join('、')}`);
+  return reply;
+}
 
 // 安全刷新权威资产（smzdm 用户接口，即"其他接口来源"）：失败返回 null 而不抛错，
 // 保证单账号资产接口异常不影响整体任务执行。
@@ -224,14 +232,14 @@ async function runEngagement(task, db, user, opts) {
           if (!hasUsableProductFact(entry)) {
             throw new Error('商品信息不足（仅有文章ID占位标题），已跳过该篇以免生成无意义评论；请补全标题或价格');
           }
-          commentContent = await generateProductComment({
+          commentContent = assertSafeProductComment(await generateProductComment({
             title: entry.title,
             content: entry.content,
             price: entry.price,
             tone: db.settings.gpt.tone,
             prompt: db.settings.gpt.prompt,
             provider: db.settings.gpt
-          });
+          }));
           commentText = commentContent; // 记录生成的评论，供结果详情展示
         }
         const r =
@@ -426,14 +434,14 @@ async function runGptBatch(task, db) {
       continue;
     }
     try {
-      const reply = await generateProductComment({
+      const reply = assertSafeProductComment(await generateProductComment({
         title: item.title,
         content: item.content,
         price: item.price,
         tone: db.settings.gpt.tone,
         prompt: db.settings.gpt.prompt,
         provider: db.settings.gpt
-      });
+      }));
       const aid = normalizeArticleId(item.smzdmUrl || item.url || '');
       const draft = {
         id: genId('gd'),

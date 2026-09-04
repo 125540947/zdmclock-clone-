@@ -264,12 +264,31 @@ test('productCommentIssues 拦截嘲讽贬损变体（批次 40 补漏）', () =
   assert.ok(productCommentIssues('商家把人当韭菜').includes('语气带质问或嘲讽'));
 });
 
+test('productCommentIssues 拦截更隐蔽的攻击词，避免换词绕过', () => {
+  const samples = [
+    '这个价格也太坑人了',
+    '商家这是在割韭菜',
+    '这东西简直就是智商税',
+    '商家这价格也太离谱了',
+    '笑死，这种好价谁会买',
+    '别来忽悠人了'
+  ];
+  for (const sample of samples) {
+    assert.ok(
+      productCommentIssues(sample).includes('语气带质问或嘲讽'),
+      `应拦截攻击性评论，实际放行：${sample}`
+    );
+  }
+});
+
 test('buildProductCommentPrompt 明确禁止质问、嘲讽与数落发布者', () => {
   const prompt = buildProductCommentPrompt({ tone: 'friendly' });
-  assert.match(prompt, /禁止质问、嘲讽、阴阳怪气或数落发布者/);
+  assert.match(prompt, /不许质问、嘲讽、阴阳怪气/);
   assert.match(prompt, /糊弄/);
   // 回归：不允许再出现把"信息不足"导向追问发布者的措辞
   assert.doesNotMatch(prompt, /自然追问/);
+  assert.match(prompt, /禁止任何攻击性表达/);
+  assert.match(prompt, /坑人/);
 });
 
 test('isPlaceholderTitle 识别导入侧回填的「文章 <id>」占位标题', () => {

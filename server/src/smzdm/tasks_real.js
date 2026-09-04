@@ -11,7 +11,7 @@
 import { call, appRequest, realAdapter } from './realAdapter.js';
 import { parseJsonp, removeTags, extractReward } from './parse.js';
 import { normalizeArticleId } from './articleId.js';
-import { generateProductComment, hasUsableProductFact } from '../gptAdapter.js';
+import { generateProductComment, hasUsableProductFact, productCommentIssues } from '../gptAdapter.js';
 
 const ANDROID_XRW = { 'x-requested-with': 'com.smzdm.client.android' };
 const M_REFERER = 'https://m.smzdm.com/';
@@ -314,6 +314,8 @@ async function performDailyTask(task, cookie, options) {
         tone: gpt.tone,
         prompt: gpt.prompt
       });
+      const issues = productCommentIssues(content);
+      if (issues.length) throw new Error(`AI 评论未通过自然度检查：${issues.join('、')}`);
       await adapter.doComment(cookie, { articleId: article.id, content });
     }
     const skippedCount = picked.length - skippable.length;
