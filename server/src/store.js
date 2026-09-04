@@ -5,6 +5,15 @@ import { resolvedCheckInTime } from './clockSchedule.js';
 
 const DB_FILE = path.join(config.dataDir, 'db.json');
 
+// P1-安全（AUDIT_REPORT_2026-09-04）：db.json 含 Cookie、推送凭据与 AI 配置，落盘权限须收紧，
+// 避免同机其他用户可读。owner rw、group r、other 无（本机服务账号只需读写自身文件）。
+const DB_FILE_MODE = 0o640;
+const DB_DIR_MODE = 0o750;
+// best-effort 收紧权限：绝不因权限设置失败而阻断启动或落盘（如测试临时目录、已存在目录）。
+export function chmodSecure(file, mode) {
+  try { fs.chmodSync(file, mode); } catch { /* 忽略：权限不足或非必要，不影响主流程 */ }
+}
+
 function defaultData() {
   return {
     users: [],
@@ -81,7 +90,8 @@ export function withWriteLock(fn) {
 }
 
 function ensureDir() {
-  fs.mkdirSync(config.dataDir, { recursive: true });
+  fs.mkdirSync(config.dataDir, { recursive: true, mode: DB_DIR_MODE });
+  chmodSecure(config.dataDir, DB_DIR_MODE);
 }
 
 export function load() {
@@ -260,6 +270,8 @@ export function persistNow() {
   ensureDir();
   const tmp = DB_FILE + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(cache, null, 2));
+  // 落盘即收紧权限（rename 保留 tmp 的 mode，最终 db.json 即 640）
+  chmodSecure(tmp, DB_FILE_MODE);
   fs.renameSync(tmp, DB_FILE);
 }
 
@@ -275,6 +287,7 @@ function doWrite() {
   const tmp = DB_FILE + '.tmp';
   return fs.promises
     .writeFile(tmp, JSON.stringify(cache, null, 2))
+    .then(() => fs.promises.chmod(tmp, DB_FILE_MODE))
     .then(() => fs.promises.rename(tmp, DB_FILE));
 }
 function scheduleWrite() {
