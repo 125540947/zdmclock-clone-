@@ -1074,3 +1074,19 @@
 4. **追加而非重写**：后续工作追加新批次（如「批次 7 · …」），不重写历史批次；若某批次结论被后续推翻，在旧批次内加 `⚠️ 说明` 标注，新批次写明纠正。
 5. **落库位置**：本 `CHANGELOG.md` 存于仓库根；安全/部署等长期不变量仍记于 `.workbuddy/memory/MEMORY.md`。
 6. **触发**：每次完成一个具有独立主题的工作阶段（如一个 Phase、一轮审计整改、一次大功能）后，追加对应批次。
+
+---
+
+## 批次 45 · 部署溯源端点 /api/deploy（2026-09-04）
+
+**改动要点**
+- 承接 AUDIT_REPORT_2026-09-04 中优先级「部署后自动记录 commit、构建时间和配置摘要（不含密钥）」：本轮三次部署因无法快速确认 VPS 实际 commit，反复踩沙箱 checkout 漂移导致漏部署批次 42/43。新增运行版本快照，可在 HTTP 层直接核验线上跑的是哪个 commit。
+
+**新增功能**
+- `server/src/deployMeta.js`：进程启动即采集单例快照 `deployMeta`（commit / buildTime / 非密钥配置摘要）。commit 优先取 `GIT_COMMIT` 环境变量，否则现场 `git rev-parse HEAD` 探测，再不行标 `unknown`——全程 best-effort，绝不阻断启动。
+- `GET /api/deploy`：无需鉴权，返回 `{ ok:true, deploy:{ commit, buildTime, config:{ nodeEnv, adapter, requireAuth, openMode, trustProxy, bindAddress, port, tz, smzdmDebug, apiTokenSet, adminTokenSet, gptEnabled } } }`。config 仅暴露布尔/绑定开关，绝不回显 Token / Cookie / 密码等凭据。
+
+**问题修复**
+- 验证方式：`server/test/deployMeta.test.js` 校验结构、commit 格式（40-hex 或 unknown）、buildTime 合法 ISO、config 无凭据类字段泄漏、单例一致性。后端全量 **560 / 560 通过、0 skipped**（批次 44 为 555，本批次 +5）。
+
+**代表提交**：`fefd1f4`（源码 + 端点 + 测试，后端全量 560 项通过）
