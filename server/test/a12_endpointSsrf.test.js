@@ -29,7 +29,7 @@ async function j(method, url, body) {
     body: body !== undefined ? JSON.stringify(body) : undefined
   });
   let data = null;
-  try { data = await res.json(); } catch {}
+  try { data = await res.json(); } catch { /* 非 JSON 错误响应按 null 处理 */ }
   return { status: res.status, data };
 }
 

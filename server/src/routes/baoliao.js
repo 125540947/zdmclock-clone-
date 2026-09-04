@@ -49,7 +49,7 @@ router.post('/refresh', mutationGuard, wrapAsync(async (req, res) => {
     if (!items.length) {
       return sendError(res, { status: 502, error: 'no_items', message: '官方RSS暂时没有返回好价，请稍后重试' });
     }
-    const added = await mutateDb((db) => mergeBaoliao(items));
+    const added = await mutateDb((_db) => mergeBaoliao(items));
     res.json({ ok: true, source: fetched.source || 'smzdm-rss', fetched: items.length, added, total: db.baoliao.length });
   } catch (e) {
     dbgLog('[baoliao] refresh 失败：', e.message);
@@ -96,7 +96,7 @@ router.post('/bulk', authRequiredOrInstall, wrapAsync(async (req, res) => {
   if (!items.length) {
     return res.status(400).json({ error: 'no_valid', message: '没有解析到有效的 smzdm 文章链接（需包含 /p/<数字>）' });
   }
-  const added = await mutateDb((db) => mergeBaoliao(items, getClientIp(req)));
+  const added = await mutateDb((_db) => mergeBaoliao(items, getClientIp(req)));
   res.json({ ok: true, received: items.length, added, total: db.baoliao.length });
 }));
 

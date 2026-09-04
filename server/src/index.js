@@ -276,7 +276,7 @@ export function createApp({ rateLimit: enableRateLimit = true } = {}) {
         // L-01 修复：/assets/* 的文件名已含内容哈希，可长期缓存（public + immutable），
         // 无需 no-store——此前的统一 no-store 导致每次页面访问都重传 JS/CSS，浪费带宽与静态 IO。
         // index.html 等 HTML 仍由下方 SPA 兜底强制 no-store（见 L-01）。
-        setHeaders: (res, filePath) => {
+        setHeaders: (res, _filePath) => {
           // 前端为单用户管理面板，体积与带宽可忽略；统一 no-store 彻底杜绝浏览器/代理
           // 缓存旧 JS/CSS 导致「代码已更新、页面仍跑旧逻辑」（典型如「获取模型」芯片不出现、
           // 旧 SPA 标签页点了按钮却看不到下拉）。内容哈希文件名 + 下方 SPA 兜底注入的 ?v=<构建戳>

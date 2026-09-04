@@ -37,7 +37,7 @@ const base = 'http://localhost:' + server.address().port;
 async function j(method, url) {
   const res = await fetch(base + url, { method });
   let data = null;
-  try { data = await res.json(); } catch {}
+  try { data = await res.json(); } catch { /* 非 JSON 错误响应按 null 处理 */ }
   return { status: res.status, data };
 }
 
