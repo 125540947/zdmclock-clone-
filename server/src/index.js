@@ -19,6 +19,7 @@ import assetsRoutes from './routes/assets.js';
 import healthRoutes from './routes/health.js';
 import updateRoutes from './routes/update.js';
 import { probeHealth } from './health.js';
+import { getDeployMeta } from './deployMeta.js';
 import { startScheduler, isSchedulerRunning } from './scheduler.js';
 import { sendError } from './httpError.js';
 
@@ -186,6 +187,13 @@ export function createApp({ rateLimit: enableRateLimit = true } = {}) {
 
   // 健康检查：并发探测依赖（DB 可读 + real 模式探 smzdm 可达性），整体受 deadline 约束，
   // 任一依赖慢/超时只标 degraded，不拖垮就绪探针（#187）。
+  // 部署溯源（AUDIT 2026-09-04 中优先级）：无需鉴权，仅返回非密钥的运行版本快照
+  // （commit / buildTime / 配置布尔开关），便于在 HTTP 层直接核验线上实际运行的 commit，
+  // 杜绝「代码已改但 VPS 仍跑旧版」的排查盲区。
+  app.get('/api/deploy', (_req, res) => {
+    res.json({ ok: true, deploy: getDeployMeta() });
+  });
+
   app.get('/api/health', async (req, res) => {
     const db = load();
     const checks = [];
